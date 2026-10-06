@@ -1,0 +1,7 @@
+      - name: Generate Keystore Once
+        run: |
+          keytool -genkey -v -keystore release.jks -keyalg RSA -keysize 2048 -validity 10000 -alias mykey -storepass 12345678 -keypass 12345678 -dname "CN=md3, OU=app, O=app, L=BJ, ST=BJ, C=CN"
+          echo "=== COPY_START ==="
+          base64 -w 0 release.jks
+          echo ""
+          echo "=== COPY_END ==="
