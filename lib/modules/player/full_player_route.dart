@@ -10,6 +10,7 @@ import '../../providers/car_mode_provider.dart';
 import '../../utils/landscape_immersive.dart';
 import 'full_player.dart';
 import 'full_player_am.dart';
+import 'full_player_yt.dart';
 
 /// 全局过渡进度（0.0 = mini，1.0 = full）。
 ///
@@ -116,9 +117,22 @@ DraggablePlayerRoute<void> fullPlayerRoute(
   double? dragOriginTop,
   double? screenHeight,
 }) {
-  final useAm = context.read<ThemeProvider>().useAmStylePlayer;
+  final playerStyle = context.read<ThemeProvider>().playerStyle;
+  Widget playerWidget;
+  switch (playerStyle) {
+    case PlayerStyle.appleMusic:
+      playerWidget = const AmStyleFullPlayer();
+      break;
+    case PlayerStyle.ytMusic:
+      playerWidget = const YtMusicFullPlayer();
+      break;
+    case PlayerStyle.md3:
+    default:
+      playerWidget = const FullPlayer();
+      break;
+  }
   return DraggablePlayerRoute<void>(
-    builder: (_) => useAm ? const AmStyleFullPlayer() : const FullPlayer(),
+    builder: (_) => playerWidget,
     dragOriginTop: dragOriginTop,
     screenHeight: screenHeight,
   );

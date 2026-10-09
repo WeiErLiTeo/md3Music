@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../../providers/theme_provider.dart';
 import 'full_player.dart';
 import 'full_player_am.dart';
+import 'full_player_yt.dart';
 import 'full_player_route.dart';
 
 /// 上滑拖拽期间的跟手覆盖层（位于 Navigator 之上）。
@@ -28,9 +29,7 @@ class PlayerDragOverlay extends StatelessWidget {
         // 内容随 playerExpansion 更新位置/透明度。
         return Overlay(
           initialEntries: [
-            OverlayEntry(
-              builder: (context) => const _DragPositionedContent(),
-            ),
+            OverlayEntry(builder: (context) => const _DragPositionedContent()),
           ],
         );
       },
@@ -51,9 +50,11 @@ class _DragPositionedContent extends StatelessWidget {
         final height = MediaQuery.sizeOf(context).height;
         final origin = playerDragOriginTop;
         final dy = origin * (1 - progress);
-        final opacity = (progress * origin /
-                (kPlayerExpandDistanceRatio * height))
-            .clamp(0.0, 1.0);
+        final opacity =
+            (progress * origin / (kPlayerExpandDistanceRatio * height)).clamp(
+              0.0,
+              1.0,
+            );
         return Positioned.fill(
           // 拖拽期间不拦截触摸（穿透到下层 MiniPlayer 手势）
           child: IgnorePointer(
@@ -77,7 +78,15 @@ class _DragPlayerContent extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final useAm = context.watch<ThemeProvider>().useAmStylePlayer;
-    return useAm ? const AmStyleFullPlayer() : const FullPlayer();
+    final playerStyle = context.watch<ThemeProvider>().playerStyle;
+    switch (playerStyle) {
+      case PlayerStyle.appleMusic:
+        return const AmStyleFullPlayer();
+      case PlayerStyle.ytMusic:
+        return const YtMusicFullPlayer();
+      case PlayerStyle.md3:
+      default:
+        return const FullPlayer();
+    }
   }
 }

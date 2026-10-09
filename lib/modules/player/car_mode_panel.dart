@@ -16,6 +16,7 @@ import 'car_mode_layout.dart';
 import 'car_mode_lyric_bar.dart';
 import 'full_player.dart';
 import 'full_player_am.dart';
+import 'full_player_yt.dart';
 import 'full_player_route.dart';
 
 /// 车机模式外壳：开启时把 [child]（整棵根 Navigator）与常驻播放器面板并排。
@@ -148,8 +149,8 @@ class _CarModePanelState extends State<CarModePanel>
           )
         : resolveCarModePanelWidth(
             screenWidth: screenLength,
-      ratio: _dragRatio,
-    );
+            ratio: _dragRatio,
+          );
     final effectiveRatio = screenLength > 0
         ? effectiveLength / screenLength
         : _dragRatio;
@@ -236,9 +237,9 @@ class _CarModePanelState extends State<CarModePanel>
             minPhysicalHeight: kCarModeDockBarMinHeight,
           )
         : resolveCarModePanelWidth(
-      screenWidth: mq.size.width,
-      ratio: frozen ? _frozenRatio : carMode.panelRatio,
-    );
+            screenWidth: mq.size.width,
+            ratio: frozen ? _frozenRatio : carMode.panelRatio,
+          );
     // 遮罩尺寸：跟手。
     final previewLength = atBottom
         ? resolveCarModePanelHeight(
@@ -248,9 +249,9 @@ class _CarModePanelState extends State<CarModePanel>
             minPhysicalHeight: kCarModeDockBarMinHeight,
           )
         : resolveCarModePanelWidth(
-      screenWidth: mq.size.width,
-      ratio: _dragging ? _dragRatio : carMode.panelRatio,
-    );
+            screenWidth: mq.size.width,
+            ratio: _dragging ? _dragRatio : carMode.panelRatio,
+          );
     final percentLabel = atBottom
         ? (mq.size.height > 0
               ? '${(previewLength / mq.size.height * 100).round()}%'
@@ -330,11 +331,11 @@ class _CarModePanelState extends State<CarModePanel>
           )
         // 侧边布局：左/右停靠，面板与主界面并排。
         : Row(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: isLeft
-          ? [panel, Expanded(child: widget.child)]
-          : [Expanded(child: widget.child), panel],
-    );
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: isLeft
+                ? [panel, Expanded(child: widget.child)]
+                : [Expanded(child: widget.child), panel],
+          );
 
     return Stack(
       fit: StackFit.expand,
@@ -393,20 +394,20 @@ class _CarModePanelState extends State<CarModePanel>
             : Positioned(
                 left:
                     (isLeft ? previewLength : mq.size.width - previewLength) -
-              _CarModeResizeHandle.hitWidth / 2,
-          top: 0,
-          bottom: 0,
-          width: _CarModeResizeHandle.hitWidth,
-          child: _CarModeResizeHandle(
-            active: _dragging,
-            onDragStart: () => _onDragStart(carMode.panelRatio),
-            onDragDelta: _onDragDelta,
-            onDragEnd: _onDragEnd,
+                    _CarModeResizeHandle.hitWidth / 2,
+                top: 0,
+                bottom: 0,
+                width: _CarModeResizeHandle.hitWidth,
+                child: _CarModeResizeHandle(
+                  active: _dragging,
+                  onDragStart: () => _onDragStart(carMode.panelRatio),
+                  onDragDelta: _onDragDelta,
+                  onDragEnd: _onDragEnd,
                   onReset: () => context.read<CarModeProvider>().setPanelRatio(
                     kCarModePanelDefaultRatio,
                   ),
-          ),
-        ),
+                ),
+              ),
       ],
     );
   }
@@ -478,10 +479,16 @@ class _CarModePlayerBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final useAm = context.watch<ThemeProvider>().useAmStylePlayer;
-    return useAm
-        ? const AmStyleFullPlayer(dockMode: true)
-        : const FullPlayer(dockMode: true);
+    final playerStyle = context.watch<ThemeProvider>().playerStyle;
+    switch (playerStyle) {
+      case PlayerStyle.appleMusic:
+        return const AmStyleFullPlayer(dockMode: true);
+      case PlayerStyle.ytMusic:
+        return const YtMusicFullPlayer();
+      case PlayerStyle.md3:
+      default:
+        return const FullPlayer(dockMode: true);
+    }
   }
 }
 
@@ -683,21 +690,21 @@ class _CarModeDragScrim extends StatelessWidget {
     final playerBlock = SizedBox(
       width: atBottom ? null : panelWidth,
       height: atBottom ? panelHeight : null,
-                child: block(
-                  badgeColor: cs.primaryContainer,
-                  iconColor: cs.onPrimaryContainer,
-                  icon: Icons.play_circle_outline,
-                  label: '播放器',
-                  subLabel: percentLabel,
-                ),
+      child: block(
+        badgeColor: cs.primaryContainer,
+        iconColor: cs.onPrimaryContainer,
+        icon: Icons.play_circle_outline,
+        label: '播放器',
+        subLabel: percentLabel,
+      ),
     );
     final mainBlock = Expanded(
-                child: block(
-                  badgeColor: cs.secondaryContainer,
-                  iconColor: cs.onSecondaryContainer,
-                  icon: Icons.home_outlined,
-                  label: '主界面',
-                ),
+      child: block(
+        badgeColor: cs.secondaryContainer,
+        iconColor: cs.onSecondaryContainer,
+        icon: Icons.home_outlined,
+        label: '主界面',
+      ),
     );
 
     // 两块遮罩**无缝相邻**：中间不留缝。留缝会露出 offstage 之后的底层背景
@@ -775,9 +782,9 @@ class _HorizHandle extends StatelessWidget {
                 ),
               ),
             ],
-              ),
-                ),
-              ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -855,9 +862,9 @@ class _CarModeDockBar extends StatelessWidget {
                         overflow: TextOverflow.ellipsis,
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
                           color: colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ],
+                        ),
+                      ),
+                  ],
                 ),
               ),
               IconButton(

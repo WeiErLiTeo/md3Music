@@ -761,9 +761,7 @@ class _SettingsPageState extends State<SettingsPage>
   ) {
     return Center(
       child: ConstrainedBox(
-        constraints: const BoxConstraints(
-          maxWidth: AppLayout.maxContentWidth,
-        ),
+        constraints: const BoxConstraints(maxWidth: AppLayout.maxContentWidth),
         child: _transitioned(
           level == SettingsLevel.overview
               ? ListView(
@@ -858,10 +856,8 @@ class _SettingsPageState extends State<SettingsPage>
   late AnimationController _sectionTransition;
 
   /// 当前所在层级
-  SettingsLevel get _level => resolveSettingsLevel(
-    category: _activeSection,
-    subpage: _activeSubpage,
-  );
+  SettingsLevel get _level =>
+      resolveSettingsLevel(category: _activeSection, subpage: _activeSubpage);
 
   /// 按标题取分类；未命中返回 null（状态与模型不同步时降级为空内容）
   SettingsCategory? _categoryNamed(String? title) {
@@ -1139,7 +1135,8 @@ class _SettingsPageState extends State<SettingsPage>
         _buildCategoryEntry(c, colorScheme),
       if (categories.length > 10) ...[
         _buildGroupLabel('更多设置', colorScheme),
-        for (final c in categories.skip(10)) _buildCategoryEntry(c, colorScheme),
+        for (final c in categories.skip(10))
+          _buildCategoryEntry(c, colorScheme),
       ],
     ];
   }
@@ -1331,7 +1328,9 @@ class _SettingsPageState extends State<SettingsPage>
           leading: const Icon(Icons.search, size: 20),
           title: Text(r.label),
           subtitle: Text(
-            r.subpage.isEmpty ? '${r.category} ›' : '${r.category} › ${r.subpage}',
+            r.subpage.isEmpty
+                ? '${r.category} ›'
+                : '${r.category} › ${r.subpage}',
           ),
           trailing: const Icon(Icons.chevron_right, size: 20),
           onTap: () => _openSearchResult(r),
@@ -3454,7 +3453,8 @@ class _SettingsPageState extends State<SettingsPage>
                 _settingsRepository.setStartupAutoPlaySource(value);
               },
             ),
-            trailing: _startupAutoPlaySource == 'resume' && !_restoreMemoryEnabled
+            trailing:
+                _startupAutoPlaySource == 'resume' && !_restoreMemoryEnabled
                 ? _statusText('需开启记忆播放状态')
                 : null,
           ),
@@ -3529,9 +3529,7 @@ class _SettingsPageState extends State<SettingsPage>
         if (_crossfadeEnabled)
           SwitchListTile(
             title: const Text('自动混音（AutoMix）'),
-            subtitle: const Text(
-              '按节拍对齐过渡点、按节奏自适应时长，BPM 接近时自动对拍',
-            ),
+            subtitle: const Text('按节拍对齐过渡点、按节奏自适应时长，BPM 接近时自动对拍'),
             value: _automixEnabled,
             onChanged: (value) {
               HapticFeedback.lightImpact();
