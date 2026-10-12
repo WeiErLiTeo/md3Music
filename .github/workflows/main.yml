@@ -465,16 +465,16 @@ jobs:
             fi
           }
           # ⚠️ 调用方式必须写成 `if ! check_tv ... && [ strict ]` 的显式 if，
-# 不能用 `check_tv || [ ... ] && exit 1`。
-# bash 的 `A || B && C` 是**左结合** = `(A || B) && C`：
-# check_tv 成功(0) → `||` 短路 → `&& exit 1` **照样执行** ⇒
-# 校验全部通过反而中止构建（2026-10-12 v6.0.0 连续失败的真凶）。
-for tv_pair in "$tv64_apk:lib/arm64-v8a" "$tv32_apk:lib/armeabi-v7a"; do
-  f="${tv_pair%%:*}"; libdir="${tv_pair##*:}"
-  if ! check_tv "$f" "$libdir"; then
-    if [ "$VERIFY_MODE" = "strict" ]; then exit 1; fi
-  fi
-done
+          # 不能用 `check_tv || [ ... ] && exit 1`。
+          # bash 的 `A || B && C` 是**左结合** = `(A || B) && C`：
+          # check_tv 成功(0) → `||` 短路 → `&& exit 1` **照样执行** ⇒
+          # 校验全部通过反而中止构建（2026-10-12 v6.0.0 连续失败的真凶）。
+          for tv_pair in "$tv64_apk:lib/arm64-v8a" "$tv32_apk:lib/armeabi-v7a"; do
+            f="${tv_pair%%:*}"; libdir="${tv_pair##*:}"
+            if ! check_tv "$f" "$libdir"; then
+              if [ "$VERIFY_MODE" = "strict" ]; then exit 1; fi
+            fi
+          done
 
           # ---- 校验汇总 ----
           echo ""
