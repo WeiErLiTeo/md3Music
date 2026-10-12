@@ -677,11 +677,17 @@ jobs:
         run: flutter pub get
 
       # 版本号取自 build-android 的 tag 解析结果（Windows job 不复用那份 pubspec 覆写）
+      #
+      # 注意：Windows runner 的 run 默认 shell 是 pwsh，不认反斜杠续行
+      # （那是 bash 的语法）。用反斜杠会被解析成独立行，报
+      # Missing expression after unary operator（2026-10-12 v6.0.0 实测）。
+      # Android job 用 bash 所以不受影响 —— 同类写法只在 Windows job 炸。
+      # 这里改用 PowerShell 的反引号续行。
       - name: Flutter build windows
         run: |
-          flutter build windows --release \
-            --dart-define=APP_VERSION=${{ needs.build-android.outputs.version }} \
-            --build-name=${{ needs.build-android.outputs.version }} \
+          flutter build windows --release `
+            --dart-define=APP_VERSION=${{ needs.build-android.outputs.version }} `
+            --build-name=${{ needs.build-android.outputs.version }} `
             --build-number=${{ needs.build-android.outputs.versionCode }}
 
       # 复制 kugou_server.dll 到 exe 同目录（运行时 dart:ffi 加载）
