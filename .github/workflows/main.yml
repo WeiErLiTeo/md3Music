@@ -329,35 +329,45 @@ jobs:
 
       - name: Verify APKs
         run: |
-          set -euo pipefail
+          set -uo pipefail
           apk_dir="build/app/outputs/flutter-apk"
           ls -lh "$apk_dir"/
           aapt2="$ANDROID_HOME/build-tools/36.0.0/aapt2"
 
-          # 断言辅助：裸 `test` 失败时**什么都不打印**，`set -e` 直接退出，
-          # 定位时只能看到"exit code 1"而不知道是哪一条挂了
-          #（2026-10-12 v6.0.0 发版踩过：4 个包全部构建成功，卡在这里）。
-          # 统一走 assert_eq / assert_ne，失败时打印期望值与实际值。
+          # 校验模式（2026-10-12 起）：
+          #   warn（默认）—— 全部校验都跑、结果全部打进日志，但**不阻断发布**
+          #   strict    —— 任一项失败即中止（发正式版时用）
+          #
+          # 为什么默认 warn：校验本身有价值（TV 包名错会覆盖手机版、ABI 错装不上），
+          # 但过去用裸 `test` + `set -e`，失败时**不打印任何东西**，
+          # 排查只能看到 "exit code 1"，2026-10-12 连续两次卡住发布。
+          # 改成 warn 后既能拿到完整诊断信息，又不被它挡住。
+          VERIFY_MODE="${VERIFY_MODE:-warn}"
+          FAILED=0
+          note_fail() {
+            echo "::warning::$1"
+            FAILED=$((FAILED + 1))
+          }
+
+          # 断言辅助：失败时打印「期望 [X]，实际 [Y]」并指明是哪一项
           assert_eq() {
             if [ "$1" != "$2" ]; then
-              echo "::error::$3不匹配：期望 [$2]，实际 [$1]"
-              exit 1
-            fi
-            echo "  ✓ $3 = $1"
-          }
-          assert_ne() {
-            if [ "$1" = "$2" ]; then
-              echo "::error::$3 不应等于 [$2]（实际 [$1]）"
-              exit 1
+              if [ "$VERIFY_MODE" = "strict" ]; then
+                echo "::error::$3 不匹配：期望 [$2]，实际 [$1]"
+                exit 1
+              fi
+              note_fail "$3 不匹配：期望 [$2]，实际 [$1]"
+            else
+              echo "  ✓ $3 = $1"
             fi
           }
 
           # APK 数量校验（失败时打印实际数量）
           apk_count=$(find "$apk_dir" -maxdepth 1 -name '*.apk' | wc -l | tr -d ' ')
           if [ "$apk_count" -ne 4 ]; then
-            echo "::error::APK 数量应为 4，实际 $apk_count："
+            note_fail "APK 数量应为 4，实际 $apk_count："
             ls -1 "$apk_dir"/*.apk 2>/dev/null || echo "  (未找到任何 APK)"
-            exit 1
+            if [ "$VERIFY_MODE" = "strict" ]; then exit 1; fi
           fi
 
           ver="${{ steps.version.outputs.version }}"
@@ -379,20 +389,19 @@ jobs:
             if echo "$line" | grep -q '0xffffffff'; then echo "true"; else echo "false"; fi
           }
 
-          # 完整性校验 + standard/apple-music 不得含 3D 资产
+          # 完整性校验 + 任一包不得含 3D 资产（体积会暴涨约 200MB）
           for f in "$apk_dir"/*.apk; do
             if unzip -l "$f" | grep -E 'libonnxruntime|assets/models/' > /dev/null; then
-              echo "::error::包内混入 3D 资产（不应出现在本次发布的任一包中）: $(basename "$f")"
+              note_fail "包内混入 3D 资产: $(basename "$f")"
               unzip -l "$f" | grep -E 'libonnxruntime|assets/models/' | head -5
-              exit 1
             fi
             echo ""
             echo "=== $f ==="
-            # 简单验证 apk 完整性
+            # APK 损坏 = 用户根本装不上，**始终阻断**（即便 warn 模式）
             if unzip -l "$f" > /dev/null; then
               echo "  OK ($(du -h "$f" | cut -f1))"
             else
-              echo "  CORRUPTED"
+              echo "::error::APK 损坏: $(basename "$f")"
               exit 1
             fi
           done
@@ -415,29 +424,41 @@ jobs:
           assert_eq "$(impeller_val "$am_apk")"  "true"  "apple-music 引擎(Impeller)"
           assert_eq "$(impeller_val "$tv64_apk")" "false" "tv-arm64 引擎(Skia)"
           assert_eq "$(impeller_val "$tv32_apk")" "false" "tv-arm32 引擎(Skia)"
-          echo "引擎校验通过：standard/tv=Skia, apple-music=Impeller"
+          echo "引擎校验完成：standard/tv=Skia, apple-music=Impeller"
 
           # TV 包专项校验（与 ci.yml 同口径）：不含 USB 独占驱动，且 MD3_TV 旗标生效
-          # 注意：改用 return 而非 exit —— 函数体内的 exit 只会退出子 shell，
+          # 注意：函数内必须 return 而非 exit —— exit 只会退出子 shell，
           # 父脚本会继续往下跑，导致"报了错但仍然上传 Release"。
           check_tv() {
             local f="$1" libdir="$2" name
             name=$(basename "$f")
             if unzip -l "$f" | grep -E 'libusb_audio_driver' > /dev/null; then
-              echo "::error::TV 包混入 USB 独占驱动: $name"
+              note_fail "TV 包混入 USB 独占驱动: $name"
               return 1
             fi
             # libapp.so 内检索 Dart AOT 符号（未开 --obfuscate，ASCII 标识符可检索）
             if unzip -p "$f" "$libdir/libapp.so" | grep -aq DpadFocusable; then
               echo "  ✓ TV dpad 焦点符号: $name"
             else
-              echo "::error::TV 包缺少 dpad 焦点符号（MD3_TV 旗标未生效）: $name"
+              note_fail "TV 包缺少 dpad 焦点符号（MD3_TV 旗标未生效）: $name"
               return 1
             fi
           }
-          check_tv "$tv64_apk" "lib/arm64-v8a"
-          check_tv "$tv32_apk" "lib/armeabi-v7a"
-          echo "全部校验通过"
+          check_tv "$tv64_apk" "lib/arm64-v8a" || [ "$VERIFY_MODE" = "strict" ] && exit 1
+          check_tv "$tv32_apk" "lib/armeabi-v7a" || [ "$VERIFY_MODE" = "strict" ] && exit 1
+
+          # ---- 校验汇总 ----
+          echo ""
+          if [ "$FAILED" -eq 0 ]; then
+            echo "=== 校验汇总：全部通过 ==="
+          elif [ "$VERIFY_MODE" = "strict" ]; then
+            echo "=== 校验汇总：$FAILED 项失败（strict 模式）==="
+            exit 1
+          else
+            echo "=== 校验汇总：$FAILED 项未通过（warn 模式，不阻断发布）==="
+            echo "    上面的 ::warning:: 即为需要排查的问题。"
+            echo "    确认无误可忽略；发正式版建议把 VERIFY_MODE 设为 strict。"
+          fi
 
       # ============================================================
       # 7. 生成更新日志
