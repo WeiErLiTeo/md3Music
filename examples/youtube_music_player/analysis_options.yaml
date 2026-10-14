@@ -1,0 +1,9 @@
+# 独立示例不继承主项目对 flutter_lints 的依赖。
+analyzer:
+  exclude:
+    - build/**
+linter:
+  rules:
+    - prefer_const_constructors
+    - use_key_in_widget_constructors
+    - avoid_print
