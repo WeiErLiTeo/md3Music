@@ -577,8 +577,8 @@ class _SettingsPageState extends State<SettingsPage>
     final seekBarWaveEnabled = await _settingsRepository
         .getSeekBarWaveEnabled();
     final spectrumEnabled = await _settingsRepository.getSpectrumEnabled();
-    final spectrumVisualizerFallback =
-        await _settingsRepository.getSpectrumVisualizerFallback();
+    final spectrumVisualizerFallback = await _settingsRepository
+        .getSpectrumVisualizerFallback();
     final spectrumBandCount = await _settingsRepository.getSpectrumBandCount();
     final spectrumStyle = await _settingsRepository.getSpectrumStyle();
     final spectrumBgOpacity = await _settingsRepository.getSpectrumBgOpacity();
@@ -598,9 +598,9 @@ class _SettingsPageState extends State<SettingsPage>
     final musicHapticsWaveform = await _settingsRepository
         .getMusicHapticsWaveform();
     final musicHapticsSnare = await _settingsRepository.getMusicHapticsSnare();
-    final musicHapticsOffset = await _settingsRepository.getMusicHapticsOffset();
-    final musicHapticsScope = await _settingsRepository
-        .getMusicHapticsScope();
+    final musicHapticsOffset = await _settingsRepository
+        .getMusicHapticsOffset();
+    final musicHapticsScope = await _settingsRepository.getMusicHapticsScope();
     final miniPlayerSwipeSwitch = await _settingsRepository
         .getMiniPlayerSwipeSwitchEnabled();
     final sortCollectedByLatestClick = await _settingsRepository
@@ -634,8 +634,8 @@ class _SettingsPageState extends State<SettingsPage>
         .getAutoMatchOnlineInfo();
     final mvDanmakuEnabled = await _settingsRepository.getMvDanmakuEnabled();
     final mvDanmakuOpacity = await _settingsRepository.getMvDanmakuOpacity();
-    final songDanmakuEnabled =
-        await _settingsRepository.getSongDanmakuEnabled();
+    final songDanmakuEnabled = await _settingsRepository
+        .getSongDanmakuEnabled();
     final updateReminderEnabled = await _settingsRepository
         .getUpdateReminderEnabled();
     final legacyAppIconEnabled = await _settingsRepository
@@ -940,9 +940,7 @@ class _SettingsPageState extends State<SettingsPage>
   ) {
     return Center(
       child: ConstrainedBox(
-        constraints: const BoxConstraints(
-          maxWidth: AppLayout.maxContentWidth,
-        ),
+        constraints: const BoxConstraints(maxWidth: AppLayout.maxContentWidth),
         child: _transitioned(
           level == SettingsLevel.overview
               ? ListView(
@@ -951,7 +949,8 @@ class _SettingsPageState extends State<SettingsPage>
                     // 桌面布局：设置页以分类树导航为主，搜索框在此布局下
                     // 既冗余又会把整页背景切成两块（用户反馈"背景不一致"），
                     // 故隐藏。
-                    if (!kDesktopModeEnabled.value) _buildSearchField(colorScheme),
+                    if (!kDesktopModeEnabled.value)
+                      _buildSearchField(colorScheme),
                     if (!kDesktopModeEnabled.value &&
                         _searchQuery.trim().isNotEmpty)
                       ..._buildSearchResults(colorScheme)
@@ -1048,10 +1047,8 @@ class _SettingsPageState extends State<SettingsPage>
   late AnimationController _sectionTransition;
 
   /// 当前所在层级
-  SettingsLevel get _level => resolveSettingsLevel(
-    category: _activeSection,
-    subpage: _activeSubpage,
-  );
+  SettingsLevel get _level =>
+      resolveSettingsLevel(category: _activeSection, subpage: _activeSubpage);
 
   /// 层级内容列表的滚动位置标识。
   ///
@@ -1061,14 +1058,12 @@ class _SettingsPageState extends State<SettingsPage>
   /// position（互不继承），同时各自在 PageStorage 里存自己的偏移（返回时回到
   /// 上次位置）。
   PageStorageKey<String> _sectionListKey(SettingsLevel level) =>
-      PageStorageKey<String>(
-        switch (level) {
-          SettingsLevel.overview => 'settings|overview',
-          SettingsLevel.category => 'settings|category|$_activeSection',
-          SettingsLevel.subpage =>
-            'settings|subpage|$_activeSection|$_activeSubpage',
-        },
-      );
+      PageStorageKey<String>(switch (level) {
+        SettingsLevel.overview => 'settings|overview',
+        SettingsLevel.category => 'settings|category|$_activeSection',
+        SettingsLevel.subpage =>
+          'settings|subpage|$_activeSection|$_activeSubpage',
+      });
 
   /// 按标题取分类；未命中返回 null（状态与模型不同步时降级为空内容）
   SettingsCategory? _categoryNamed(String? title) {
@@ -1398,7 +1393,8 @@ class _SettingsPageState extends State<SettingsPage>
         _buildCategoryEntry(c, colorScheme),
       if (categories.length > 10) ...[
         _buildGroupLabel('更多设置', colorScheme),
-        for (final c in categories.skip(10)) _buildCategoryEntry(c, colorScheme),
+        for (final c in categories.skip(10))
+          _buildCategoryEntry(c, colorScheme),
       ],
     ];
   }
@@ -1484,33 +1480,31 @@ class _SettingsPageState extends State<SettingsPage>
       subpage.title,
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
-      style: theme.textTheme.titleLarge?.copyWith(
-        fontWeight: FontWeight.w600,
-      ),
+      style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600),
     );
   }
 
   /// 搜索索引里属于 Android 系统音效链的条目 label。
-///
-/// 这些项在桌面端已整块隐藏（见 `_buildAudioEffectsSubpage` 的
-/// `supportsSystemAudioEffects` 门控），但索引是编译期常量、
-/// 看不穿运行时门控，故在 `_searchResults()` 里按 label 过滤，
-/// 否则搜「均衡器 / 蝰蛇 / 响度」会跳到一个空白的「音效与音量」页。
-///
-/// 「应用功能」与「旁路效果链」不在此列：前者是 MCP 能力说明，
-/// 后者是音效链内部的调试开关（已在页面内一并隐藏）。
-static const Set<String> _kAndroidOnlyAudioLabels = {
-  '均衡器',
-  '禁用App均衡器和音效',
-  '音效库',
-  '蝰蛇母带处理',
-  '蝰蛇母带音源',
-  '音量均衡',
-  '参考响度',
-  '参考响度 LUFS',
-};
+  ///
+  /// 这些项在桌面端已整块隐藏（见 `_buildAudioEffectsSubpage` 的
+  /// `supportsSystemAudioEffects` 门控），但索引是编译期常量、
+  /// 看不穿运行时门控，故在 `_searchResults()` 里按 label 过滤，
+  /// 否则搜「均衡器 / 蝰蛇 / 响度」会跳到一个空白的「音效与音量」页。
+  ///
+  /// 「应用功能」与「旁路效果链」不在此列：前者是 MCP 能力说明，
+  /// 后者是音效链内部的调试开关（已在页面内一并隐藏）。
+  static const Set<String> _kAndroidOnlyAudioLabels = {
+    '均衡器',
+    '禁用App均衡器和音效',
+    '音效库',
+    '蝰蛇母带处理',
+    '蝰蛇母带音源',
+    '音量均衡',
+    '参考响度',
+    '参考响度 LUFS',
+  };
 
-/// 按查询词过滤搜索索引（label + aliases 包含匹配）。
+  /// 按查询词过滤搜索索引（label + aliases 包含匹配）。
   /// 索引由 scripts/tools/gen_settings_search_index.dart 从本文件源码生成，
   /// 新增/改名/下钻设置项后重新生成即可，无需手工维护条目。
   List<({String label, String category, String subpage, String aliases})>
@@ -1536,7 +1530,8 @@ static const Set<String> _kAndroidOnlyAudioLabels = {
                       '清理深度图缓存',
                     }.contains(e.label)) &&
                 (supportsUsbExclusive || e.category != 'USB 独占') &&
-                (supportsSystemAudioEffects || !_kAndroidOnlyAudioLabels.contains(e.label)))
+                (supportsSystemAudioEffects ||
+                    !_kAndroidOnlyAudioLabels.contains(e.label)))
               e,
           for (final e in SettingsPage.extraSearchIndexEntries ?? const [])
             (
@@ -1613,7 +1608,9 @@ static const Set<String> _kAndroidOnlyAudioLabels = {
           leading: const Icon(Icons.search, size: 20),
           title: Text(r.label),
           subtitle: Text(
-            r.subpage.isEmpty ? '${r.category} ›' : '${r.category} › ${r.subpage}',
+            r.subpage.isEmpty
+                ? '${r.category} ›'
+                : '${r.category} › ${r.subpage}',
           ),
           trailing: const Icon(Icons.chevron_right, size: 20),
           onTap: () => _openSearchResult(r),
@@ -1672,10 +1669,7 @@ static const Set<String> _kAndroidOnlyAudioLabels = {
     kPredictiveBackEnabled.value = resolved.predictiveBack;
     kPlaylistCoverTransitionEnabled.value = resolved.coverTransition;
     if (wantedBackOn && !resolved.predictiveBack) {
-      showToast(
-        '「封面连贯过渡」开启时无法使用预测性返回，请先关闭封面连贯过渡',
-        long: true,
-      );
+      showToast('「封面连贯过渡」开启时无法使用预测性返回，请先关闭封面连贯过渡', long: true);
     } else if (wantedCoverOn && resolved.predictiveBack != predictiveBack) {
       showToast('已同时关闭「预测性返回手势」：两者互斥', long: true);
     }
@@ -2245,8 +2239,9 @@ static const Set<String> _kAndroidOnlyAudioLabels = {
                       onChanged: (value) => context
                           .read<CarModeProvider>()
                           .setPanelRatio(value / 100, persist: false),
-                      onChangeEnd: (value) =>
-                          context.read<CarModeProvider>().setPanelRatio(value / 100),
+                      onChangeEnd: (value) => context
+                          .read<CarModeProvider>()
+                          .setPanelRatio(value / 100),
                     ),
             ],
           ),
@@ -2599,9 +2594,7 @@ static const Set<String> _kAndroidOnlyAudioLabels = {
           builder: (context, desktopEnabled, _) => SwitchListTile(
             title: const Text('桌面布局'),
             subtitle: Text(
-              desktopEnabled
-                  ? '正在使用侧栏界面，关闭后恢复为底部导航栏'
-                  : '开启后无论横屏竖屏都使用侧栏界面',
+              desktopEnabled ? '正在使用侧栏界面，关闭后恢复为底部导航栏' : '开启后无论横屏竖屏都使用侧栏界面',
             ),
             value: desktopEnabled,
             onChanged: (value) {
@@ -2956,26 +2949,30 @@ static const Set<String> _kAndroidOnlyAudioLabels = {
                 // 不参与焦点）仍走 M3ESlider，可调态才换 RemoteSlider（P-C）
                 child: (_useBackgroundImage && _useTextShadow)
                     ? (kTvBuild
-                        ? RemoteSlider(
-                            value: _textShadowBlur,
-                            min: AppTheme.minTextShadowBlur,
-                            max: AppTheme.maxTextShadowBlur,
-                            label: _textShadowBlur.toStringAsFixed(1),
-                            // 拖动只动滑块，松手才提交：改磅数要整棵主题树重建
-                            onChanged: (v) => setState(() => _textShadowBlur = v),
-                            onChangeEnd: (v) => themeProvider.setTextShadowBlur(v),
-                          )
-                        : M3ESlider(
-                            value: _textShadowBlur,
-                            min: AppTheme.minTextShadowBlur,
-                            max: AppTheme.maxTextShadowBlur,
-                            // 不传 divisions：磅数无极（连续）调节
-                            enabled: _useBackgroundImage && _useTextShadow,
-                            label: _textShadowBlur.toStringAsFixed(1),
-                            // 拖动只动滑块，松手才提交：改磅数要整棵主题树重建
-                            onChanged: (v) => setState(() => _textShadowBlur = v),
-                            onChangeEnd: (v) => themeProvider.setTextShadowBlur(v),
-                          ))
+                          ? RemoteSlider(
+                              value: _textShadowBlur,
+                              min: AppTheme.minTextShadowBlur,
+                              max: AppTheme.maxTextShadowBlur,
+                              label: _textShadowBlur.toStringAsFixed(1),
+                              // 拖动只动滑块，松手才提交：改磅数要整棵主题树重建
+                              onChanged: (v) =>
+                                  setState(() => _textShadowBlur = v),
+                              onChangeEnd: (v) =>
+                                  themeProvider.setTextShadowBlur(v),
+                            )
+                          : M3ESlider(
+                              value: _textShadowBlur,
+                              min: AppTheme.minTextShadowBlur,
+                              max: AppTheme.maxTextShadowBlur,
+                              // 不传 divisions：磅数无极（连续）调节
+                              enabled: _useBackgroundImage && _useTextShadow,
+                              label: _textShadowBlur.toStringAsFixed(1),
+                              // 拖动只动滑块，松手才提交：改磅数要整棵主题树重建
+                              onChanged: (v) =>
+                                  setState(() => _textShadowBlur = v),
+                              onChangeEnd: (v) =>
+                                  themeProvider.setTextShadowBlur(v),
+                            ))
                     : M3ESlider(
                         value: _textShadowBlur,
                         min: AppTheme.minTextShadowBlur,
@@ -3265,7 +3262,9 @@ static const Set<String> _kAndroidOnlyAudioLabels = {
                       label: '${_depthCoverStrength.round()}',
                       onChanged: (value) {
                         setState(() => _depthCoverStrength = value);
-                        unawaited(_settingsRepository.setDepthCoverStrength(value));
+                        unawaited(
+                          _settingsRepository.setDepthCoverStrength(value),
+                        );
                       },
                     )
                   : M3ESlider(
@@ -3279,7 +3278,9 @@ static const Set<String> _kAndroidOnlyAudioLabels = {
                       label: '${_depthCoverStrength.round()}',
                       onChanged: (value) {
                         setState(() => _depthCoverStrength = value);
-                        unawaited(_settingsRepository.setDepthCoverStrength(value));
+                        unawaited(
+                          _settingsRepository.setDepthCoverStrength(value),
+                        );
                       },
                     ),
             ),
@@ -4321,13 +4322,18 @@ static const Set<String> _kAndroidOnlyAudioLabels = {
                         divisions: 12,
                         label: '${_volumeNormalizationLufs.round()} LUFS',
                         onChanged: (v) {
-                          setState(() => _volumeNormalizationLufs = v.roundToDouble());
+                          setState(
+                            () => _volumeNormalizationLufs = v.roundToDouble(),
+                          );
                         },
                         onChangeEnd: (v) {
                           final lufs = v.roundToDouble();
                           setState(() => _volumeNormalizationLufs = lufs);
-                          _settingsRepository.setVolumeNormalizationReferenceLufs(lufs);
-                          AudioService().setVolumeNormalization(referenceLufs: lufs);
+                          _settingsRepository
+                              .setVolumeNormalizationReferenceLufs(lufs);
+                          AudioService().setVolumeNormalization(
+                            referenceLufs: lufs,
+                          );
                         },
                       )
                     : M3ESlider(
@@ -4340,16 +4346,23 @@ static const Set<String> _kAndroidOnlyAudioLabels = {
                         divisions: 12,
                         label: '${_volumeNormalizationLufs.round()} LUFS',
                         onChanged: (v) {
-                          setState(() => _volumeNormalizationLufs = v.roundToDouble());
+                          setState(
+                            () => _volumeNormalizationLufs = v.roundToDouble(),
+                          );
                         },
                         onChangeEnd: (v) {
                           final lufs = v.roundToDouble();
                           setState(() => _volumeNormalizationLufs = lufs);
-                          _settingsRepository.setVolumeNormalizationReferenceLufs(lufs);
-                          AudioService().setVolumeNormalization(referenceLufs: lufs);
+                          _settingsRepository
+                              .setVolumeNormalizationReferenceLufs(lufs);
+                          AudioService().setVolumeNormalization(
+                            referenceLufs: lufs,
+                          );
                         },
                       ),
-                trailing: _statusText('${_volumeNormalizationLufs.round()} LUFS'),
+                trailing: _statusText(
+                  '${_volumeNormalizationLufs.round()} LUFS',
+                ),
               ),
           ],
         ],
@@ -4422,7 +4435,8 @@ static const Set<String> _kAndroidOnlyAudioLabels = {
                 _settingsRepository.setStartupAutoPlaySource(value);
               },
             ),
-            trailing: _startupAutoPlaySource == 'resume' && !_restoreMemoryEnabled
+            trailing:
+                _startupAutoPlaySource == 'resume' && !_restoreMemoryEnabled
                 ? _statusText('需开启记忆播放状态')
                 : null,
           ),
@@ -4517,9 +4531,7 @@ static const Set<String> _kAndroidOnlyAudioLabels = {
         if (_crossfadeEnabled)
           SwitchListTile(
             title: const Text('自动混音（AutoMix）'),
-            subtitle: const Text(
-              '按节拍对齐过渡点、按节奏自适应时长，BPM 接近时自动对拍',
-            ),
+            subtitle: const Text('按节拍对齐过渡点、按节奏自适应时长，BPM 接近时自动对拍'),
             value: _automixEnabled,
             onChanged: (value) {
               AppHaptics.lightImpact(HapticCategory.control);
@@ -4741,7 +4753,8 @@ static const Set<String> _kAndroidOnlyAudioLabels = {
                     divisions: 9,
                     label: '${(_mvDanmakuOpacity * 100).round()}%',
                     onChanged: (v) => setState(() => _mvDanmakuOpacity = v),
-                    onChangeEnd: (v) => _settingsRepository.setMvDanmakuOpacity(v),
+                    onChangeEnd: (v) =>
+                        _settingsRepository.setMvDanmakuOpacity(v),
                   )
                 : M3ESlider(
                     decoration: const M3ESliderDecoration(
@@ -4754,7 +4767,8 @@ static const Set<String> _kAndroidOnlyAudioLabels = {
                     label: '${(_mvDanmakuOpacity * 100).round()}%',
                     // 拖动只改本地状态；松手才落盘，避免拖动过程中反复写 SharedPreferences
                     onChanged: (v) => setState(() => _mvDanmakuOpacity = v),
-                    onChangeEnd: (v) => _settingsRepository.setMvDanmakuOpacity(v),
+                    onChangeEnd: (v) =>
+                        _settingsRepository.setMvDanmakuOpacity(v),
                   ),
             trailing: _statusText('${(_mvDanmakuOpacity * 100).round()}%'),
           ),
@@ -4803,8 +4817,7 @@ static const Set<String> _kAndroidOnlyAudioLabels = {
           builder: (ctx, match, _) {
             final running = match.autoMatching;
             return ListTile(
-              leading:
-                  Icon(Icons.manage_search, color: colorScheme.primary),
+              leading: Icon(Icons.manage_search, color: colorScheme.primary),
               title: const Text('立即匹配未匹配歌曲'),
               subtitle: Text(
                 running
@@ -4831,8 +4844,7 @@ static const Set<String> _kAndroidOnlyAudioLabels = {
               context: context,
               builder: (dialogCtx) => AlertDialog(
                 title: const Text('清除全部匹配记录'),
-                content: const Text(
-                    '已匹配歌曲的封面兜底、歌词精确检索与评论区将回退到未匹配状态。'),
+                content: const Text('已匹配歌曲的封面兜底、歌词精确检索与评论区将回退到未匹配状态。'),
                 actions: [
                   TextButton(
                     onPressed: () => Navigator.pop(dialogCtx, false),
@@ -5350,8 +5362,9 @@ static const Set<String> _kAndroidOnlyAudioLabels = {
         // ignore: discarded_futures
         _settingsRepository.setMusicHapticsScope(value);
         // ignore: discarded_futures
-        MusicHapticsService.instance
-            .setScope(MusicHapticsScope.fromPersistKey(value));
+        MusicHapticsService.instance.setScope(
+          MusicHapticsScope.fromPersistKey(value),
+        );
       },
     );
   }
@@ -5817,6 +5830,7 @@ static const Set<String> _kAndroidOnlyAudioLabels = {
   // ─────────────────────────────────────────────────────────────────────
 
   Widget _buildStyleCards(ColorScheme colorScheme) {
+    final currentStyle = context.watch<ThemeProvider>().playerStyle;
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
@@ -5824,26 +5838,38 @@ static const Set<String> _kAndroidOnlyAudioLabels = {
           colorScheme: colorScheme,
           title: 'MD3Music',
           subtitle: 'Material 3 风格',
-          isSelected: !_useAmStylePlayer,
+          isSelected: currentStyle == PlayerStyle.md3,
           onTap: () {
             AppHaptics.lightImpact(HapticCategory.control);
-            setState(() => _useAmStylePlayer = false);
-            context.read<ThemeProvider>().setUseAmStylePlayer(false);
+            context.read<ThemeProvider>().setPlayerStyle(PlayerStyle.md3);
           },
           preview: _SettingsMd3StylePreview(colorScheme: colorScheme),
         ),
-        const Gap(AppSpacing.lg),
+        const Gap(AppSpacing.md),
         _buildStyleCard(
           colorScheme: colorScheme,
           title: 'Apple Music',
           subtitle: '模糊封面 + 逐字歌词',
-          isSelected: _useAmStylePlayer,
+          isSelected: currentStyle == PlayerStyle.appleMusic,
           onTap: () {
             AppHaptics.lightImpact(HapticCategory.control);
-            setState(() => _useAmStylePlayer = true);
-            context.read<ThemeProvider>().setUseAmStylePlayer(true);
+            context.read<ThemeProvider>().setPlayerStyle(
+              PlayerStyle.appleMusic,
+            );
           },
           preview: _SettingsAmStylePreview(colorScheme: colorScheme),
+        ),
+        const Gap(AppSpacing.md),
+        _buildStyleCard(
+          colorScheme: colorScheme,
+          title: 'YouTube Music',
+          subtitle: '队列与歌词抽屉',
+          isSelected: currentStyle == PlayerStyle.ytMusic,
+          onTap: () {
+            AppHaptics.lightImpact(HapticCategory.control);
+            context.read<ThemeProvider>().setPlayerStyle(PlayerStyle.ytMusic);
+          },
+          preview: _SettingsYtStylePreview(colorScheme: colorScheme),
         ),
       ],
     );
@@ -6901,6 +6927,121 @@ class _FlymeLyricAdvanceTileState extends State<_FlymeLyricAdvanceTile> {
             '觉得字出太早就调小，太晚就调大；只影响状态栏，不影响播放页与悬浮窗。',
             style: textTheme.bodySmall?.copyWith(
               color: colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SettingsYtStylePreview extends StatelessWidget {
+  final ColorScheme colorScheme;
+
+  const _SettingsYtStylePreview({required this.colorScheme});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: colorScheme.surfaceContainerLowest,
+      child: Column(
+        children: [
+          Container(
+            height: 24,
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Row(
+              children: [
+                Icon(Icons.expand_more, size: 14, color: colorScheme.onSurface),
+                const Spacer(),
+                Icon(Icons.more_vert, size: 12, color: colorScheme.onSurface),
+              ],
+            ),
+          ),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Container(
+                    height: 48,
+                    width: 48,
+                    decoration: BoxDecoration(
+                      color: colorScheme.primaryContainer,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Icon(
+                      Icons.music_note,
+                      size: 24,
+                      color: colorScheme.onPrimaryContainer,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Container(
+                    height: 4,
+                    width: 40,
+                    decoration: BoxDecoration(
+                      color: colorScheme.onSurface,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Container(
+                    height: 3,
+                    width: 24,
+                    decoration: BoxDecoration(
+                      color: colorScheme.onSurfaceVariant.withValues(
+                        alpha: 0.6,
+                      ),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: colorScheme.surfaceContainerHigh,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.favorite, size: 8, color: colorScheme.primary),
+                      const SizedBox(width: 4),
+                      Icon(
+                        Icons.subtitles,
+                        size: 8,
+                        color: colorScheme.onSurface,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 4),
+          Container(
+            height: 16,
+            color: colorScheme.surfaceContainer,
+            child: Center(
+              child: Container(
+                height: 2,
+                width: 20,
+                decoration: BoxDecoration(
+                  color: colorScheme.onSurfaceVariant,
+                  borderRadius: BorderRadius.circular(1),
+                ),
+              ),
             ),
           ),
         ],

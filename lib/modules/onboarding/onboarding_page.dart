@@ -32,8 +32,8 @@ class _OnboardingPageState extends State<OnboardingPage>
   int _currentPage = 0;
   late final AnimationController _pageAnimController;
 
-  /// 播放器风格选择：false = MD3Music（默认），true = AppleMusic。
-  bool _useAmStylePlayer = false;
+  /// 播放器风格选择：MD3Music / AppleMusic / YtMusic。
+  PlayerStyle _playerStyle = PlayerStyle.md3;
 
   @override
   void initState() {
@@ -88,7 +88,7 @@ class _OnboardingPageState extends State<OnboardingPage>
     // 将播放器风格选择应用到 ThemeProvider
     if (mounted) {
       final themeProvider = context.read<ThemeProvider>();
-      await themeProvider.setUseAmStylePlayer(_useAmStylePlayer);
+      await themeProvider.setPlayerStyle(_playerStyle);
     }
 
     if (!mounted) return;
@@ -127,14 +127,8 @@ class _OnboardingPageState extends State<OnboardingPage>
     return Column(
       children: [
         _buildTopBar(colorScheme),
-        Expanded(
-          flex: 3,
-          child: _buildPageView(isLandscape: false),
-        ),
-        Expanded(
-          flex: 1,
-          child: _buildBottomControls(colorScheme),
-        ),
+        Expanded(flex: 3, child: _buildPageView(isLandscape: false)),
+        Expanded(flex: 1, child: _buildBottomControls(colorScheme)),
       ],
     );
   }
@@ -145,9 +139,7 @@ class _OnboardingPageState extends State<OnboardingPage>
     return Column(
       children: [
         _buildTopBar(colorScheme),
-        Expanded(
-          child: _buildPageView(isLandscape: true),
-        ),
+        Expanded(child: _buildPageView(isLandscape: true)),
         _buildBottomControls(colorScheme),
       ],
     );
@@ -157,7 +149,10 @@ class _OnboardingPageState extends State<OnboardingPage>
 
   Widget _buildTopBar(ColorScheme colorScheme) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm, vertical: AppSpacing.xs),
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.sm,
+        vertical: AppSpacing.xs,
+      ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
@@ -166,16 +161,13 @@ class _OnboardingPageState extends State<OnboardingPage>
             child: Text(
               'MD3Music',
               style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    color: colorScheme.primary,
-                    fontWeight: FontWeight.w600,
-                  ),
+                color: colorScheme.primary,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
           if (_currentPage < onboardingPages.length - 1)
-            TextButton(
-              onPressed: _skip,
-              child: const Text('跳过'),
-            ),
+            TextButton(onPressed: _skip, child: const Text('跳过')),
         ],
       ),
     );
@@ -199,7 +191,11 @@ class _OnboardingPageState extends State<OnboardingPage>
 
         // 播放器风格选择页：交互式特殊渲染
         if (page.isPlayerStylePicker) {
-          return _buildPlayerStylePickerPage(page, animation, isLandscape: isLandscape);
+          return _buildPlayerStylePickerPage(
+            page,
+            animation,
+            isLandscape: isLandscape,
+          );
         }
 
         // 播放页隐藏操作页：交互式列表渲染
@@ -209,7 +205,11 @@ class _OnboardingPageState extends State<OnboardingPage>
 
         // 主题色选择页：交互式取色网格渲染
         if (page.isColorPicker) {
-          return _buildColorPickerPage(page, animation, isLandscape: isLandscape);
+          return _buildColorPickerPage(
+            page,
+            animation,
+            isLandscape: isLandscape,
+          );
         }
 
         if (isLandscape) {
@@ -348,8 +348,7 @@ class _OnboardingPageState extends State<OnboardingPage>
                 padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
                 child: Divider(
                   height: 1,
-                  color: colorScheme.outlineVariant
-                      .withValues(alpha: 0.5),
+                  color: colorScheme.outlineVariant.withValues(alpha: 0.5),
                 ),
               ),
           ],
@@ -372,7 +371,10 @@ class _OnboardingPageState extends State<OnboardingPage>
                   _buildTitle(page.title, animation, isCenter: false),
                   const Gap(AppSpacing.sm),
                   _buildDescription(
-                    page.description, animation, isCenter: false),
+                    page.description,
+                    animation,
+                    isCenter: false,
+                  ),
                 ],
               ),
             ),
@@ -404,23 +406,19 @@ class _OnboardingPageState extends State<OnboardingPage>
     );
   }
 
-  Widget _buildHiddenOpItem(
-    _HiddenOp op,
-    ColorScheme colorScheme,
-    int index,
-  ) {
+  Widget _buildHiddenOpItem(_HiddenOp op, ColorScheme colorScheme, int index) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: 10),
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.md,
+        vertical: 10,
+      ),
       child: Row(
         children: [
           // 图标圆形背景
           Container(
             width: 40,
             height: 40,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: op.color,
-            ),
+            decoration: BoxDecoration(shape: BoxShape.circle, color: op.color),
             child: Icon(op.icon, size: 20, color: op.onColor),
           ),
           const SizedBox(width: 14),
@@ -434,7 +432,9 @@ class _OnboardingPageState extends State<OnboardingPage>
                     // 手势标签
                     Container(
                       padding: const EdgeInsets.symmetric(
-                        horizontal: 6, vertical: AppSpacing.xxs),
+                        horizontal: 6,
+                        vertical: AppSpacing.xxs,
+                      ),
                       decoration: BoxDecoration(
                         color: colorScheme.secondaryContainer,
                         borderRadius: AppRadius.xsAll,
@@ -538,9 +538,9 @@ class _OnboardingPageState extends State<OnboardingPage>
       child: Text(
         '点击色块立即更换主题色，与「设置 → 外观 → 主题色」同步',
         textAlign: TextAlign.center,
-        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: colorScheme.onSurfaceVariant,
-            ),
+        style: Theme.of(
+          context,
+        ).textTheme.bodySmall?.copyWith(color: colorScheme.onSurfaceVariant),
       ),
     );
 
@@ -558,7 +558,11 @@ class _OnboardingPageState extends State<OnboardingPage>
                 children: [
                   _buildTitle(page.title, animation, isCenter: false),
                   const Gap(AppSpacing.md),
-                  _buildDescription(page.description, animation, isCenter: false),
+                  _buildDescription(
+                    page.description,
+                    animation,
+                    isCenter: false,
+                  ),
                   if (page.highlights.isNotEmpty) ...[
                     const Gap(AppSpacing.lg),
                     _buildHighlights(page.highlights, isCenter: false),
@@ -611,9 +615,7 @@ class _OnboardingPageState extends State<OnboardingPage>
     final colorScheme = Theme.of(context).colorScheme;
 
     return Padding(
-      padding: EdgeInsets.symmetric(
-        horizontal: isLandscape ? 48 : 32,
-      ),
+      padding: EdgeInsets.symmetric(horizontal: isLandscape ? 48 : 32),
       child: isLandscape
           ? Row(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -626,7 +628,10 @@ class _OnboardingPageState extends State<OnboardingPage>
                       _buildTitle(page.title, animation, isCenter: false),
                       const Gap(AppSpacing.md),
                       _buildDescription(
-                        page.description, animation, isCenter: false),
+                        page.description,
+                        animation,
+                        isCenter: false,
+                      ),
                     ],
                   ),
                 ),
@@ -647,7 +652,10 @@ class _OnboardingPageState extends State<OnboardingPage>
     );
   }
 
-  Widget _buildStyleCards(ColorScheme colorScheme, Animation<double> animation) {
+  Widget _buildStyleCards(
+    ColorScheme colorScheme,
+    Animation<double> animation,
+  ) {
     return FadeTransition(
       opacity: animation,
       child: Row(
@@ -657,18 +665,27 @@ class _OnboardingPageState extends State<OnboardingPage>
             colorScheme: colorScheme,
             title: 'MD3Music',
             subtitle: 'Material 3 风格',
-            isSelected: !_useAmStylePlayer,
-            onTap: () => setState(() => _useAmStylePlayer = false),
+            isSelected: _playerStyle == PlayerStyle.md3,
+            onTap: () => setState(() => _playerStyle = PlayerStyle.md3),
             preview: _Md3StylePreview(colorScheme: colorScheme),
           ),
-          const Gap(AppSpacing.lg),
+          const Gap(AppSpacing.md),
           _buildStyleCard(
             colorScheme: colorScheme,
             title: 'Apple Music',
             subtitle: '模糊封面 + 逐字歌词',
-            isSelected: _useAmStylePlayer,
-            onTap: () => setState(() => _useAmStylePlayer = true),
+            isSelected: _playerStyle == PlayerStyle.appleMusic,
+            onTap: () => setState(() => _playerStyle = PlayerStyle.appleMusic),
             preview: _AmStylePreview(colorScheme: colorScheme),
+          ),
+          const Gap(AppSpacing.md),
+          _buildStyleCard(
+            colorScheme: colorScheme,
+            title: 'YouTube Music',
+            subtitle: '队列与歌词抽屉',
+            isSelected: _playerStyle == PlayerStyle.ytMusic,
+            onTap: () => setState(() => _playerStyle = PlayerStyle.ytMusic),
+            preview: _YtStylePreview(colorScheme: colorScheme),
           ),
         ],
       ),
@@ -694,7 +711,9 @@ class _OnboardingPageState extends State<OnboardingPage>
           color: colorScheme.surfaceContainerLow,
           borderRadius: AppRadius.lgAll,
           border: Border.all(
-            color: isSelected ? colorScheme.primary : colorScheme.outlineVariant,
+            color: isSelected
+                ? colorScheme.primary
+                : colorScheme.outlineVariant,
             width: isSelected ? 2.5 : 1,
           ),
         ),
@@ -714,9 +733,7 @@ class _OnboardingPageState extends State<OnboardingPage>
               style: TextStyle(
                 fontSize: 14,
                 fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
-                color: isSelected
-                    ? colorScheme.primary
-                    : colorScheme.onSurface,
+                color: isSelected ? colorScheme.primary : colorScheme.onSurface,
               ),
             ),
             const Gap(AppSpacing.xxs),
@@ -729,11 +746,7 @@ class _OnboardingPageState extends State<OnboardingPage>
             ),
             if (isSelected) ...[
               const SizedBox(height: 6),
-              Icon(
-                Icons.check_circle,
-                size: 20,
-                color: colorScheme.primary,
-              ),
+              Icon(Icons.check_circle, size: 20, color: colorScheme.primary),
             ],
           ],
         ),
@@ -756,9 +769,9 @@ class _OnboardingPageState extends State<OnboardingPage>
         child: Text(
           title,
           style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                fontWeight: FontWeight.w600,
-                color: Theme.of(context).colorScheme.onSurface,
-              ),
+            fontWeight: FontWeight.w600,
+            color: Theme.of(context).colorScheme.onSurface,
+          ),
           textAlign: isCenter ? TextAlign.center : TextAlign.start,
         ),
       ),
@@ -780,8 +793,8 @@ class _OnboardingPageState extends State<OnboardingPage>
       child: Text(
         description,
         style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
         textAlign: isCenter ? TextAlign.center : TextAlign.start,
       ),
     );
@@ -811,7 +824,10 @@ class _OnboardingPageState extends State<OnboardingPage>
   Widget _buildBottomControls(ColorScheme colorScheme) {
     final isLastPage = _currentPage == onboardingPages.length - 1;
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xxl, vertical: AppSpacing.lg),
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.xxl,
+        vertical: AppSpacing.lg,
+      ),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
@@ -823,16 +839,12 @@ class _OnboardingPageState extends State<OnboardingPage>
             child: FilledButton(
               onPressed: isLastPage ? _completeOnboarding : _nextPage,
               style: FilledButton.styleFrom(
-                shape: RoundedRectangleBorder(
-                  borderRadius: AppRadius.lgAll,
-                ),
+                shape: RoundedRectangleBorder(borderRadius: AppRadius.lgAll),
               ),
               child: AnimatedSwitcher(
                 duration: M3ExpressiveMotion.defaultDuration,
                 child: Text(
-                  isLastPage
-                      ? (widget.isReview ? '完成' : '开始使用')
-                      : '下一步',
+                  isLastPage ? (widget.isReview ? '完成' : '开始使用') : '下一步',
                   key: ValueKey(isLastPage),
                   style: const TextStyle(fontSize: 16),
                 ),
@@ -906,11 +918,17 @@ class _Md3StylePreview extends StatelessWidget {
             alignment: Alignment.centerLeft,
             child: Row(
               children: [
-                Icon(Icons.keyboard_arrow_down,
-                    size: 16, color: colorScheme.onSurfaceVariant),
+                Icon(
+                  Icons.keyboard_arrow_down,
+                  size: 16,
+                  color: colorScheme.onSurfaceVariant,
+                ),
                 const Spacer(),
-                Icon(Icons.more_horiz,
-                    size: 14, color: colorScheme.onSurfaceVariant),
+                Icon(
+                  Icons.more_horiz,
+                  size: 14,
+                  color: colorScheme.onSurfaceVariant,
+                ),
               ],
             ),
           ),
@@ -971,12 +989,21 @@ class _Md3StylePreview extends StatelessWidget {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                     children: [
-                      Icon(Icons.skip_previous,
-                          size: 18, color: colorScheme.onSurface),
-                      Icon(Icons.play_arrow,
-                          size: 22, color: colorScheme.primary),
-                      Icon(Icons.skip_next,
-                          size: 18, color: colorScheme.onSurface),
+                      Icon(
+                        Icons.skip_previous,
+                        size: 18,
+                        color: colorScheme.onSurface,
+                      ),
+                      Icon(
+                        Icons.play_arrow,
+                        size: 22,
+                        color: colorScheme.primary,
+                      ),
+                      Icon(
+                        Icons.skip_next,
+                        size: 18,
+                        color: colorScheme.onSurface,
+                      ),
                     ],
                   ),
                 ],
@@ -1015,11 +1042,13 @@ class _AmStylePreview extends StatelessWidget {
             // 顶栏
             Row(
               children: [
-                Icon(Icons.keyboard_arrow_down,
-                    size: 16, color: colorScheme.onSurface),
+                Icon(
+                  Icons.keyboard_arrow_down,
+                  size: 16,
+                  color: colorScheme.onSurface,
+                ),
                 const Spacer(),
-                Icon(Icons.more_horiz,
-                    size: 14, color: colorScheme.onSurface),
+                Icon(Icons.more_horiz, size: 14, color: colorScheme.onSurface),
               ],
             ),
             const Gap(AppSpacing.sm),
@@ -1084,8 +1113,7 @@ class _AmStylePreview extends StatelessWidget {
                     ],
                   ),
                 ),
-                Icon(Icons.play_arrow,
-                    size: 18, color: colorScheme.onSurface),
+                Icon(Icons.play_arrow, size: 18, color: colorScheme.onSurface),
               ],
             ),
           ],
@@ -1129,4 +1157,119 @@ class _HiddenOp {
     required this.color,
     required this.onColor,
   });
+}
+
+class _YtStylePreview extends StatelessWidget {
+  final ColorScheme colorScheme;
+
+  const _YtStylePreview({required this.colorScheme});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: colorScheme.surfaceContainerLowest,
+      child: Column(
+        children: [
+          Container(
+            height: 24,
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Row(
+              children: [
+                Icon(Icons.expand_more, size: 14, color: colorScheme.onSurface),
+                const Spacer(),
+                Icon(Icons.more_vert, size: 12, color: colorScheme.onSurface),
+              ],
+            ),
+          ),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Container(
+                    height: 48,
+                    width: 48,
+                    decoration: BoxDecoration(
+                      color: colorScheme.primaryContainer,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Icon(
+                      Icons.music_note,
+                      size: 24,
+                      color: colorScheme.onPrimaryContainer,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Container(
+                    height: 4,
+                    width: 40,
+                    decoration: BoxDecoration(
+                      color: colorScheme.onSurface,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Container(
+                    height: 3,
+                    width: 24,
+                    decoration: BoxDecoration(
+                      color: colorScheme.onSurfaceVariant.withValues(
+                        alpha: 0.6,
+                      ),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: colorScheme.surfaceContainerHigh,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.favorite, size: 8, color: colorScheme.primary),
+                      const SizedBox(width: 4),
+                      Icon(
+                        Icons.subtitles,
+                        size: 8,
+                        color: colorScheme.onSurface,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 4),
+          Container(
+            height: 16,
+            color: colorScheme.surfaceContainer,
+            child: Center(
+              child: Container(
+                height: 2,
+                width: 20,
+                decoration: BoxDecoration(
+                  color: colorScheme.onSurfaceVariant,
+                  borderRadius: BorderRadius.circular(1),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
