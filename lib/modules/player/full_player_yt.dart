@@ -1,20 +1,20 @@
 import 'dart:async';
-import 'package:just_audio/just_audio.dart';
 import 'package:m3e_core/m3e_core.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/utils/app_haptics.dart';
-import '../../core/utils/audio_format_utils.dart';
 import '../../core/utils/local_lyric_loader.dart';
+import '../../core/widgets/app_background.dart';
 import '../../data/models/album.dart';
 import '../../data/models/song.dart';
 import '../../providers/favorites_provider.dart';
-import '../../providers/kugou_provider.dart';
 import '../../providers/local_favorites_provider.dart';
 import '../../providers/player_provider.dart';
+import '../../providers/song_match_provider.dart';
 import '../../widgets/add_to_playlist_dialog.dart';
 import '../../widgets/apple_lyrics/models/lyric_line.dart';
+import '../../widgets/apple_lyrics/parsers/kugou_lyric_provider.dart';
 import '../../widgets/apple_lyrics/parsers/lyric_parser_chain.dart';
 import '../../widgets/player_playlist_view.dart';
 import '../../widgets/player_seek_bar.dart';
@@ -64,7 +64,8 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
   }
 
   void _showMoreMenu(BuildContext rootContext) {
-    final song = context.read<PlayerProvider>().currentSong;
+    final player = context.read<PlayerProvider>();
+    final song = player.currentSong;
     if (song == null) return;
 
     final albumTitle = song.album.isEmpty ? '查看专辑' : '查看专辑：${song.album}';
@@ -142,7 +143,6 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                   title: const Text('播放速度'),
                   onTap: () {
                     Navigator.pop(sheetContext);
-                    final player = context.read<PlayerProvider>();
                     showSpeedPickerDialog(
                       context: rootContext,
                       currentSpeed: player.speed,
@@ -155,7 +155,7 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                   title: const Text('睡眠定时'),
                   onTap: () {
                     Navigator.pop(sheetContext);
-                    showSleepTimerSheet(rootContext);
+                    showSleepTimerSheet(context: rootContext, player: player);
                   },
                 ),
                 ListTile(
@@ -176,13 +176,14 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
     );
   }
 
-  void _navigateToAlbum(dynamic song) {
-    if (song is Song && song.album.isNotEmpty) {
+  void _navigateToAlbum(Song song) {
+    if (song.album.isNotEmpty) {
       final albumObj = Album(
         id: song.albumId ?? '',
         name: song.album,
         artist: song.artist,
         artworkUri: song.artworkUri,
+        songCount: 0,
       );
       Navigator.of(context).push(
         MaterialPageRoute(builder: (_) => AlbumDetailPage(album: albumObj)),
@@ -190,8 +191,8 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
     }
   }
 
-  void _navigateToArtist(dynamic song) {
-    if (song is Song && song.artistId != null && song.artistId!.isNotEmpty) {
+  void _navigateToArtist(Song song) {
+    if (song.artistId != null && song.artistId!.isNotEmpty) {
       Navigator.of(context).push(
         MaterialPageRoute(
           builder: (_) => ArtistDetailPage(
@@ -203,61 +204,12 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
     }
   }
 
-  void _showLyricsModalSheet(BuildContext context) {
+  void _showLyricsModalSheet(BuildContext context, Song song) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (sheetContext) {
-        final colorScheme = Theme.of(sheetContext).colorScheme;
-        final screenHeight = MediaQuery.of(sheetContext).size.height;
-        return Container(
-          height: screenHeight * 0.72,
-          decoration: BoxDecoration(
-            color: colorScheme.surfaceContainerHighest,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-          ),
-          child: Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 20,
-                  vertical: 12,
-                ),
-                child: Row(
-                  children: [
-                    Text(
-                      '歌词',
-                      style: Theme.of(sheetContext).textTheme.titleMedium
-                          ?.copyWith(fontWeight: FontWeight.bold),
-                    ),
-                    const Spacer(),
-                    IconButton(
-                      icon: const Icon(Icons.close),
-                      onPressed: () => Navigator.pop(sheetContext),
-                    ),
-                  ],
-                ),
-              ),
-              const Divider(height: 1),
-              Expanded(
-                child: Consumer<PlayerProvider>(
-                  builder: (context, player, _) {
-                    final song = player.currentSong;
-                    if (song == null) {
-                      return const Center(child: Text('暂无播放曲目'));
-                    }
-                    return _YtLyricsModalBody(
-                      song: song,
-                      playerProvider: player,
-                    );
-                  },
-                ),
-              ),
-            ],
-          ),
-        );
-      },
+      builder: (sheetContext) => _YtLyricsSheet(song: song),
     );
   }
 
@@ -361,15 +313,15 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
     );
   }
 
-  Widget _buildPlayModeIcon(bool shuffleEnabled, LoopMode loopMode) {
+  Widget _buildPlayModeIcon(bool shuffleEnabled, AppLoopMode loopMode) {
     if (shuffleEnabled) {
       return const Icon(Icons.shuffle, size: 22);
     }
     switch (loopMode) {
-      case LoopMode.one:
+      case AppLoopMode.one:
         return const Icon(Icons.repeat_one, size: 22);
-      case LoopMode.all:
-      case LoopMode.off:
+      case AppLoopMode.all:
+      case AppLoopMode.off:
         return const Icon(Icons.repeat, size: 22);
     }
   }
@@ -435,7 +387,7 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
               );
             }
 
-            final isOnline = song is Song && song.isOnline;
+            final isOnline = song.isOnline;
             final isFavorited = isOnline
                 ? context.watch<FavoritesProvider>().isFavorite(song.id)
                 : context.watch<LocalFavoritesProvider>().isFavorite(song.id);
@@ -444,10 +396,10 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
               backgroundColor: Colors.black,
               body: Stack(
                 children: [
-                  Positioned.fill(child: Container(color: colorScheme.surface)),
+                  const Positioned.fill(child: AppBackground()),
                   Positioned.fill(
                     child: Container(
-                      color: Colors.black.withValues(alpha: 0.35),
+                      color: Colors.black.withValues(alpha: 0.45),
                     ),
                   ),
                   SafeArea(
@@ -503,6 +455,7 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                                     borderRadius: BorderRadius.circular(16),
                                     child: SmartArtworkImage(
                                       artworkUri: song.artworkUri,
+                                      size: 320,
                                     ),
                                   ),
                                 ),
@@ -589,7 +542,8 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                                 _buildCapsuleButton(
                                   icon: Icons.subtitles_outlined,
                                   label: '歌词',
-                                  onTap: () => _showLyricsModalSheet(context),
+                                  onTap: () =>
+                                      _showLyricsModalSheet(context, song),
                                 ),
                                 const SizedBox(width: 8),
                                 _buildCapsuleButton(
@@ -702,19 +656,20 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                               ),
                               IconButton(
                                 icon: Icon(
-                                  playerProvider.loopMode == LoopMode.one
+                                  playerProvider.loopMode == AppLoopMode.one
                                       ? Icons.repeat_one
                                       : Icons.repeat,
                                   size: 24,
                                 ),
-                                color: playerProvider.loopMode != LoopMode.off
+                                color:
+                                    playerProvider.loopMode != AppLoopMode.off
                                     ? colorScheme.primary
                                     : Colors.white70,
                                 onPressed: () {
                                   AppHaptics.lightImpact(
                                     HapticCategory.transport,
                                   );
-                                  playerProvider.toggleLoopMode();
+                                  playerProvider.cyclePlayMode();
                                 },
                               ),
                             ],
@@ -765,20 +720,18 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
   }
 }
 
-class _YtLyricsModalBody extends StatefulWidget {
-  final dynamic song;
-  final PlayerProvider playerProvider;
-
-  const _YtLyricsModalBody({required this.song, required this.playerProvider});
+class _YtLyricsSheet extends StatefulWidget {
+  final Song song;
+  const _YtLyricsSheet({required this.song});
 
   @override
-  State<_YtLyricsModalBody> createState() => _YtLyricsModalBodyState();
+  State<_YtLyricsSheet> createState() => _YtLyricsSheetState();
 }
 
-class _YtLyricsModalBodyState extends State<_YtLyricsModalBody> {
-  bool _isLoading = true;
-  String _lyrics = '';
-  List<LyricLine> _parsedLyrics = const [];
+class _YtLyricsSheetState extends State<_YtLyricsSheet> {
+  bool _loading = true;
+  String _rawLyrics = '';
+  List<LyricLine> _parsedLines = const [];
 
   @override
   void initState() {
@@ -786,53 +739,134 @@ class _YtLyricsModalBodyState extends State<_YtLyricsModalBody> {
     _loadLyrics();
   }
 
+  @override
+  void didUpdateWidget(covariant _YtLyricsSheet oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.song.id != widget.song.id) {
+      _loadLyrics();
+    }
+  }
+
   Future<void> _loadLyrics() async {
+    setState(() {
+      _loading = true;
+      _rawLyrics = '';
+      _parsedLines = const [];
+    });
+
     final song = widget.song;
-    String text = '';
+    String lyricText = '';
+    String? translationText;
+    String? romaText;
 
-    try {
-      if (song is Song && !song.isOnline && song.localPath != null) {
-        final embedded = await LocalLyricLoader.loadForAudioAsync(
-          song.localPath!,
+    if (!song.isOnline && song.filePath != null && song.filePath!.isNotEmpty) {
+      final embedded = await LocalLyricLoader.loadForAudioAsync(song.filePath!);
+      if (embedded != null && embedded.isNotEmpty) {
+        lyricText = embedded;
+      }
+    }
+
+    if (lyricText.isEmpty) {
+      try {
+        final matchInfo = context.read<SongMatchProvider>().getMatch(song.id);
+        final searchName = matchInfo?.onlineTitle ?? song.title;
+        final searchArtist = matchInfo?.onlineArtist ?? song.artist;
+        final kugouProvider = KugouLyricProvider();
+        final searchResult = await kugouProvider.searchLyric(
+          songName: searchName,
+          artistName: searchArtist,
+          durationSeconds: song.duration.inSeconds,
         );
-        if (embedded != null && embedded.isNotEmpty) {
-          text = embedded;
+        if (searchResult != null && searchResult.candidates.isNotEmpty) {
+          final first = searchResult.candidates.first;
+          final lyric = await kugouProvider.getLyric(
+            first.id,
+            accessKey: first.accessKey,
+            songName: searchName,
+            artistName: searchArtist,
+          );
+          lyricText =
+              lyric?.displayKrcLyric ??
+              lyric?.displayLrcLyric ??
+              lyric?.displayLyric ??
+              '';
+          translationText = lyric?.translationLyric;
         }
-      }
-      if (text.isEmpty && song is Song) {
-        final kugou = context.read<KugouProvider>();
-        final searchName = (song.artist != '未知艺术家')
-            ? '${song.title} ${song.artist}'
-            : song.title;
-        final res = await kugou.getLyric(song.id, songName: searchName);
-        text =
-            res?.displayKrcLyric ??
-            res?.displayLrcLyric ??
-            res?.displayLyric ??
-            '';
-      }
-    } catch (_) {}
+      } catch (_) {}
+    }
 
-    if (mounted) {
+    if (!mounted) return;
+
+    if (lyricText.isNotEmpty) {
+      final parsed = LyricParserChain.parse(
+        lyricText,
+        translationText: translationText,
+        romaText: romaText,
+      );
       setState(() {
-        _isLoading = false;
-        _lyrics = text;
-        _parsedLyrics = LyricParserChain.parse(text);
+        _loading = false;
+        _rawLyrics = lyricText;
+        _parsedLines = parsed;
+      });
+    } else {
+      setState(() {
+        _loading = false;
       });
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_isLoading) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    return LyricsView(
-      lyrics: _lyrics,
-      parsedLyrics: _parsedLyrics,
-      position: Duration.zero,
-      positionListenable: widget.playerProvider.positionNotifier,
-      onSeek: (pos) => widget.playerProvider.seek(pos),
+    final colorScheme = Theme.of(context).colorScheme;
+    final screenHeight = MediaQuery.of(context).size.height;
+    return Container(
+      height: screenHeight * 0.72,
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHighest,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+            child: Row(
+              children: [
+                Text(
+                  '歌词',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const Spacer(),
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          Expanded(
+            child: Consumer<PlayerProvider>(
+              builder: (context, player, _) {
+                if (_loading) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                if (_parsedLines.isEmpty) {
+                  return const Center(child: Text('暂无歌词'));
+                }
+                return LyricsView(
+                  lyrics: _rawLyrics,
+                  parsedLyrics: _parsedLines,
+                  position: player.position,
+                  positionListenable: player.positionNotifier,
+                  onSeek: (pos) => player.seek(pos),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
