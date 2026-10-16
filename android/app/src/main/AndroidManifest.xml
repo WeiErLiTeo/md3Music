@@ -215,7 +215,7 @@
                 android:name="android.appwidget.provider"
                 android:resource="@xml/cover_player_widget_info" />
         </receiver>
-        <meta-data android:name="lyricon_module" android:value="true" />
+        <meta-data android:name="lyricon_module" android:value="@bool/enable_impeller" />
         <meta-data android:name="lyricon_module_author" android:value="𝒗𝒄𝒆𝒙𝒎𝒍 &amp; Little-White3110" />
         <meta-data android:name="lyricon_module_description" android:value="MD3Music Lyricon Provider" />
         <meta-data android:name="lyricon_module_tags" android:resource="@array/lyricon_module_tags" />
@@ -227,7 +227,7 @@
         <!-- 渲染引擎使用 Impeller，由 Gradle 构建期静态值启用。 -->
         <meta-data
             android:name="io.flutter.embedding.android.EnableImpeller"
-            android:value="true" />
+            android:value="@bool/enable_impeller" />
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and
