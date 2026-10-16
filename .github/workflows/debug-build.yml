@@ -258,8 +258,11 @@ jobs:
             # 3) 已启用 Impeller
             "$aapt2" dump xmltree "$apk" --file AndroidManifest.xml > "$RUNNER_TEMP/manifest.txt" \
               || fail "aapt2 dump xmltree 执行失败"
-            if ! grep -A1 'io.flutter.embedding.android.EnableImpeller' "$RUNNER_TEMP/manifest.txt" \
-                | grep '0xffffffff' > /dev/null; then
+            block="$(sed -n '/io\.flutter\.embedding\.android\.EnableImpeller/,/^ *E: /p' "$RUNNER_TEMP/manifest.txt" | grep -m1 'android:value' || true)"
+            if [[ -z "$block" ]]; then
+              block="$(grep -B3 -A3 'io\.flutter\.embedding\.android\.EnableImpeller' "$RUNNER_TEMP/manifest.txt" | grep 'android:value' || true)"
+            fi
+            if ! echo "$block" | grep -E '0xffffffff|"true"' > /dev/null; then
               fail "未启用 Impeller：AndroidManifest.xml 中没有 EnableImpeller=true"
             fi
 

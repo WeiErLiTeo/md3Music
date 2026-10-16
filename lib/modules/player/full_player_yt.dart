@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'package:m3e_core/m3e_core.dart';
-import 'package:material_ui/material_ui.dart';
+import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/utils/app_haptics.dart';
