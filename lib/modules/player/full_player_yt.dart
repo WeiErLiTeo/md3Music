@@ -11,10 +11,10 @@ import '../../data/models/song.dart';
 import '../../providers/favorites_provider.dart';
 import '../../providers/local_favorites_provider.dart';
 import '../../providers/player_provider.dart';
-import '../../providers/song_match_provider.dart';
+import '../../data/repositories/song_match_repository.dart';
 import '../../widgets/add_to_playlist_dialog.dart';
 import '../../widgets/apple_lyrics/models/lyric_line.dart';
-import '../../widgets/apple_lyrics/parsers/kugou_lyric_provider.dart';
+import '../../providers/kugou_provider.dart';
 import '../../widgets/apple_lyrics/parsers/lyric_parser_chain.dart';
 import '../../widgets/player_playlist_view.dart';
 import '../../widgets/player_seek_bar.dart';
@@ -759,39 +759,41 @@ class _YtLyricsSheetState extends State<_YtLyricsSheet> {
     String? translationText;
     String? romaText;
 
-    if (!song.isOnline && song.filePath != null && song.filePath!.isNotEmpty) {
-      final embedded = await LocalLyricLoader.loadForAudioAsync(song.filePath!);
-      if (embedded != null && embedded.isNotEmpty) {
-        lyricText = embedded;
+    if (!song.isOnline) {
+      final localPath = song.localPath;
+      if (localPath != null && localPath.isNotEmpty) {
+        final embedded = await LocalLyricLoader.loadForAudioAsync(localPath);
+        if (embedded != null && embedded.isNotEmpty) {
+          lyricText = embedded;
+        }
       }
     }
 
     if (lyricText.isEmpty) {
       try {
-        final matchInfo = context.read<SongMatchProvider>().getMatch(song.id);
-        final searchName = matchInfo?.onlineTitle ?? song.title;
-        final searchArtist = matchInfo?.onlineArtist ?? song.artist;
-        final kugouProvider = KugouLyricProvider();
-        final searchResult = await kugouProvider.searchLyric(
+        await SongMatchRepository().ensureLoaded();
+        final matchInfo = !song.isOnline
+            ? SongMatchRepository().get(song.id)
+            : null;
+        final kugouProvider = context.read<KugouProvider>();
+        final matchedHash = (matchInfo != null && matchInfo.isMatched)
+            ? matchInfo.hash
+            : null;
+        final lyricHash = matchedHash ?? (!song.isOnline ? '' : song.id);
+        final searchName = song.artist != '未知艺术家'
+            ? '${song.title} ${song.artist}'
+            : song.title;
+        final lyric = await kugouProvider.getLyric(
+          lyricHash,
           songName: searchName,
-          artistName: searchArtist,
-          durationSeconds: song.duration.inSeconds,
         );
-        if (searchResult != null && searchResult.candidates.isNotEmpty) {
-          final first = searchResult.candidates.first;
-          final lyric = await kugouProvider.getLyric(
-            first.id,
-            accessKey: first.accessKey,
-            songName: searchName,
-            artistName: searchArtist,
-          );
-          lyricText =
-              lyric?.displayKrcLyric ??
-              lyric?.displayLrcLyric ??
-              lyric?.displayLyric ??
-              '';
-          translationText = lyric?.translationLyric;
-        }
+        lyricText =
+            lyric?.displayKrcLyric ??
+            lyric?.displayLrcLyric ??
+            lyric?.displayLyric ??
+            '';
+        translationText = lyric?.translatedContent;
+        romaText = lyric?.romaContent;
       } catch (_) {}
     }
 
