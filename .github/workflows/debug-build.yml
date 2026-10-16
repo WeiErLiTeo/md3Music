@@ -1,7 +1,10 @@
 name: Debug Build & Test
 
-# 每次 PR 提交成功（新建 PR / 向 PR 推送新提交 / 重新打开 PR）后自动运行。
-# 只构建 standard 版 arm64-v8a debug APK，用于无线 ADB 测试。
+# 两种触发方式：
+#   1. 自动：提交到主仓库默认分支的 PR（新建 / 推送新提交 / 重新打开）。
+#      推到普通分支不会触发；PR 目标不是默认分支时，作业会被跳过。
+#   2. 手动：Actions 页面的 Run workflow 按钮，可选 debug / release。
+# 只构建 standard 版 arm64-v8a APK，用于无线 ADB 测试。
 #
 # 报错流程：任何一步失败时，在本次运行页面的 Summary 里给出
 #   1. 出错的步骤名 + 该步骤执行的命令
@@ -16,6 +19,21 @@ name: Debug Build & Test
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: '构建类型'
+        required: true
+        type: choice
+        options:
+          - debug
+          - release
+        default: 'debug'
+      notes:
+        description: '构建说明（可选）'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -26,7 +44,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  BUILD_TYPE: debug
+  # PR 自动触发时没有 inputs，固定为 debug
+  BUILD_TYPE: ${{ inputs.build_type || 'debug' }}
   APPLICATION_ID: com.md3music.md3music
 
 jobs:
@@ -34,6 +53,7 @@ jobs:
     name: Build Android standard Debug APK
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    if: ${{ github.event_name == 'workflow_dispatch' || github.base_ref == github.event.repository.default_branch }}
     defaults:
       run:
         # 显式指定 bash，GitHub 才会启用 -eo pipefail
@@ -250,7 +270,12 @@ jobs:
               fail "standard 包含有 3D 资产（flavor 隔离失效），泄漏文件见上方列表"
             fi
 
-            # 5) 签名必须是固定钥匙（否则手机上覆盖安装会提示签名冲突）
+            # 5) debug 构建的签名必须是固定钥匙（否则手机上覆盖安装会提示签名冲突）
+            if [[ "$BUILD_TYPE" != "debug" ]]; then
+              echo "跳过签名指纹校验（构建类型：${BUILD_TYPE}）"
+              echo "APK 校验全部通过：$apk"
+              exit 0
+            fi
             apksigner="${ANDROID_HOME}/build-tools/36.0.0/apksigner"
             [[ -x "$apksigner" ]] || fail "找不到 apksigner：$apksigner"
             [[ -n "${MD3_DEBUG_KEYSTORE_SHA256:-}" ]] || fail "缺少固定钥匙指纹（Use fixed debug keystore 步骤没有写出）"
@@ -282,8 +307,8 @@ jobs:
           STEPS_JSON: ${{ toJSON(steps) }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_REF: ${{ github.head_ref }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.head_ref || github.ref_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           # 报告步骤自己尽量跑完，所以不开 -e
           set -uo pipefail
@@ -406,7 +431,8 @@ jobs:
               echo "失败步骤: ${name} (id: ${id})"
               if [[ -n "$cmd" ]]; then echo "执行命令: ${cmd}"; fi
               echo "仓库: ${GITHUB_REPOSITORY:-}"
-              echo "PR: #${PR_NUMBER:-?}  分支: ${HEAD_REF:-?}  提交: ${HEAD_SHA:-?}"
+              if [[ -n "${PR_NUMBER:-}" ]]; then pr_text="PR: #${PR_NUMBER}"; else pr_text="手动运行"; fi
+              echo "${pr_text}  分支: ${HEAD_REF:-?}  提交: ${HEAD_SHA:-?}"
               echo "运行页面: ${RUN_URL}"
               echo
             } > "$copy"
@@ -441,7 +467,7 @@ jobs:
               } >> "$copy"
             fi
 
-            # 防止日志里的反预测提前结束代码块
+            # 防止日志里的反引号提前结束代码块
             sed -i -E 's/`{6,}/`````/g' "$copy"
 
             {
