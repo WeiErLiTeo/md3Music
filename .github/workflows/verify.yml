@@ -1,0 +1,15 @@
+name: PR Verification
+on:
+  pull_request:
+    branches: [ rust-local-force, main ]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.5'
+      - run: flutter pub get
+      - run: flutter analyze

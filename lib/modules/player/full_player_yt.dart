@@ -4,15 +4,19 @@ import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/utils/app_haptics.dart';
-import '../../core/utils/audio_format_utils.dart';
+import '../../core/utils/local_lyric_loader.dart';
+import '../../core/widgets/app_background.dart';
+import '../../data/models/album.dart';
 import '../../data/models/song.dart';
 import '../../providers/favorites_provider.dart';
 import '../../providers/local_favorites_provider.dart';
 import '../../providers/player_provider.dart';
-import '../../providers/theme_provider.dart';
+import '../../data/repositories/song_match_repository.dart';
 import '../../widgets/add_to_playlist_dialog.dart';
+import '../../widgets/apple_lyrics/models/lyric_line.dart';
+import '../../providers/kugou_provider.dart';
 import '../../widgets/apple_lyrics/parsers/lyric_parser_chain.dart';
-import '../../widgets/playing_spectrum_indicator.dart';
+import '../../widgets/player_playlist_view.dart';
 import '../../widgets/player_seek_bar.dart';
 import '../../widgets/smart_artwork_image.dart';
 import '../album/album_detail_page.dart';
@@ -27,10 +31,7 @@ import 'speed_picker_sheet.dart';
 
 /// YouTube Music 风格的播放页界面
 class FullPlayerYt extends StatefulWidget {
-  const FullPlayerYt({
-    super.key,
-    this.dockMode = false,
-  });
+  const FullPlayerYt({super.key, this.dockMode = false});
 
   /// 车机模式常驻面板模式
   final bool dockMode;
@@ -40,9 +41,13 @@ class FullPlayerYt extends StatefulWidget {
 }
 
 class _FullPlayerYtState extends State<FullPlayerYt> {
-  String _lyrics = '';
-  String? _lastSongId;
-  bool _isLoadingLyrics = false;
+  final PlaylistScrollAnchor _playlistScrollAnchor = PlaylistScrollAnchor();
+
+  @override
+  void dispose() {
+    _playlistScrollAnchor.dispose();
+    super.dispose();
+  }
 
   DraggablePlayerRoute? get _dragRoute {
     final route = ModalRoute.of(context);
@@ -58,35 +63,9 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
     }
   }
 
-  Future<void> _fetchLyricsIfNeeded(dynamic song) async {
-    if (song == null || song.id == _lastSongId) return;
-    _lastSongId = song.id as String;
-    setState(() {
-      _isLoadingLyrics = true;
-      _lyrics = '';
-    });
-
-    try {
-      final playerProvider = context.read<PlayerProvider>();
-      final lyricData = await playerProvider.fetchLyricsForSong(song);
-      if (mounted && song.id == _lastSongId) {
-        setState(() {
-          _isLoadingLyrics = false;
-          _lyrics = lyricData ?? '';
-        });
-      }
-    } catch (_) {
-      if (mounted && song.id == _lastSongId) {
-        setState(() {
-          _isLoadingLyrics = false;
-          _lyrics = '';
-        });
-      }
-    }
-  }
-
   void _showMoreMenu(BuildContext rootContext) {
-    final song = context.read<PlayerProvider>().currentSong;
+    final player = context.read<PlayerProvider>();
+    final song = player.currentSong;
     if (song == null) return;
 
     final albumTitle = song.album.isEmpty ? '查看专辑' : '查看专辑：${song.album}';
@@ -164,7 +143,11 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                   title: const Text('播放速度'),
                   onTap: () {
                     Navigator.pop(sheetContext);
-                    showSpeedPickerSheet(rootContext);
+                    showSpeedPickerDialog(
+                      context: rootContext,
+                      currentSpeed: player.speed,
+                      onSelected: (speed) => player.setSpeed(speed),
+                    );
                   },
                 ),
                 ListTile(
@@ -172,7 +155,7 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                   title: const Text('睡眠定时'),
                   onTap: () {
                     Navigator.pop(sheetContext);
-                    showSleepTimerSheet(rootContext);
+                    showSleepTimerSheet(context: rootContext, player: player);
                   },
                 ),
                 ListTile(
@@ -180,7 +163,9 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                   title: const Text('歌曲信息'),
                   onTap: () {
                     Navigator.pop(sheetContext);
-                    showSongInfoPage(rootContext, song);
+                    Navigator.of(rootContext).push(
+                      MaterialPageRoute(builder: (_) => const SongInfoPage()),
+                    );
                   },
                 ),
               ],
@@ -191,21 +176,23 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
     );
   }
 
-  void _navigateToAlbum(dynamic song) {
-    if (song is Song && song.albumId != null && song.albumId!.isNotEmpty) {
+  void _navigateToAlbum(Song song) {
+    if (song.album.isNotEmpty) {
+      final albumObj = Album(
+        id: song.albumId ?? '',
+        name: song.album,
+        artist: song.artist,
+        artworkUri: song.artworkUri,
+        songCount: 0,
+      );
       Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => AlbumDetailPage(
-            albumId: song.albumId!,
-            albumName: song.album,
-          ),
-        ),
+        MaterialPageRoute(builder: (_) => AlbumDetailPage(album: albumObj)),
       );
     }
   }
 
-  void _navigateToArtist(dynamic song) {
-    if (song is Song && song.artistId != null && song.artistId!.isNotEmpty) {
+  void _navigateToArtist(Song song) {
+    if (song.artistId != null && song.artistId!.isNotEmpty) {
       Navigator.of(context).push(
         MaterialPageRoute(
           builder: (_) => ArtistDetailPage(
@@ -217,10 +204,16 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
     }
   }
 
-  void _showLyricsModalSheet(BuildContext context) {
-    final song = context.read<PlayerProvider>().currentSong;
-    _fetchLyricsIfNeeded(song);
+  void _showLyricsModalSheet(BuildContext context, Song song) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) => _YtLyricsSheet(song: song),
+    );
+  }
 
+  void _showQueueDrawer(BuildContext context) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -231,51 +224,86 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
         return Container(
           height: screenHeight * 0.72,
           decoration: BoxDecoration(
-            color: colorScheme.surfaceContainerHighest,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+            color: colorScheme.surfaceContainerHigh,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
           ),
           child: Column(
             children: [
+              Center(
+                child: Container(
+                  margin: const EdgeInsets.only(top: 10, bottom: 6),
+                  width: 36,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: colorScheme.onSurfaceVariant.withValues(alpha: 0.4),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 8,
+                ),
                 child: Row(
                   children: [
-                    Text(
-                      '歌词',
-                      style: Theme.of(sheetContext).textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.bold,
-                          ),
+                    Expanded(
+                      child: Text(
+                        '播放的音乐来自 · 播放队列',
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(fontWeight: FontWeight.bold),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
-                    const Spacer(),
-                    IconButton(
-                      icon: const Icon(Icons.close),
-                      onPressed: () => Navigator.pop(sheetContext),
+                    InkWell(
+                      onTap: () {
+                        final currentSong = context
+                            .read<PlayerProvider>()
+                            .currentSong;
+                        if (currentSong != null) {
+                          showAddToPlaylistDialog(context, currentSong);
+                        }
+                      },
+                      borderRadius: BorderRadius.circular(16),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: colorScheme.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.playlist_add,
+                              size: 16,
+                              color: colorScheme.primary,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              '保存',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: colorScheme.primary,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
                   ],
                 ),
               ),
               const Divider(height: 1),
               Expanded(
-                child: Consumer<PlayerProvider>(
-                  builder: (context, player, _) {
-                    final song = player.currentSong;
-                    if (song == null) {
-                      return const Center(child: Text('暂无播放曲目'));
-                    }
-                    if (_isLoadingLyrics) {
-                      return const Center(
-                        child: CircularProgressIndicator(),
-                      );
-                    }
-                    final parsed = LyricParserChain.parse(_lyrics);
-                    return LyricsView(
-                      lyrics: _lyrics,
-                      parsedLyrics: parsed,
-                      position: Duration.zero,
-                      positionListenable: player.positionNotifier,
-                      onSeek: (pos) => player.seek(pos),
-                    );
-                  },
+                child: PlayerPlaylistView(
+                  scrollAnchor: _playlistScrollAnchor,
+                  useAmColors: false,
                 ),
               ),
             ],
@@ -285,178 +313,15 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
     );
   }
 
-  void _showQueueDrawer(BuildContext context) {
-    final playerProvider = context.read<PlayerProvider>();
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (sheetContext) {
-        return DraggableScrollableSheet(
-          initialChildSize: 0.65,
-          minChildSize: 0.3,
-          maxChildSize: 0.9,
-          builder: (context, scrollController) {
-            final colorScheme = Theme.of(context).colorScheme;
-            return Container(
-              decoration: BoxDecoration(
-                color: colorScheme.surfaceContainerHigh,
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-              ),
-              child: Column(
-                children: [
-                  Center(
-                    child: Container(
-                      margin: const EdgeInsets.only(top: 10, bottom: 6),
-                      width: 36,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: colorScheme.onSurfaceVariant.withValues(alpha: 0.4),
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            '播放的音乐来自 · ${playerProvider.playlistName ?? "播放队列"}',
-                            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        InkWell(
-                          onTap: () {
-                            final currentSong = playerProvider.currentSong;
-                            if (currentSong != null) {
-                              showAddToPlaylistDialog(context, currentSong);
-                            }
-                          },
-                          borderRadius: BorderRadius.circular(16),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                            decoration: BoxDecoration(
-                              color: colorScheme.surfaceContainerHighest,
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(Icons.playlist_add, size: 16, color: colorScheme.primary),
-                                const SizedBox(width: 4),
-                                Text(
-                                  '保存',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600,
-                                    color: colorScheme.primary,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const Divider(height: 1),
-                  Expanded(
-                    child: Consumer<PlayerProvider>(
-                      builder: (context, player, _) {
-                        final playlist = player.playlist;
-                        final currentSong = player.currentSong;
-                        return ReorderableListView.builder(
-                          scrollController: scrollController,
-                          itemCount: playlist.length,
-                          onReorder: (oldIndex, newIndex) {
-                            player.reorderPlaylist(oldIndex, newIndex);
-                          },
-                          itemBuilder: (context, index) {
-                            final item = playlist[index];
-                            final isCurrent = currentSong?.id == item.id;
-                            final durationText = formatDuration(item.duration);
-                            final subtitleText = '${item.artist} · $durationText';
-
-                            return ListTile(
-                              key: ValueKey(item.id),
-                              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                              leading: ClipRRect(
-                                borderRadius: BorderRadius.circular(6),
-                                child: SizedBox(
-                                  width: 44,
-                                  height: 44,
-                                  child: SmartArtworkImage(
-                                    artworkUri: item.artworkUri,
-                                  ),
-                                ),
-                              ),
-                              title: Row(
-                                children: [
-                                  if (isCurrent) ...[
-                                    PlayingSpectrumIndicator(
-                                      size: 14,
-                                      color: colorScheme.primary,
-                                    ),
-                                    const SizedBox(width: 6),
-                                  ],
-                                  Expanded(
-                                    child: Text(
-                                      item.title,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
-                                        color: isCurrent ? colorScheme.primary : colorScheme.onSurface,
-                                        fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              subtitle: Text(
-                                subtitleText,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  color: colorScheme.onSurfaceVariant,
-                                  fontSize: 12,
-                                ),
-                              ),
-                              trailing: Icon(
-                                Icons.drag_handle,
-                                color: colorScheme.onSurfaceVariant,
-                              ),
-                              onTap: () {
-                                player.playSongAtIndex(index);
-                              },
-                            );
-                          },
-                        );
-                      },
-                    ),
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-
-  Widget _buildPlayModeIcon(bool shuffleEnabled, LoopMode loopMode) {
+  Widget _buildPlayModeIcon(bool shuffleEnabled, AppLoopMode loopMode) {
     if (shuffleEnabled) {
       return const Icon(Icons.shuffle, size: 22);
     }
     switch (loopMode) {
-      case LoopMode.one:
+      case AppLoopMode.one:
         return const Icon(Icons.repeat_one, size: 22);
-      case LoopMode.all:
-      case LoopMode.off:
+      case AppLoopMode.all:
+      case AppLoopMode.off:
         return const Icon(Icons.repeat, size: 22);
     }
   }
@@ -522,7 +387,7 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
               );
             }
 
-            final isOnline = song is Song && song.isOnline;
+            final isOnline = song.isOnline;
             final isFavorited = isOnline
                 ? context.watch<FavoritesProvider>().isFavorite(song.id)
                 : context.watch<LocalFavoritesProvider>().isFavorite(song.id);
@@ -531,30 +396,37 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
               backgroundColor: Colors.black,
               body: Stack(
                 children: [
+                  const Positioned.fill(child: AppBackground()),
                   Positioned.fill(
                     child: Container(
-                      color: colorScheme.surface,
-                    ),
-                  ),
-                  Positioned.fill(
-                    child: Container(
-                      color: Colors.black.withValues(alpha: 0.35),
+                      color: Colors.black.withValues(alpha: 0.45),
                     ),
                   ),
                   SafeArea(
                     child: Column(
                       children: [
                         Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 8,
+                          ),
                           child: Row(
                             children: [
                               IconButton(
-                                icon: const Icon(Icons.expand_more, size: 28, color: Colors.white),
+                                icon: const Icon(
+                                  Icons.expand_more,
+                                  size: 28,
+                                  color: Colors.white,
+                                ),
                                 onPressed: _collapseByButton,
                               ),
                               const Spacer(),
                               IconButton(
-                                icon: const Icon(Icons.more_vert, size: 24, color: Colors.white),
+                                icon: const Icon(
+                                  Icons.more_vert,
+                                  size: 24,
+                                  color: Colors.white,
+                                ),
                                 onPressed: () => _showMoreMenu(context),
                               ),
                             ],
@@ -571,7 +443,9 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                                     borderRadius: BorderRadius.circular(16),
                                     boxShadow: [
                                       BoxShadow(
-                                        color: Colors.black.withValues(alpha: 0.4),
+                                        color: Colors.black.withValues(
+                                          alpha: 0.4,
+                                        ),
                                         blurRadius: 16,
                                         offset: const Offset(0, 8),
                                       ),
@@ -581,6 +455,7 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                                     borderRadius: BorderRadius.circular(16),
                                     child: SmartArtworkImage(
                                       artworkUri: song.artworkUri,
+                                      size: 320,
                                     ),
                                   ),
                                 ),
@@ -589,7 +464,10 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                           ),
                         ),
                         Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 8.0),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 24.0,
+                            vertical: 8.0,
+                          ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
@@ -609,7 +487,10 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                                   ),
                                   if (song.album.isNotEmpty)
                                     IconButton(
-                                      icon: const Icon(Icons.chevron_right, color: Colors.white70),
+                                      icon: const Icon(
+                                        Icons.chevron_right,
+                                        color: Colors.white70,
+                                      ),
                                       onPressed: () => _navigateToAlbum(song),
                                     ),
                                 ],
@@ -638,14 +519,22 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                             child: Row(
                               children: [
                                 _buildCapsuleButton(
-                                  icon: isFavorited ? Icons.favorite : Icons.favorite_border,
-                                  iconColor: isFavorited ? Colors.redAccent : Colors.white,
+                                  icon: isFavorited
+                                      ? Icons.favorite
+                                      : Icons.favorite_border,
+                                  iconColor: isFavorited
+                                      ? Colors.redAccent
+                                      : Colors.white,
                                   label: '收藏',
                                   onTap: () {
                                     if (isOnline) {
-                                      context.read<FavoritesProvider>().toggleFavorite(song);
+                                      context
+                                          .read<FavoritesProvider>()
+                                          .toggleFavorite(song);
                                     } else {
-                                      context.read<LocalFavoritesProvider>().toggleFavorite(song.id);
+                                      context
+                                          .read<LocalFavoritesProvider>()
+                                          .toggleFavorite(song.id);
                                     }
                                   },
                                 ),
@@ -653,13 +542,15 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                                 _buildCapsuleButton(
                                   icon: Icons.subtitles_outlined,
                                   label: '歌词',
-                                  onTap: () => _showLyricsModalSheet(context),
+                                  onTap: () =>
+                                      _showLyricsModalSheet(context, song),
                                 ),
                                 const SizedBox(width: 8),
                                 _buildCapsuleButton(
                                   icon: Icons.playlist_add,
                                   label: '保存',
-                                  onTap: () => showAddToPlaylistDialog(context, song),
+                                  onTap: () =>
+                                      showAddToPlaylistDialog(context, song),
                                 ),
                                 const SizedBox(width: 8),
                                 _buildCapsuleButton(
@@ -668,7 +559,8 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                                   onTap: () {
                                     Navigator.of(context).push(
                                       MaterialPageRoute(
-                                        builder: (_) => const EqualizerSettingsPage(),
+                                        builder: (_) =>
+                                            const EqualizerSettingsPage(),
                                       ),
                                     );
                                   },
@@ -693,7 +585,10 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                         ),
                         const SizedBox(height: 12),
                         Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 8.0),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 24.0,
+                            vertical: 8.0,
+                          ),
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                             children: [
@@ -702,14 +597,22 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                                   playerProvider.shuffleEnabled,
                                   playerProvider.loopMode,
                                 ),
-                                color: playerProvider.shuffleEnabled ? colorScheme.primary : Colors.white70,
+                                color: playerProvider.shuffleEnabled
+                                    ? colorScheme.primary
+                                    : Colors.white70,
                                 onPressed: () {
-                                  AppHaptics.lightImpact(HapticCategory.transport);
+                                  AppHaptics.lightImpact(
+                                    HapticCategory.transport,
+                                  );
                                   playerProvider.toggleShuffle();
                                 },
                               ),
                               IconButton(
-                                icon: const Icon(Icons.skip_previous, size: 36, color: Colors.white),
+                                icon: const Icon(
+                                  Icons.skip_previous,
+                                  size: 36,
+                                  color: Colors.white,
+                                ),
                                 onPressed: () {
                                   AppHaptics.click(HapticCategory.transport);
                                   playerProvider.previous();
@@ -718,7 +621,11 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                               GestureDetector(
                                 onTap: () {
                                   AppHaptics.click(HapticCategory.transport);
-                                  playerProvider.togglePlay();
+                                  if (playerProvider.isPlaying) {
+                                    playerProvider.pause();
+                                  } else {
+                                    playerProvider.resume();
+                                  }
                                 },
                                 child: Container(
                                   width: 64,
@@ -728,14 +635,20 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                                     shape: BoxShape.circle,
                                   ),
                                   child: Icon(
-                                    playerProvider.isPlaying ? Icons.pause : Icons.play_arrow,
+                                    playerProvider.isPlaying
+                                        ? Icons.pause
+                                        : Icons.play_arrow,
                                     size: 38,
                                     color: Colors.black,
                                   ),
                                 ),
                               ),
                               IconButton(
-                                icon: const Icon(Icons.skip_next, size: 36, color: Colors.white),
+                                icon: const Icon(
+                                  Icons.skip_next,
+                                  size: 36,
+                                  color: Colors.white,
+                                ),
                                 onPressed: () {
                                   AppHaptics.click(HapticCategory.transport);
                                   playerProvider.next();
@@ -743,15 +656,20 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                               ),
                               IconButton(
                                 icon: Icon(
-                                  playerProvider.loopMode == LoopMode.one
+                                  playerProvider.loopMode == AppLoopMode.one
                                       ? Icons.repeat_one
                                       : Icons.repeat,
                                   size: 24,
                                 ),
-                                color: playerProvider.loopMode != LoopMode.off ? colorScheme.primary : Colors.white70,
+                                color:
+                                    playerProvider.loopMode != AppLoopMode.off
+                                    ? colorScheme.primary
+                                    : Colors.white70,
                                 onPressed: () {
-                                  AppHaptics.lightImpact(HapticCategory.transport);
-                                  playerProvider.toggleLoopMode();
+                                  AppHaptics.lightImpact(
+                                    HapticCategory.transport,
+                                  );
+                                  playerProvider.cyclePlayMode();
                                 },
                               ),
                             ],
@@ -761,7 +679,10 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                         GestureDetector(
                           onTap: () => _showQueueDrawer(context),
                           child: Container(
-                            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+                            padding: const EdgeInsets.symmetric(
+                              vertical: 12,
+                              horizontal: 16,
+                            ),
                             color: Colors.transparent,
                             child: Column(
                               children: [
@@ -774,9 +695,9 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                                   ),
                                 ),
                                 const SizedBox(height: 6),
-                                Text(
-                                  '播放的音乐来自 / ${playerProvider.playlistName ?? "当前歌单"}',
-                                  style: const TextStyle(
+                                const Text(
+                                  '播放的音乐来自 / 播放队列',
+                                  style: TextStyle(
                                     fontSize: 12,
                                     color: Colors.white70,
                                     fontWeight: FontWeight.w500,
@@ -794,6 +715,159 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
             );
           },
         ),
+      ),
+    );
+  }
+}
+
+class _YtLyricsSheet extends StatefulWidget {
+  final Song song;
+  const _YtLyricsSheet({required this.song});
+
+  @override
+  State<_YtLyricsSheet> createState() => _YtLyricsSheetState();
+}
+
+class _YtLyricsSheetState extends State<_YtLyricsSheet> {
+  bool _loading = true;
+  String _rawLyrics = '';
+  List<LyricLine> _parsedLines = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadLyrics();
+  }
+
+  @override
+  void didUpdateWidget(covariant _YtLyricsSheet oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.song.id != widget.song.id) {
+      _loadLyrics();
+    }
+  }
+
+  Future<void> _loadLyrics() async {
+    setState(() {
+      _loading = true;
+      _rawLyrics = '';
+      _parsedLines = const [];
+    });
+
+    final song = widget.song;
+    String lyricText = '';
+    String? translationText;
+    String? romaText;
+
+    if (!song.isOnline) {
+      final localPath = song.localPath;
+      if (localPath != null && localPath.isNotEmpty) {
+        final embedded = await LocalLyricLoader.loadForAudioAsync(localPath);
+        if (embedded != null && embedded.isNotEmpty) {
+          lyricText = embedded;
+        }
+      }
+    }
+
+    if (lyricText.isEmpty) {
+      try {
+        await SongMatchRepository().ensureLoaded();
+        final matchInfo = !song.isOnline
+            ? SongMatchRepository().get(song.id)
+            : null;
+        final kugouProvider = context.read<KugouProvider>();
+        final matchedHash = (matchInfo != null && matchInfo.isMatched)
+            ? matchInfo.hash
+            : null;
+        final lyricHash = matchedHash ?? (!song.isOnline ? '' : song.id);
+        final searchName = song.artist != '未知艺术家'
+            ? '${song.title} ${song.artist}'
+            : song.title;
+        final lyric = await kugouProvider.getLyric(
+          lyricHash,
+          songName: searchName,
+        );
+        lyricText =
+            lyric?.displayKrcLyric ??
+            lyric?.displayLrcLyric ??
+            lyric?.displayLyric ??
+            '';
+        translationText = lyric?.translatedContent;
+        romaText = lyric?.romaContent;
+      } catch (_) {}
+    }
+
+    if (!mounted) return;
+
+    if (lyricText.isNotEmpty) {
+      final parsed = LyricParserChain.parse(
+        lyricText,
+        translationText: translationText,
+        romaText: romaText,
+      );
+      setState(() {
+        _loading = false;
+        _rawLyrics = lyricText;
+        _parsedLines = parsed;
+      });
+    } else {
+      setState(() {
+        _loading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final screenHeight = MediaQuery.of(context).size.height;
+    return Container(
+      height: screenHeight * 0.72,
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHighest,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+            child: Row(
+              children: [
+                Text(
+                  '歌词',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const Spacer(),
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          Expanded(
+            child: Consumer<PlayerProvider>(
+              builder: (context, player, _) {
+                if (_loading) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                if (_parsedLines.isEmpty) {
+                  return const Center(child: Text('暂无歌词'));
+                }
+                return LyricsView(
+                  lyrics: _rawLyrics,
+                  parsedLyrics: _parsedLines,
+                  position: player.position,
+                  positionListenable: player.positionNotifier,
+                  onSeek: (pos) => player.seek(pos),
+                );
+              },
+            ),
+          ),
+        ],
       ),
     );
   }
