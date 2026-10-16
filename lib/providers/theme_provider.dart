@@ -56,7 +56,6 @@ class ThemeProvider extends ChangeNotifier {
   bool _useCoverSeedColor = false;
   Color? _coverSeedColor;
   PlayerStyle _playerStyle = PlayerStyle.md3;
-  bool _useAmStylePlayer = false;
   Color? _manualSeedColor;
   bool _useOledBlack = false;
   double _displayScale = kDefaultDisplayScale;
@@ -342,7 +341,6 @@ class ThemeProvider extends ChangeNotifier {
       final oldAm = prefs.getBool(_amStylePlayerKey) ?? false;
       _playerStyle = oldAm ? PlayerStyle.appleMusic : PlayerStyle.md3;
     }
-    _useAmStylePlayer = (_playerStyle == PlayerStyle.appleMusic);
     notifyListeners();
   }
 
@@ -350,7 +348,6 @@ class ThemeProvider extends ChangeNotifier {
   Future<void> setPlayerStyle(PlayerStyle style) async {
     if (_playerStyle == style) return;
     _playerStyle = style;
-    _useAmStylePlayer = (style == PlayerStyle.appleMusic);
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_playerStyleKey, style.name);

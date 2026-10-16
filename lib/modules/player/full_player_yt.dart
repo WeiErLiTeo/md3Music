@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 
 import '../../core/utils/app_haptics.dart';
 import '../../core/utils/audio_format_utils.dart';
+import '../../data/models/album.dart';
 import '../../data/models/song.dart';
 import '../../providers/favorites_provider.dart';
 import '../../providers/local_favorites_provider.dart';
@@ -13,9 +14,9 @@ import '../../providers/theme_provider.dart';
 import '../../widgets/add_to_playlist_dialog.dart';
 import '../../widgets/apple_lyrics/parsers/lyric_parser_chain.dart';
 import '../../widgets/playing_spectrum_indicator.dart';
+import '../../widgets/player_playlist_view.dart';
 import '../../widgets/player_seek_bar.dart';
 import '../../widgets/smart_artwork_image.dart';
-import '../album/album_detail_page.dart';
 import '../artist/artist_detail_page.dart';
 import '../settings/equalizer_settings_page.dart';
 import 'full_player_route.dart';
@@ -43,6 +44,13 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
   String _lyrics = '';
   String? _lastSongId;
   bool _isLoadingLyrics = false;
+  final PlaylistScrollAnchor _playlistScrollAnchor = PlaylistScrollAnchor();
+
+  @override
+  void dispose() {
+    _playlistScrollAnchor.dispose();
+    super.dispose();
+  }
 
   DraggablePlayerRoute? get _dragRoute {
     final route = ModalRoute.of(context);
@@ -164,7 +172,7 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                   title: const Text('播放速度'),
                   onTap: () {
                     Navigator.pop(sheetContext);
-                    showSpeedPickerSheet(rootContext);
+                    showSpeedPickerDialog(context: rootContext);
                   },
                 ),
                 ListTile(
@@ -180,7 +188,11 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                   title: const Text('歌曲信息'),
                   onTap: () {
                     Navigator.pop(sheetContext);
-                    showSongInfoPage(rootContext, song);
+                    Navigator.of(rootContext).push(
+                      MaterialPageRoute(
+                        builder: (_) => SongInfoPage(song: song),
+                      ),
+                    );
                   },
                 ),
               ],
@@ -192,13 +204,16 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
   }
 
   void _navigateToAlbum(dynamic song) {
-    if (song is Song && song.albumId != null && song.albumId!.isNotEmpty) {
+    if (song is Song && song.album.isNotEmpty) {
+      final albumObj = Album(
+        id: song.albumId ?? '',
+        name: song.album,
+        artist: song.artist,
+        picUrl: song.artworkUri,
+      );
       Navigator.of(context).push(
         MaterialPageRoute(
-          builder: (_) => AlbumDetailPage(
-            albumId: song.albumId!,
-            albumName: song.album,
-          ),
+          builder: (_) => AlbumDetailPage(album: albumObj),
         ),
       );
     }
@@ -286,163 +301,91 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
   }
 
   void _showQueueDrawer(BuildContext context) {
-    final playerProvider = context.read<PlayerProvider>();
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (sheetContext) {
-        return DraggableScrollableSheet(
-          initialChildSize: 0.65,
-          minChildSize: 0.3,
-          maxChildSize: 0.9,
-          builder: (context, scrollController) {
-            final colorScheme = Theme.of(context).colorScheme;
-            return Container(
-              decoration: BoxDecoration(
-                color: colorScheme.surfaceContainerHigh,
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+        final colorScheme = Theme.of(sheetContext).colorScheme;
+        final screenHeight = MediaQuery.of(sheetContext).size.height;
+        return Container(
+          height: screenHeight * 0.72,
+          decoration: BoxDecoration(
+            color: colorScheme.surfaceContainerHigh,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          child: Column(
+            children: [
+              Center(
+                child: Container(
+                  margin: const EdgeInsets.only(top: 10, bottom: 6),
+                  width: 36,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: colorScheme.onSurfaceVariant.withValues(alpha: 0.4),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
               ),
-              child: Column(
-                children: [
-                  Center(
-                    child: Container(
-                      margin: const EdgeInsets.only(top: 10, bottom: 6),
-                      width: 36,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: colorScheme.onSurfaceVariant.withValues(alpha: 0.4),
-                        borderRadius: BorderRadius.circular(2),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Row(
+                  children: [
+                    Consumer<PlayerProvider>(
+                      builder: (context, player, _) => Expanded(
+                        child: Text(
+                          '播放的音乐来自 · 播放队列',
+                          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                fontWeight: FontWeight.bold,
+                              ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
                     ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            '播放的音乐来自 · ${playerProvider.playlistName ?? "播放队列"}',
-                            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        InkWell(
-                          onTap: () {
-                            final currentSong = playerProvider.currentSong;
-                            if (currentSong != null) {
-                              showAddToPlaylistDialog(context, currentSong);
-                            }
-                          },
-                          borderRadius: BorderRadius.circular(16),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                            decoration: BoxDecoration(
-                              color: colorScheme.surfaceContainerHighest,
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(Icons.playlist_add, size: 16, color: colorScheme.primary),
-                                const SizedBox(width: 4),
-                                Text(
-                                  '保存',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600,
-                                    color: colorScheme.primary,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const Divider(height: 1),
-                  Expanded(
-                    child: Consumer<PlayerProvider>(
-                      builder: (context, player, _) {
-                        final playlist = player.playlist;
-                        final currentSong = player.currentSong;
-                        return ReorderableListView.builder(
-                          scrollController: scrollController,
-                          itemCount: playlist.length,
-                          onReorder: (oldIndex, newIndex) {
-                            player.reorderPlaylist(oldIndex, newIndex);
-                          },
-                          itemBuilder: (context, index) {
-                            final item = playlist[index];
-                            final isCurrent = currentSong?.id == item.id;
-                            final durationText = formatDuration(item.duration);
-                            final subtitleText = '${item.artist} · $durationText';
-
-                            return ListTile(
-                              key: ValueKey(item.id),
-                              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                              leading: ClipRRect(
-                                borderRadius: BorderRadius.circular(6),
-                                child: SizedBox(
-                                  width: 44,
-                                  height: 44,
-                                  child: SmartArtworkImage(
-                                    artworkUri: item.artworkUri,
-                                  ),
-                                ),
-                              ),
-                              title: Row(
-                                children: [
-                                  if (isCurrent) ...[
-                                    PlayingSpectrumIndicator(
-                                      size: 14,
-                                      color: colorScheme.primary,
-                                    ),
-                                    const SizedBox(width: 6),
-                                  ],
-                                  Expanded(
-                                    child: Text(
-                                      item.title,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
-                                        color: isCurrent ? colorScheme.primary : colorScheme.onSurface,
-                                        fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              subtitle: Text(
-                                subtitleText,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  color: colorScheme.onSurfaceVariant,
-                                  fontSize: 12,
-                                ),
-                              ),
-                              trailing: Icon(
-                                Icons.drag_handle,
-                                color: colorScheme.onSurfaceVariant,
-                              ),
-                              onTap: () {
-                                player.playSongAtIndex(index);
-                              },
-                            );
-                          },
-                        );
+                    InkWell(
+                      onTap: () {
+                        final currentSong = context.read<PlayerProvider>().currentSong;
+                        if (currentSong != null) {
+                          showAddToPlaylistDialog(context, currentSong);
+                        }
                       },
+                      borderRadius: BorderRadius.circular(16),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: colorScheme.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.playlist_add, size: 16, color: colorScheme.primary),
+                            const SizedBox(width: 4),
+                            Text(
+                              '保存',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: colorScheme.primary,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            );
-          },
+              const Divider(height: 1),
+              Expanded(
+                child: PlayerPlaylistView(
+                  scrollAnchor: _playlistScrollAnchor,
+                  useAmColors: false,
+                ),
+              ),
+            ],
+          ),
         );
       },
     );
@@ -718,7 +661,11 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                               GestureDetector(
                                 onTap: () {
                                   AppHaptics.click(HapticCategory.transport);
-                                  playerProvider.togglePlay();
+                                  if (playerProvider.isPlaying) {
+                                    playerProvider.pause();
+                                  } else {
+                                    playerProvider.play();
+                                  }
                                 },
                                 child: Container(
                                   width: 64,
@@ -774,9 +721,9 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                                   ),
                                 ),
                                 const SizedBox(height: 6),
-                                Text(
-                                  '播放的音乐来自 / ${playerProvider.playlistName ?? "当前歌单"}',
-                                  style: const TextStyle(
+                                const Text(
+                                  '播放的音乐来自 / 播放队列',
+                                  style: TextStyle(
                                     fontSize: 12,
                                     color: Colors.white70,
                                     fontWeight: FontWeight.w500,
