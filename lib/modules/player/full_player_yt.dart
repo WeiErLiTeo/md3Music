@@ -6,20 +6,21 @@ import 'package:provider/provider.dart';
 
 import '../../core/utils/app_haptics.dart';
 import '../../core/utils/audio_format_utils.dart';
+import '../../core/utils/local_lyric_loader.dart';
 import '../../data/models/album.dart';
 import '../../data/models/song.dart';
 import '../../providers/favorites_provider.dart';
+import '../../providers/kugou_provider.dart';
 import '../../providers/local_favorites_provider.dart';
 import '../../providers/player_provider.dart';
-import '../../providers/theme_provider.dart';
 import '../../widgets/add_to_playlist_dialog.dart';
+import '../../widgets/apple_lyrics/models/lyric_line.dart';
 import '../../widgets/apple_lyrics/parsers/lyric_parser_chain.dart';
-import '../../widgets/playing_spectrum_indicator.dart';
 import '../../widgets/player_playlist_view.dart';
 import '../../widgets/player_seek_bar.dart';
 import '../../widgets/smart_artwork_image.dart';
-import '../artist/artist_detail_page.dart';
 import '../album/album_detail_page.dart';
+import '../artist/artist_detail_page.dart';
 import '../settings/equalizer_settings_page.dart';
 import 'full_player_route.dart';
 import 'lyrics_view.dart';
@@ -246,13 +247,9 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                     if (song == null) {
                       return const Center(child: Text('暂无播放曲目'));
                     }
-                    final parsed = LyricParserChain.parse('');
-                    return LyricsView(
-                      lyrics: '',
-                      parsedLyrics: parsed,
-                      position: Duration.zero,
-                      positionListenable: player.positionNotifier,
-                      onSeek: (pos) => player.seek(pos),
+                    return _YtLyricsModalBody(
+                      song: song,
+                      playerProvider: player,
                     );
                   },
                 ),
@@ -673,7 +670,7 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                                   if (playerProvider.isPlaying) {
                                     playerProvider.pause();
                                   } else {
-                                    playerProvider.play();
+                                    playerProvider.resume();
                                   }
                                 },
                                 child: Container(
@@ -764,6 +761,78 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
           },
         ),
       ),
+    );
+  }
+}
+
+class _YtLyricsModalBody extends StatefulWidget {
+  final dynamic song;
+  final PlayerProvider playerProvider;
+
+  const _YtLyricsModalBody({required this.song, required this.playerProvider});
+
+  @override
+  State<_YtLyricsModalBody> createState() => _YtLyricsModalBodyState();
+}
+
+class _YtLyricsModalBodyState extends State<_YtLyricsModalBody> {
+  bool _isLoading = true;
+  String _lyrics = '';
+  List<LyricLine> _parsedLyrics = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadLyrics();
+  }
+
+  Future<void> _loadLyrics() async {
+    final song = widget.song;
+    String text = '';
+
+    try {
+      if (song is Song && !song.isOnline && song.localPath != null) {
+        final embedded = await LocalLyricLoader.loadForAudioAsync(
+          song.localPath!,
+        );
+        if (embedded != null && embedded.isNotEmpty) {
+          text = embedded;
+        }
+      }
+      if (text.isEmpty && song is Song) {
+        final kugou = context.read<KugouProvider>();
+        final searchName = (song.artist != '未知艺术家')
+            ? '${song.title} ${song.artist}'
+            : song.title;
+        final res = await kugou.getLyric(song.id, songName: searchName);
+        text =
+            res?.displayKrcLyric ??
+            res?.displayLrcLyric ??
+            res?.displayLyric ??
+            '';
+      }
+    } catch (_) {}
+
+    if (mounted) {
+      setState(() {
+        _isLoading = false;
+        _lyrics = text;
+        _parsedLyrics = LyricParserChain.parse(text);
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    return LyricsView(
+      lyrics: _lyrics,
+      parsedLyrics: _parsedLyrics,
+      position: Duration.zero,
+      positionListenable: widget.playerProvider.positionNotifier,
+      onSeek: (pos) => widget.playerProvider.seek(pos),
     );
   }
 }
