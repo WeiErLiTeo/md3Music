@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:just_audio/just_audio.dart';
 import 'package:m3e_core/m3e_core.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
@@ -18,6 +19,7 @@ import '../../widgets/player_playlist_view.dart';
 import '../../widgets/player_seek_bar.dart';
 import '../../widgets/smart_artwork_image.dart';
 import '../artist/artist_detail_page.dart';
+import '../album/album_detail_page.dart';
 import '../settings/equalizer_settings_page.dart';
 import 'full_player_route.dart';
 import 'lyrics_view.dart';
@@ -28,10 +30,7 @@ import 'speed_picker_sheet.dart';
 
 /// YouTube Music 风格的播放页界面
 class FullPlayerYt extends StatefulWidget {
-  const FullPlayerYt({
-    super.key,
-    this.dockMode = false,
-  });
+  const FullPlayerYt({super.key, this.dockMode = false});
 
   /// 车机模式常驻面板模式
   final bool dockMode;
@@ -41,9 +40,6 @@ class FullPlayerYt extends StatefulWidget {
 }
 
 class _FullPlayerYtState extends State<FullPlayerYt> {
-  String _lyrics = '';
-  String? _lastSongId;
-  bool _isLoadingLyrics = false;
   final PlaylistScrollAnchor _playlistScrollAnchor = PlaylistScrollAnchor();
 
   @override
@@ -63,33 +59,6 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
       route.collapse();
     } else {
       Navigator.of(context).maybePop();
-    }
-  }
-
-  Future<void> _fetchLyricsIfNeeded(dynamic song) async {
-    if (song == null || song.id == _lastSongId) return;
-    _lastSongId = song.id as String;
-    setState(() {
-      _isLoadingLyrics = true;
-      _lyrics = '';
-    });
-
-    try {
-      final playerProvider = context.read<PlayerProvider>();
-      final lyricData = await playerProvider.fetchLyricsForSong(song);
-      if (mounted && song.id == _lastSongId) {
-        setState(() {
-          _isLoadingLyrics = false;
-          _lyrics = lyricData ?? '';
-        });
-      }
-    } catch (_) {
-      if (mounted && song.id == _lastSongId) {
-        setState(() {
-          _isLoadingLyrics = false;
-          _lyrics = '';
-        });
-      }
     }
   }
 
@@ -172,7 +141,12 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                   title: const Text('播放速度'),
                   onTap: () {
                     Navigator.pop(sheetContext);
-                    showSpeedPickerDialog(context: rootContext);
+                    final player = context.read<PlayerProvider>();
+                    showSpeedPickerDialog(
+                      context: rootContext,
+                      currentSpeed: player.speed,
+                      onSelected: (speed) => player.setSpeed(speed),
+                    );
                   },
                 ),
                 ListTile(
@@ -189,9 +163,7 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                   onTap: () {
                     Navigator.pop(sheetContext);
                     Navigator.of(rootContext).push(
-                      MaterialPageRoute(
-                        builder: (_) => SongInfoPage(song: song),
-                      ),
+                      MaterialPageRoute(builder: (_) => const SongInfoPage()),
                     );
                   },
                 ),
@@ -209,12 +181,10 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
         id: song.albumId ?? '',
         name: song.album,
         artist: song.artist,
-        picUrl: song.artworkUri,
+        artworkUri: song.artworkUri,
       );
       Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => AlbumDetailPage(album: albumObj),
-        ),
+        MaterialPageRoute(builder: (_) => AlbumDetailPage(album: albumObj)),
       );
     }
   }
@@ -233,9 +203,6 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
   }
 
   void _showLyricsModalSheet(BuildContext context) {
-    final song = context.read<PlayerProvider>().currentSong;
-    _fetchLyricsIfNeeded(song);
-
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -252,14 +219,16 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
           child: Column(
             children: [
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 12,
+                ),
                 child: Row(
                   children: [
                     Text(
                       '歌词',
-                      style: Theme.of(sheetContext).textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.bold,
-                          ),
+                      style: Theme.of(sheetContext).textTheme.titleMedium
+                          ?.copyWith(fontWeight: FontWeight.bold),
                     ),
                     const Spacer(),
                     IconButton(
@@ -277,14 +246,9 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                     if (song == null) {
                       return const Center(child: Text('暂无播放曲目'));
                     }
-                    if (_isLoadingLyrics) {
-                      return const Center(
-                        child: CircularProgressIndicator(),
-                      );
-                    }
-                    final parsed = LyricParserChain.parse(_lyrics);
+                    final parsed = LyricParserChain.parse('');
                     return LyricsView(
-                      lyrics: _lyrics,
+                      lyrics: '',
                       parsedLyrics: parsed,
                       position: Duration.zero,
                       positionListenable: player.positionNotifier,
@@ -328,31 +292,36 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                 ),
               ),
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 8,
+                ),
                 child: Row(
                   children: [
-                    Consumer<PlayerProvider>(
-                      builder: (context, player, _) => Expanded(
-                        child: Text(
-                          '播放的音乐来自 · 播放队列',
-                          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                                fontWeight: FontWeight.bold,
-                              ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
+                    Expanded(
+                      child: Text(
+                        '播放的音乐来自 · 播放队列',
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(fontWeight: FontWeight.bold),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
                     InkWell(
                       onTap: () {
-                        final currentSong = context.read<PlayerProvider>().currentSong;
+                        final currentSong = context
+                            .read<PlayerProvider>()
+                            .currentSong;
                         if (currentSong != null) {
                           showAddToPlaylistDialog(context, currentSong);
                         }
                       },
                       borderRadius: BorderRadius.circular(16),
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
                         decoration: BoxDecoration(
                           color: colorScheme.surfaceContainerHighest,
                           borderRadius: BorderRadius.circular(16),
@@ -360,7 +329,11 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Icon(Icons.playlist_add, size: 16, color: colorScheme.primary),
+                            Icon(
+                              Icons.playlist_add,
+                              size: 16,
+                              color: colorScheme.primary,
+                            ),
                             const SizedBox(width: 4),
                             Text(
                               '保存',
@@ -474,11 +447,7 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
               backgroundColor: Colors.black,
               body: Stack(
                 children: [
-                  Positioned.fill(
-                    child: Container(
-                      color: colorScheme.surface,
-                    ),
-                  ),
+                  Positioned.fill(child: Container(color: colorScheme.surface)),
                   Positioned.fill(
                     child: Container(
                       color: Colors.black.withValues(alpha: 0.35),
@@ -488,16 +457,27 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                     child: Column(
                       children: [
                         Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 8,
+                          ),
                           child: Row(
                             children: [
                               IconButton(
-                                icon: const Icon(Icons.expand_more, size: 28, color: Colors.white),
+                                icon: const Icon(
+                                  Icons.expand_more,
+                                  size: 28,
+                                  color: Colors.white,
+                                ),
                                 onPressed: _collapseByButton,
                               ),
                               const Spacer(),
                               IconButton(
-                                icon: const Icon(Icons.more_vert, size: 24, color: Colors.white),
+                                icon: const Icon(
+                                  Icons.more_vert,
+                                  size: 24,
+                                  color: Colors.white,
+                                ),
                                 onPressed: () => _showMoreMenu(context),
                               ),
                             ],
@@ -514,7 +494,9 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                                     borderRadius: BorderRadius.circular(16),
                                     boxShadow: [
                                       BoxShadow(
-                                        color: Colors.black.withValues(alpha: 0.4),
+                                        color: Colors.black.withValues(
+                                          alpha: 0.4,
+                                        ),
                                         blurRadius: 16,
                                         offset: const Offset(0, 8),
                                       ),
@@ -532,7 +514,10 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                           ),
                         ),
                         Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 8.0),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 24.0,
+                            vertical: 8.0,
+                          ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
@@ -552,7 +537,10 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                                   ),
                                   if (song.album.isNotEmpty)
                                     IconButton(
-                                      icon: const Icon(Icons.chevron_right, color: Colors.white70),
+                                      icon: const Icon(
+                                        Icons.chevron_right,
+                                        color: Colors.white70,
+                                      ),
                                       onPressed: () => _navigateToAlbum(song),
                                     ),
                                 ],
@@ -581,14 +569,22 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                             child: Row(
                               children: [
                                 _buildCapsuleButton(
-                                  icon: isFavorited ? Icons.favorite : Icons.favorite_border,
-                                  iconColor: isFavorited ? Colors.redAccent : Colors.white,
+                                  icon: isFavorited
+                                      ? Icons.favorite
+                                      : Icons.favorite_border,
+                                  iconColor: isFavorited
+                                      ? Colors.redAccent
+                                      : Colors.white,
                                   label: '收藏',
                                   onTap: () {
                                     if (isOnline) {
-                                      context.read<FavoritesProvider>().toggleFavorite(song);
+                                      context
+                                          .read<FavoritesProvider>()
+                                          .toggleFavorite(song);
                                     } else {
-                                      context.read<LocalFavoritesProvider>().toggleFavorite(song.id);
+                                      context
+                                          .read<LocalFavoritesProvider>()
+                                          .toggleFavorite(song.id);
                                     }
                                   },
                                 ),
@@ -602,7 +598,8 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                                 _buildCapsuleButton(
                                   icon: Icons.playlist_add,
                                   label: '保存',
-                                  onTap: () => showAddToPlaylistDialog(context, song),
+                                  onTap: () =>
+                                      showAddToPlaylistDialog(context, song),
                                 ),
                                 const SizedBox(width: 8),
                                 _buildCapsuleButton(
@@ -611,7 +608,8 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                                   onTap: () {
                                     Navigator.of(context).push(
                                       MaterialPageRoute(
-                                        builder: (_) => const EqualizerSettingsPage(),
+                                        builder: (_) =>
+                                            const EqualizerSettingsPage(),
                                       ),
                                     );
                                   },
@@ -636,7 +634,10 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                         ),
                         const SizedBox(height: 12),
                         Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 8.0),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 24.0,
+                            vertical: 8.0,
+                          ),
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                             children: [
@@ -645,14 +646,22 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                                   playerProvider.shuffleEnabled,
                                   playerProvider.loopMode,
                                 ),
-                                color: playerProvider.shuffleEnabled ? colorScheme.primary : Colors.white70,
+                                color: playerProvider.shuffleEnabled
+                                    ? colorScheme.primary
+                                    : Colors.white70,
                                 onPressed: () {
-                                  AppHaptics.lightImpact(HapticCategory.transport);
+                                  AppHaptics.lightImpact(
+                                    HapticCategory.transport,
+                                  );
                                   playerProvider.toggleShuffle();
                                 },
                               ),
                               IconButton(
-                                icon: const Icon(Icons.skip_previous, size: 36, color: Colors.white),
+                                icon: const Icon(
+                                  Icons.skip_previous,
+                                  size: 36,
+                                  color: Colors.white,
+                                ),
                                 onPressed: () {
                                   AppHaptics.click(HapticCategory.transport);
                                   playerProvider.previous();
@@ -675,14 +684,20 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                                     shape: BoxShape.circle,
                                   ),
                                   child: Icon(
-                                    playerProvider.isPlaying ? Icons.pause : Icons.play_arrow,
+                                    playerProvider.isPlaying
+                                        ? Icons.pause
+                                        : Icons.play_arrow,
                                     size: 38,
                                     color: Colors.black,
                                   ),
                                 ),
                               ),
                               IconButton(
-                                icon: const Icon(Icons.skip_next, size: 36, color: Colors.white),
+                                icon: const Icon(
+                                  Icons.skip_next,
+                                  size: 36,
+                                  color: Colors.white,
+                                ),
                                 onPressed: () {
                                   AppHaptics.click(HapticCategory.transport);
                                   playerProvider.next();
@@ -695,9 +710,13 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                                       : Icons.repeat,
                                   size: 24,
                                 ),
-                                color: playerProvider.loopMode != LoopMode.off ? colorScheme.primary : Colors.white70,
+                                color: playerProvider.loopMode != LoopMode.off
+                                    ? colorScheme.primary
+                                    : Colors.white70,
                                 onPressed: () {
-                                  AppHaptics.lightImpact(HapticCategory.transport);
+                                  AppHaptics.lightImpact(
+                                    HapticCategory.transport,
+                                  );
                                   playerProvider.toggleLoopMode();
                                 },
                               ),
@@ -708,7 +727,10 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                         GestureDetector(
                           onTap: () => _showQueueDrawer(context),
                           child: Container(
-                            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+                            padding: const EdgeInsets.symmetric(
+                              vertical: 12,
+                              horizontal: 16,
+                            ),
                             color: Colors.transparent,
                             child: Column(
                               children: [
