@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -13,17 +14,23 @@ import '../../providers/kugou_provider.dart';
 import '../../providers/local_favorites_provider.dart';
 import '../../providers/player_provider.dart';
 import '../../widgets/add_to_playlist_dialog.dart';
+import '../../widgets/apple_lyrics/apple_lyrics_view.dart';
 import '../../widgets/apple_lyrics/models/lyric_line.dart';
 import '../../widgets/apple_lyrics/parsers/lyric_parser_chain.dart';
+import '../../widgets/flowing_background.dart';
+import '../../widgets/marquee_text.dart';
+import '../../widgets/player_artwork_image.dart';
 import '../../widgets/player_playlist_view.dart';
 import '../../widgets/player_seek_bar.dart';
 import '../../widgets/smart_artwork_image.dart';
+import '../../widgets/ai_recommend_sheet.dart';
 import '../album/album_detail_page.dart';
 import '../artist/artist_detail_page.dart';
-import '../../widgets/apple_lyrics/apple_lyrics_view.dart';
 import '../settings/equalizer_settings_page.dart';
 import 'full_player_route.dart';
 import 'mv_player_page.dart';
+import 'player_cover_morph.dart';
+import 'player_page_role.dart';
 import 'sleep_timer_sheet.dart';
 import 'song_info_page.dart';
 import 'speed_picker_sheet.dart';
@@ -39,8 +46,19 @@ class FullPlayerYt extends StatefulWidget {
   State<FullPlayerYt> createState() => _FullPlayerYtState();
 }
 
-class _FullPlayerYtState extends State<FullPlayerYt> {
+class _FullPlayerYtState extends State<FullPlayerYt>
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   final PlaylistScrollAnchor _playlistScrollAnchor = PlaylistScrollAnchor();
+  bool _wasPlayingBeforeDrag = false;
+  bool _isDismissing = false;
+
+  // 顶栏向下拖拽收起状态
+  DraggablePlayerRoute? _topBarDragRoute;
+  double _topBarDragDistance = 0.0;
+  double _topBarDragTotal = 0.0;
+  double? _topBarDragLastY;
+  Duration? _topBarDragLastTime;
+  double _topBarDragVelocity = 0.0;
 
   @override
   void dispose() {
@@ -54,11 +72,81 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
   }
 
   void _collapseByButton() {
-    final route = _dragRoute;
-    if (route != null) {
-      route.collapse();
+    if (widget.dockMode) return;
+    final route = ModalRoute.of(context);
+    if (route is DraggablePlayerRoute) {
+      _isDismissing = true;
+      route.dismiss();
     } else {
       Navigator.of(context).maybePop();
+    }
+  }
+
+  void _onTopBarDragStart(DragStartDetails details) {
+    final route = ModalRoute.of(context);
+    if (route is! DraggablePlayerRoute) return;
+    _topBarDragRoute = route;
+    route.beginDrag();
+    route.controller.value = 1.0;
+    final total = route.dragOriginTop ?? playerDragOriginTop;
+    _topBarDragTotal = total > 0 ? total : MediaQuery.sizeOf(context).height;
+    route.topBarDragging = true;
+    route.topBarDragTotal = _topBarDragTotal;
+    _topBarDragDistance = 0.0;
+    _topBarDragLastY = details.globalPosition.dy;
+    _topBarDragLastTime = null;
+    _topBarDragVelocity = 0.0;
+  }
+
+  void _onTopBarDragUpdate(DragUpdateDetails details) {
+    final route = _topBarDragRoute;
+    if (route == null) return;
+    _topBarDragDistance = (_topBarDragDistance + details.delta.dy).clamp(
+      0.0,
+      double.infinity,
+    );
+    final ts = details.sourceTimeStamp;
+    if (ts != null && _topBarDragLastTime != null && _topBarDragLastY != null) {
+      final dt = (ts - _topBarDragLastTime!).inMicroseconds / 1e6;
+      if (dt > 0) {
+        _topBarDragVelocity = (details.globalPosition.dy - _topBarDragLastY!) / dt;
+      }
+    }
+    _topBarDragLastY = details.globalPosition.dy;
+    _topBarDragLastTime = ts;
+    final total = _topBarDragTotal;
+    if (total <= 0) return;
+    final progress = (1.0 - _topBarDragDistance / total).clamp(0.0, 1.0);
+    route.controller.stop();
+    route.controller.value = progress;
+  }
+
+  void _onTopBarDragEnd(DragEndDetails details) {
+    final route = _topBarDragRoute;
+    _topBarDragRoute = null;
+    if (route == null) return;
+    route.topBarDragging = false;
+    final threshold = MediaQuery.sizeOf(context).height * kPlayerExpandDistanceRatio;
+    final downVelocity = details.primaryVelocity ?? _topBarDragVelocity;
+    final collapse = downVelocity >= -kPlayerPullBackVelocityThreshold &&
+        (_topBarDragDistance >= threshold || downVelocity > kPlayerFlingVelocityThreshold);
+    if (collapse) {
+      AppHaptics.lightImpact(HapticCategory.gesture);
+      route.dismiss();
+    } else {
+      route.settleToFull();
+    }
+  }
+
+  void _onTopBarDragCancel() {
+    final route = _topBarDragRoute;
+    _topBarDragRoute = null;
+    if (route == null) return;
+    route.topBarDragging = false;
+    if (route.controller.value < 1.0) {
+      route.settleToFull();
+    } else {
+      route.topBarDragTotal = null;
     }
   }
 
@@ -316,11 +404,11 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
     );
   }
 
-
   Widget _buildCapsuleButton({
     required IconData icon,
     required String label,
     required VoidCallback onTap,
+    VoidCallback? onLongPress,
     Color iconColor = Colors.white,
   }) {
     return InkWell(
@@ -328,6 +416,7 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
         AppHaptics.lightImpact(HapticCategory.control);
         onTap();
       },
+      onLongPress: onLongPress,
       borderRadius: BorderRadius.circular(20),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -361,7 +450,7 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
       child: PopScope(
         canPop: false,
         onPopInvokedWithResult: (didPop, _) {
-          if (didPop) return;
+          if (didPop || _isDismissing) return;
           if (widget.dockMode) return;
           _collapseByButton();
         },
@@ -387,7 +476,12 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
               backgroundColor: Colors.black,
               body: Stack(
                 children: [
-                  const Positioned.fill(child: AppBackground()),
+                  Positioned.fill(
+                    child: FlowingBackground(
+                      artworkUrl: song.artworkUri,
+                      isPlaying: playerProvider.isPlaying,
+                    ),
+                  ),
                   Positioned.fill(
                     child: Container(
                       color: Colors.black.withValues(alpha: 0.45),
@@ -396,31 +490,38 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                   SafeArea(
                     child: Column(
                       children: [
-                        Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 8,
-                          ),
-                          child: Row(
-                            children: [
-                              IconButton(
-                                icon: const Icon(
-                                  Icons.expand_more,
-                                  size: 28,
-                                  color: Colors.white,
+                        GestureDetector(
+                          behavior: HitTestBehavior.translucent,
+                          onVerticalDragStart: widget.dockMode ? null : _onTopBarDragStart,
+                          onVerticalDragUpdate: widget.dockMode ? null : _onTopBarDragUpdate,
+                          onVerticalDragEnd: widget.dockMode ? null : _onTopBarDragEnd,
+                          onVerticalDragCancel: widget.dockMode ? null : _onTopBarDragCancel,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 8,
+                            ),
+                            child: Row(
+                              children: [
+                                IconButton(
+                                  icon: const Icon(
+                                    Icons.expand_more,
+                                    size: 28,
+                                    color: Colors.white,
+                                  ),
+                                  onPressed: _collapseByButton,
                                 ),
-                                onPressed: _collapseByButton,
-                              ),
-                              const Spacer(),
-                              IconButton(
-                                icon: const Icon(
-                                  Icons.more_vert,
-                                  size: 24,
-                                  color: Colors.white,
+                                const Spacer(),
+                                IconButton(
+                                  icon: const Icon(
+                                    Icons.more_vert,
+                                    size: 24,
+                                    color: Colors.white,
+                                  ),
+                                  onPressed: () => _showMoreMenu(context),
                                 ),
-                                onPressed: () => _showMoreMenu(context),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
                         ),
                         Expanded(
@@ -442,11 +543,27 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                                       ),
                                     ],
                                   ),
-                                  child: ClipRRect(
-                                    borderRadius: BorderRadius.circular(16),
-                                    child: SmartArtworkImage(
-                                      artworkUri: song.artworkUri,
-                                      size: 320,
+                                  child: PlayerCoverSlot(
+                                    songId: song.id,
+                                    artworkUri: song.artworkUri,
+                                    fallbackFilePath: song.localPath,
+                                    iconSize: 64,
+                                    placeholderColor: Colors.black26,
+                                    shadowColor: Colors.black45,
+                                    eligible: () => !widget.dockMode,
+                                    settledScale: playerProvider.isPlaying ? 1.0 : 0.85,
+                                    settledAnchor: Alignment.center,
+                                    child: AnimatedScale(
+                                      scale: playerProvider.isPlaying ? 1.0 : 0.85,
+                                      duration: const Duration(milliseconds: 500),
+                                      curve: Curves.easeOutBack,
+                                      child: ClipRRect(
+                                        borderRadius: BorderRadius.circular(16),
+                                        child: SmartArtworkImage(
+                                          artworkUri: song.artworkUri,
+                                          size: 320,
+                                        ),
+                                      ),
                                     ),
                                   ),
                                 ),
@@ -465,14 +582,19 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                               Row(
                                 children: [
                                   Expanded(
-                                    child: Text(
-                                      song.displayName,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                        fontSize: 22,
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.white,
+                                    child: PlayerTitleSlot(
+                                      title: song.displayName,
+                                      subtitle: song.artist,
+                                      align: Alignment.centerLeft,
+                                      eligible: () => !widget.dockMode,
+                                      child: GentleScrollingText(
+                                        song.displayName,
+                                        textAlign: TextAlign.left,
+                                        style: const TextStyle(
+                                          fontSize: 22,
+                                          fontWeight: FontWeight.bold,
+                                          color: Colors.white,
+                                        ),
                                       ),
                                     ),
                                   ),
@@ -528,6 +650,9 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                                           .toggleFavorite(song.id);
                                     }
                                   },
+                                  onLongPress: isOnline
+                                      ? () => showAiRecommendSheet(context, song)
+                                      : null,
                                 ),
                                 const SizedBox(width: 10),
                                 _buildCapsuleButton(
@@ -563,15 +688,32 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                         const SizedBox(height: 16),
                         Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 20.0),
-                          child: PlayerSeekBar(
-                            position: playerProvider.position,
-                            duration: playerProvider.duration ?? Duration.zero,
-                            activeColor: Colors.white,
-                            inactiveColor: Colors.white24,
-                            labelColor: Colors.white70,
-                            onSeekEnd: (pos) {
-                              playerProvider.seek(pos);
-                            },
+                          child: ListenableBuilder(
+                            listenable: Listenable.merge([
+                              playerProvider.positionNotifier,
+                              playerProvider,
+                            ]),
+                            builder: (context, _) => PlayerSeekBar(
+                              position: playerProvider.position,
+                              duration: playerProvider.duration ?? Duration.zero,
+                              isPlaying: playerProvider.isPlaying,
+                              activeColor: Colors.white,
+                              inactiveColor: Colors.white24,
+                              labelColor: Colors.white70,
+                              onSeekStart: () {
+                                _wasPlayingBeforeDrag = playerProvider.isPlaying;
+                                if (_wasPlayingBeforeDrag) {
+                                  playerProvider.pauseForSeek();
+                                }
+                              },
+                              onSeekEnd: (pos) async {
+                                AppHaptics.tick(HapticCategory.transport);
+                                await playerProvider.seek(pos, forceNotify: true);
+                                if (_wasPlayingBeforeDrag) {
+                                  playerProvider.resume();
+                                }
+                              },
+                            ),
                           ),
                         ),
                         const SizedBox(height: 12),
@@ -823,7 +965,6 @@ class _YtLyricsSheetState extends State<_YtLyricsSheet> {
         children: [
           Column(
             children: [
-              // 顶部 Mini 控制条
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
                 child: Row(
@@ -899,20 +1040,21 @@ class _YtLyricsSheetState extends State<_YtLyricsSheet> {
                 ),
               ),
               const Divider(height: 1, color: Colors.white12),
-              // 中间 Apple 风格歌词主体
               Expanded(
-                child: AppleLyricsView(
-                  lyrics: _parsedLines,
-                  position: player.position,
-                  positionNotifier: player.positionNotifier,
-                  onSeek: (pos) => player.seek(pos),
-                  isPlaying: player.isPlaying,
-                  isLoading: _loading,
-                ),
+                child: _loading
+                    ? const Center(child: CircularProgressIndicator(color: Colors.white))
+                    : AppleLyricsView(
+                        lines: _parsedLines,
+                        currentTimeMs: 0,
+                        positionListenable: player.positionNotifier,
+                        isPlaying: player.isPlaying,
+                        playbackNotReady: player.isPlaybackNotReady,
+                        forceDarkBackground: true,
+                        onSeek: (ms) => player.seek(Duration(milliseconds: ms)),
+                      ),
               ),
             ],
           ),
-          // 底部悬浮“文A 翻译”药丸按钮
           Consumer<KugouProvider>(
             builder: (context, kugou, _) {
               return Positioned(

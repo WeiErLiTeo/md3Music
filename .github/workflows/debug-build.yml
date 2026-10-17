@@ -172,7 +172,6 @@ jobs:
 
       - name: Flutter analyze
         id: analyze
-        continue-on-error: true
         run: |
           set -euo pipefail
           {
