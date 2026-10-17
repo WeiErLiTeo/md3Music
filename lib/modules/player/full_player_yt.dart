@@ -20,9 +20,9 @@ import '../../widgets/player_seek_bar.dart';
 import '../../widgets/smart_artwork_image.dart';
 import '../album/album_detail_page.dart';
 import '../artist/artist_detail_page.dart';
+import '../../widgets/apple_lyrics/apple_lyrics_view.dart';
 import '../settings/equalizer_settings_page.dart';
 import 'full_player_route.dart';
-import 'lyrics_view.dart';
 import 'mv_player_page.dart';
 import 'sleep_timer_sheet.dart';
 import 'song_info_page.dart';
@@ -316,18 +316,6 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
     );
   }
 
-  Widget _buildPlayModeIcon(bool shuffleEnabled, AppLoopMode loopMode) {
-    if (shuffleEnabled) {
-      return const Icon(Icons.shuffle, size: 22);
-    }
-    switch (loopMode) {
-      case AppLoopMode.one:
-        return const Icon(Icons.repeat_one, size: 22);
-      case AppLoopMode.all:
-      case AppLoopMode.off:
-        return const Icon(Icons.repeat, size: 22);
-    }
-  }
 
   Widget _buildCapsuleButton({
     required IconData icon,
@@ -596,10 +584,7 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                             children: [
                               IconButton(
-                                icon: _buildPlayModeIcon(
-                                  playerProvider.shuffleEnabled,
-                                  playerProvider.loopMode,
-                                ),
+                                icon: const Icon(Icons.shuffle, size: 22),
                                 color: playerProvider.shuffleEnabled
                                     ? colorScheme.primary
                                     : Colors.white70,
@@ -733,31 +718,24 @@ class _YtLyricsSheet extends StatefulWidget {
 
 class _YtLyricsSheetState extends State<_YtLyricsSheet> {
   bool _loading = true;
-  String _rawLyrics = '';
   List<LyricLine> _parsedLines = const [];
+  String? _loadedSongId;
 
   @override
   void initState() {
     super.initState();
-    _loadLyrics();
+    _loadLyricsFor(widget.song);
   }
 
-  @override
-  void didUpdateWidget(covariant _YtLyricsSheet oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.song.id != widget.song.id) {
-      _loadLyrics();
-    }
-  }
+  Future<void> _loadLyricsFor(Song song) async {
+    if (_loadedSongId == song.id) return;
+    _loadedSongId = song.id;
 
-  Future<void> _loadLyrics() async {
     setState(() {
       _loading = true;
-      _rawLyrics = '';
       _parsedLines = const [];
     });
 
-    final song = widget.song;
     String lyricText = '';
     String? translationText;
     String? romaText;
@@ -801,7 +779,7 @@ class _YtLyricsSheetState extends State<_YtLyricsSheet> {
       } catch (_) {}
     }
 
-    if (!mounted) return;
+    if (!mounted || _loadedSongId != song.id) return;
 
     if (lyricText.isNotEmpty) {
       final parsed = LyricParserChain.parse(
@@ -811,7 +789,6 @@ class _YtLyricsSheetState extends State<_YtLyricsSheet> {
       );
       setState(() {
         _loading = false;
-        _rawLyrics = lyricText;
         _parsedLines = parsed;
       });
     } else {
@@ -823,53 +800,178 @@ class _YtLyricsSheetState extends State<_YtLyricsSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
+    final player = context.watch<PlayerProvider>();
+    final currentSong = player.currentSong ?? widget.song;
+
+    if (_loadedSongId != currentSong.id) {
+      _loadLyricsFor(currentSong);
+    }
+
     final screenHeight = MediaQuery.of(context).size.height;
+
     return Container(
-      height: screenHeight * 0.72,
-      decoration: BoxDecoration(
-        color: colorScheme.surfaceContainer,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+      height: screenHeight * 0.78,
+      decoration: const BoxDecoration(
+        color: Color(0xFF1E1E1E),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      child: Column(
+      child: Stack(
         children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-            child: Row(
-              children: [
-                Text(
-                  '歌词',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
+          Column(
+            children: [
+              // 顶部 Mini 控制条
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
+                child: Row(
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(6),
+                      child: SmartArtworkImage(
+                        artworkUri: currentSong.artworkUri,
+                        size: 42,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            currentSong.displayName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 15,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            currentSong.artist,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      icon: Icon(
+                        player.isPlaying
+                            ? Icons.pause_circle_filled
+                            : Icons.play_circle_fill,
+                        size: 32,
+                        color: Colors.white,
+                      ),
+                      onPressed: () {
+                        AppHaptics.click(HapticCategory.transport);
+                        if (player.isPlaying) {
+                          player.pause();
+                        } else {
+                          player.resume();
+                        }
+                      },
+                    ),
+                    IconButton(
+                      icon: const Icon(
+                        Icons.skip_next,
+                        size: 28,
+                        color: Colors.white70,
+                      ),
+                      onPressed: () {
+                        AppHaptics.click(HapticCategory.transport);
+                        player.next();
+                      },
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close, color: Colors.white70),
+                      onPressed: () => Navigator.pop(context),
+                    ),
+                  ],
+                ),
+              ),
+              const Divider(height: 1, color: Colors.white12),
+              // 中间 Apple 风格歌词主体
+              Expanded(
+                child: AppleLyricsView(
+                  lyrics: _parsedLines,
+                  position: player.position,
+                  positionNotifier: player.positionNotifier,
+                  onSeek: (pos) => player.seek(pos),
+                  isPlaying: player.isPlaying,
+                  isLoading: _loading,
+                ),
+              ),
+            ],
+          ),
+          // 底部悬浮“文A 翻译”药丸按钮
+          Consumer<KugouProvider>(
+            builder: (context, kugou, _) {
+              return Positioned(
+                bottom: 20,
+                left: 0,
+                right: 0,
+                child: Center(
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: () {
+                        AppHaptics.lightImpact(HapticCategory.control);
+                        kugou.toggleTranslation();
+                      },
+                      borderRadius: BorderRadius.circular(20),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 8,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.2),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.15),
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.3),
+                              blurRadius: 8,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.translate,
+                              size: 18,
+                              color: kugou.showTranslation
+                                  ? Colors.white
+                                  : Colors.white54,
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              kugou.showTranslation ? '隐藏翻译' : '文A 翻译',
+                              style: TextStyle(
+                                color: kugou.showTranslation
+                                    ? Colors.white
+                                    : Colors.white70,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                   ),
                 ),
-                const Spacer(),
-                IconButton(
-                  icon: const Icon(Icons.close),
-                  onPressed: () => Navigator.pop(context),
-                ),
-              ],
-            ),
-          ),
-          const Divider(height: 1),
-          Expanded(
-            child: Consumer<PlayerProvider>(
-              builder: (context, player, _) {
-                if (_loading) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-                if (_parsedLines.isEmpty) {
-                  return const Center(child: Text('暂无歌词'));
-                }
-                return LyricsView(
-                  lyrics: _rawLyrics,
-                  parsedLyrics: _parsedLines,
-                  position: player.position,
-                  positionListenable: player.positionNotifier,
-                  onSeek: (pos) => player.seek(pos),
-                );
-              },
-            ),
+              );
+            },
           ),
         ],
       ),

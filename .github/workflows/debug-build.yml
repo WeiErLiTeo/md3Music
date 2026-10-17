@@ -6,8 +6,6 @@ name: Debug Build & Test
 #   2. 手动：Actions 页面的 Run workflow 按钮。
 # 只构建 standard 版 arm64-v8a 的 release APK（AOT 编译），渲染引擎固定为 Skia（关闭 Impeller）。
 # 只上传为本次运行的 Artifact，不创建 GitHub Release，也不发布到任何商店，仅用于无线 ADB 测试。
-# APK 以原文件直接上传（不打 zip）；只要 APK 构建出来了，即使校验失败也会上传，
-# 校验失败时文件名会带「-未通过校验」，同时本次运行仍显示失败并给出错误报告。
 #
 # 报错流程：任何一步失败时，在本次运行页面的 Summary 里给出
 #   1. 出错的步骤名 + 该步骤执行的命令
@@ -260,8 +258,7 @@ jobs:
             if [[ -z "$imp_lines" ]]; then
               fail "AndroidManifest.xml 里没有 EnableImpeller 这一项，Flutter 会默认开启 Impeller。请确认 md3EnableImpeller=false 已写入清单"
             fi
-            # 不同版本的 aapt2 写法不同：新的直接写 =false，旧的写 (type 0x12)0x0，两种都认
-            if ! printf '%s\n' "$imp_lines" | grep -E '=false([^[:alnum:]]|$)|0x0([^0-9a-fA-F]|$)' > /dev/null; then
+            if ! printf '%s\n' "$imp_lines" | grep -E '0x0([^0-9a-fA-F]|$)' > /dev/null; then
               printf '%s\n' "$imp_lines"
               fail "Impeller 没有被关闭：EnableImpeller 的值不是 false（上方是清单里的实际内容）"
             fi
@@ -287,35 +284,12 @@ jobs:
             echo "APK 校验全部通过：$apk"
           } 2>&1 | tee "$LOG_DIR/verify.log"
 
-      # 校验没通过时，给 APK 文件名加上「-未通过校验」，避免把有问题的包当成正常包
-      - name: Mark APK as unverified
-        id: mark_unverified
-        if: ${{ !cancelled() && env.APK_FILE != '' && steps.verify.outcome == 'failure' }}
-        run: |
-          set -euo pipefail
-          {
-            apk_dir="build/app/outputs/flutter-apk"
-            src="${apk_dir}/${APK_FILE}"
-            dst="${apk_dir}/${APK_FILE%.apk}-未通过校验.apk"
-            if [[ ! -f "$src" ]]; then
-              echo "::error::找不到要标记的 APK：$src"
-              exit 1
-            fi
-            mv "$src" "$dst"
-            echo "APK_FILE=$(basename "$dst")" >> "$GITHUB_ENV"
-            echo "校验失败，已把文件名标记为：$(basename "$dst")"
-          } 2>&1 | tee "$LOG_DIR/mark_unverified.log"
-
-      # 只要 APK 存在（APK_FILE 非空）就上传，校验失败也上传。
-      # archive: false = 不打 zip，直接上传原文件；此时 Artifact 的名字就是文件名。
       - name: Upload APK
         id: upload
-        if: ${{ !cancelled() && env.APK_FILE != '' }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
+          name: MD3音乐-${{ env.FLAVOR_CN }}-${{ env.BUILD_TYPE }}
           path: build/app/outputs/flutter-apk/${{ env.APK_FILE }}
-          archive: false
-          overwrite: true
           if-no-files-found: error
           retention-days: 7
 
@@ -343,7 +317,7 @@ jobs:
           KEY_LINES=40
 
           # 步骤 id（按执行顺序）→ 运行页面上显示的步骤名
-          STEP_ORDER=(prep checkout java debug_key android_sdk sdk_packages flutter gradle_cache pub_get analyze build rename verify mark_unverified upload)
+          STEP_ORDER=(prep checkout java debug_key android_sdk sdk_packages flutter gradle_cache pub_get analyze build rename verify upload)
           declare -A STEP_NAME=(
             [prep]="Prepare error log directory"
             [checkout]="Checkout repository"
@@ -358,7 +332,6 @@ jobs:
             [build]="Flutter build APK"
             [rename]="Rename APK to Chinese display name"
             [verify]="Verify APK"
-            [mark_unverified]="Mark APK as unverified"
             [upload]="Upload APK"
           )
           # 只有 run 步骤有命令
@@ -370,7 +343,6 @@ jobs:
             [analyze]="flutter analyze --no-fatal-infos --no-fatal-warnings"
             [build]="flutter build apk --${BUILD_TYPE} --flavor standard --split-per-abi --target-platform android-arm64 --android-project-arg=md3ApplicationId=${APPLICATION_ID} --android-project-arg=md3EnableImpeller=false"
             [rename]="读取 pubspec.yaml 版本号并重命名 APK"
-            [mark_unverified]="给 APK 文件名加上「-未通过校验」"
             [verify]="aapt2/unzip/apksigner 校验：包名、ABI、Impeller 已关闭、3D 资产隔离、签名指纹"
           )
 
