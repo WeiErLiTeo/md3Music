@@ -1094,20 +1094,27 @@ class _YtLyricsSheetState extends State<_YtLyricsSheet> {
               const Divider(height: 1, color: Colors.white12),
               // 中间 Apple 风格歌词主体
               Expanded(
-                child: AppleLyricsView(
-                  lyrics: _parsedLines,
-                  position: player.position,
-                  positionNotifier: player.positionNotifier,
-                  onSeek: (pos) => player.seek(pos),
-                  isPlaying: player.isPlaying,
-                  isLoading: _loading,
+                child: ValueListenableBuilder<Duration>(
+                  valueListenable: player.positionNotifier,
+                  builder: (context, position, _) {
+                    return AppleLyricsView(
+                      lines: _parsedLines,
+                      currentTimeMs: position.inMilliseconds,
+                      isPlaying: player.isPlaying,
+                      playbackNotReady: false,
+                      onSeek: (timeMs) => player.seek(Duration(milliseconds: timeMs)),
+                      forceDarkBackground: true,
+                    );
+                  },
                 ),
               ),
             ],
           ),
           // 底部悬浮“文A 翻译”药丸按钮
-          Consumer<KugouProvider>(
-            builder: (context, kugou, _) {
+          ListenableBuilder(
+            listenable: LyricPreferences.instance,
+            builder: (context, _) {
+              final showTranslation = LyricPreferences.instance.showTranslation;
               return Positioned(
                 bottom: 20,
                 left: 0,
@@ -1118,7 +1125,7 @@ class _YtLyricsSheetState extends State<_YtLyricsSheet> {
                     child: InkWell(
                       onTap: () {
                         AppHaptics.lightImpact(HapticCategory.control);
-                        kugou.toggleTranslation();
+                        LyricPreferences.instance.setShowTranslation(!showTranslation);
                       },
                       borderRadius: BorderRadius.circular(20),
                       child: Container(
@@ -1146,15 +1153,15 @@ class _YtLyricsSheetState extends State<_YtLyricsSheet> {
                             Icon(
                               Icons.translate,
                               size: 18,
-                              color: kugou.showTranslation
+                              color: showTranslation
                                   ? Colors.white
                                   : Colors.white54,
                             ),
                             const SizedBox(width: 6),
                             Text(
-                              kugou.showTranslation ? '隐藏翻译' : '文A 翻译',
+                              showTranslation ? '隐藏翻译' : '文A 翻译',
                               style: TextStyle(
-                                color: kugou.showTranslation
+                                color: showTranslation
                                     ? Colors.white
                                     : Colors.white70,
                                 fontSize: 13,
