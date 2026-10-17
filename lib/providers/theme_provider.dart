@@ -354,14 +354,17 @@ class ThemeProvider extends ChangeNotifier {
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('player_style', style.name);
+    await prefs.setBool(_amStylePlayerKey, _useAmStylePlayer);
   }
 
   Future<void> setUseAmStylePlayer(bool enabled) async {
     if (_useAmStylePlayer == enabled) return;
     _useAmStylePlayer = enabled;
+    _playerStyle = enabled ? PlayerStyle.appleMusic : PlayerStyle.md3;
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_amStylePlayerKey, enabled);
+    await prefs.setString('player_style', _playerStyle.name);
   }
 
   /// 加载「歌词双击跳转」开关持久化值，默认关闭。

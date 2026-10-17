@@ -512,6 +512,7 @@ class _SettingsPageState extends State<SettingsPage>
     final useCoverSeedColor = context.read<ThemeProvider>().useCoverSeedColor;
     // 从 ThemeProvider 同步「Apple Music 风格播放页」开关状态
     final useAmStylePlayer = context.read<ThemeProvider>().useAmStylePlayer;
+    final useYtStylePlayer = context.read<ThemeProvider>().useYtStylePlayer;
     final lyricDoubleTapToJump = context
         .read<ThemeProvider>()
         .lyricDoubleTapToJump;
@@ -689,6 +690,7 @@ class _SettingsPageState extends State<SettingsPage>
       _useDynamicColor = useDynamicColor;
       _useCoverSeedColor = useCoverSeedColor;
       _useAmStylePlayer = useAmStylePlayer;
+      _useYtStylePlayer = useYtStylePlayer;
       _lyricDoubleTapToJump = lyricDoubleTapToJump;
       _useArtistPhotoBackground = useArtistPhotoBackground;
       _artistPhotoInterval = artistPhotoInterval;
@@ -5831,6 +5833,7 @@ class _SettingsPageState extends State<SettingsPage>
   // ─────────────────────────────────────────────────────────────────────
 
   Widget _buildStyleCards(ColorScheme colorScheme) {
+    final currentStyle = context.watch<ThemeProvider>().playerStyle;
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
@@ -5838,7 +5841,7 @@ class _SettingsPageState extends State<SettingsPage>
           colorScheme: colorScheme,
           title: 'MD3Music',
           subtitle: 'Material 3 风格',
-          isSelected: !_useAmStylePlayer && !_useYtStylePlayer,
+          isSelected: currentStyle == PlayerStyle.md3,
           onTap: () {
             AppHaptics.lightImpact(HapticCategory.control);
             setState(() {
@@ -5854,7 +5857,7 @@ class _SettingsPageState extends State<SettingsPage>
           colorScheme: colorScheme,
           title: 'Apple Music',
           subtitle: '模糊封面 + 逐字歌词',
-          isSelected: _useAmStylePlayer,
+          isSelected: currentStyle == PlayerStyle.appleMusic,
           onTap: () {
             AppHaptics.lightImpact(HapticCategory.control);
             setState(() {
@@ -5872,7 +5875,7 @@ class _SettingsPageState extends State<SettingsPage>
           colorScheme: colorScheme,
           title: 'YouTube Music',
           subtitle: '五键操作栏 · 胶囊按钮 · 抽屉队列',
-          isSelected: _useYtStylePlayer,
+          isSelected: currentStyle == PlayerStyle.ytMusic,
           onTap: () {
             AppHaptics.lightImpact(HapticCategory.control);
             setState(() {
@@ -6954,77 +6957,142 @@ class _SettingsYtStylePreview extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: 100,
-      decoration: BoxDecoration(
-        color: Colors.black,
-        borderRadius: BorderRadius.circular(12),
+      decoration: const BoxDecoration(
+        color: Color(0xFF0F0F0F),
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Color(0xFF262626),
+            Color(0xFF0F0F0F),
+          ],
+        ),
       ),
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       child: Column(
         children: [
+          // 顶栏
           Row(
-            children: [
-              Container(
-                width: 32,
-                height: 32,
-                decoration: BoxDecoration(
-                  color: Colors.grey[800],
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: const Icon(
-                  Icons.music_note,
-                  color: Colors.white,
-                  size: 18,
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: const [
-                    Text(
-                      'YouTube Music',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 13,
-                      ),
-                    ),
-                    SizedBox(height: 2),
-                    Text(
-                      '五键栏 · 胶囊组 · 抽屉队列',
-                      style: TextStyle(color: Colors.white70, fontSize: 11),
-                    ),
-                  ],
-                ),
-              ),
+            children: const [
+              Icon(Icons.keyboard_arrow_down, size: 14, color: Colors.white70),
+              Spacer(),
+              Icon(Icons.more_vert, size: 12, color: Colors.white70),
             ],
           ),
+          const SizedBox(height: 4),
+          // 封面
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: const Color(0xFF2A2A2A),
+              borderRadius: BorderRadius.circular(6),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.5),
+                  blurRadius: 6,
+                  offset: const Offset(0, 3),
+                ),
+              ],
+            ),
+            child: const Center(
+              child: Icon(
+                Icons.music_note,
+                color: Colors.white70,
+                size: 20,
+              ),
+            ),
+          ),
+          const SizedBox(height: 5),
+          // 歌曲名与歌手
+          Container(
+            height: 4,
+            width: 54,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(height: 3),
+          Container(
+            height: 3,
+            width: 36,
+            decoration: BoxDecoration(
+              color: Colors.white54,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(height: 5),
+          // 胶囊行
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              _buildMiniChip(Icons.favorite_border),
+              const SizedBox(width: 4),
+              _buildMiniChip(Icons.subtitles_outlined),
+              const SizedBox(width: 4),
+              _buildMiniChip(Icons.playlist_add),
+            ],
+          ),
+          const SizedBox(height: 5),
+          // 进度条
+          Container(
+            height: 2,
+            margin: const EdgeInsets.symmetric(horizontal: 4),
+            decoration: BoxDecoration(
+              color: Colors.white24,
+              borderRadius: BorderRadius.circular(1),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 28,
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(1),
+                  ),
+                ),
+              ],
+            ),
+          ),
           const Spacer(),
+          // 五键控制行
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
-              const Icon(Icons.shuffle, size: 16, color: Colors.white70),
-              const Icon(Icons.skip_previous, size: 20, color: Colors.white),
+              const Icon(Icons.shuffle, size: 10, color: Colors.white54),
+              const Icon(Icons.skip_previous, size: 13, color: Colors.white),
               Container(
-                width: 24,
-                height: 24,
+                width: 18,
+                height: 18,
                 decoration: const BoxDecoration(
                   color: Colors.white,
                   shape: BoxShape.circle,
                 ),
                 child: const Icon(
                   Icons.play_arrow,
-                  size: 16,
+                  size: 12,
                   color: Colors.black,
                 ),
               ),
-              const Icon(Icons.skip_next, size: 20, color: Colors.white),
-              const Icon(Icons.repeat, size: 16, color: Colors.white70),
+              const Icon(Icons.skip_next, size: 13, color: Colors.white),
+              const Icon(Icons.repeat, size: 10, color: Colors.white54),
             ],
           ),
+          const SizedBox(height: 2),
         ],
       ),
+    );
+  }
+
+  Widget _buildMiniChip(IconData icon) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Icon(icon, size: 8, color: Colors.white70),
     );
   }
 }

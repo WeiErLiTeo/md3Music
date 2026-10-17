@@ -1168,56 +1168,111 @@ class _YtStylePreview extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: 90,
-      decoration: BoxDecoration(
-        color: Colors.black,
-        borderRadius: BorderRadius.circular(12),
+      decoration: const BoxDecoration(
+        color: Color(0xFF0F0F0F),
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Color(0xFF262626),
+            Color(0xFF0F0F0F),
+          ],
+        ),
       ),
-      padding: const EdgeInsets.all(10),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
       child: Column(
         children: [
+          // 顶栏
           Row(
-            children: [
-              Container(
-                width: 28,
-                height: 28,
-                decoration: BoxDecoration(
-                  color: Colors.grey[800],
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: const Icon(
-                  Icons.music_note,
-                  color: Colors.white,
-                  size: 16,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: const [
-                    Text(
-                      'YouTube Music',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 12,
-                      ),
-                    ),
-                    Text(
-                      '五键操作栏',
-                      style: TextStyle(color: Colors.white70, fontSize: 10),
-                    ),
-                  ],
-                ),
-              ),
+            children: const [
+              Icon(Icons.keyboard_arrow_down, size: 14, color: Colors.white70),
+              Spacer(),
+              Icon(Icons.more_vert, size: 12, color: Colors.white70),
             ],
           ),
+          const SizedBox(height: 6),
+          // 封面
+          Container(
+            width: 50,
+            height: 50,
+            decoration: BoxDecoration(
+              color: const Color(0xFF2A2A2A),
+              borderRadius: BorderRadius.circular(8),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.5),
+                  blurRadius: 8,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: const Center(
+              child: Icon(
+                Icons.music_note,
+                color: Colors.white70,
+                size: 24,
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          // 歌曲名与歌手
+          Container(
+            height: 5,
+            width: 60,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(3),
+            ),
+          ),
+          const SizedBox(height: 4),
+          Container(
+            height: 3,
+            width: 40,
+            decoration: BoxDecoration(
+              color: Colors.white54,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(height: 8),
+          // 胶囊行
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              _buildMiniChip(Icons.favorite_border),
+              const SizedBox(width: 4),
+              _buildMiniChip(Icons.subtitles_outlined),
+              const SizedBox(width: 4),
+              _buildMiniChip(Icons.playlist_add),
+            ],
+          ),
+          const SizedBox(height: 8),
+          // 进度条
+          Container(
+            height: 2,
+            margin: const EdgeInsets.symmetric(horizontal: 4),
+            decoration: BoxDecoration(
+              color: Colors.white24,
+              borderRadius: BorderRadius.circular(1),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 32,
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(1),
+                  ),
+                ),
+              ],
+            ),
+          ),
           const Spacer(),
+          // 五键控制行
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
-              const Icon(Icons.skip_previous, size: 18, color: Colors.white),
+              const Icon(Icons.shuffle, size: 11, color: Colors.white54),
+              const Icon(Icons.skip_previous, size: 15, color: Colors.white),
               Container(
                 width: 22,
                 height: 22,
@@ -1231,11 +1286,24 @@ class _YtStylePreview extends StatelessWidget {
                   color: Colors.black,
                 ),
               ),
-              const Icon(Icons.skip_next, size: 18, color: Colors.white),
+              const Icon(Icons.skip_next, size: 15, color: Colors.white),
+              const Icon(Icons.repeat, size: 11, color: Colors.white54),
             ],
           ),
+          const SizedBox(height: 2),
         ],
       ),
+    );
+  }
+
+  Widget _buildMiniChip(IconData icon) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Icon(icon, size: 9, color: Colors.white70),
     );
   }
 }
