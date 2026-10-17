@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/layout/display_space.dart';
 import '../../core/utils/app_haptics.dart';
 import '../../core/utils/local_lyric_loader.dart';
 import '../../core/widgets/app_background.dart';
@@ -13,11 +14,14 @@ import '../../providers/kugou_provider.dart';
 import '../../providers/local_favorites_provider.dart';
 import '../../providers/player_provider.dart';
 import '../../widgets/add_to_playlist_dialog.dart';
+import '../../widgets/apple_lyrics/layout/lyric_preferences.dart';
 import '../../widgets/apple_lyrics/models/lyric_line.dart';
 import '../../widgets/apple_lyrics/parsers/lyric_parser_chain.dart';
+import '../../widgets/flowing_background.dart';
 import '../../widgets/player_playlist_view.dart';
 import '../../widgets/player_seek_bar.dart';
 import '../../widgets/smart_artwork_image.dart';
+import 'player_cover_morph_layer.dart';
 import '../album/album_detail_page.dart';
 import '../artist/artist_detail_page.dart';
 import '../../widgets/apple_lyrics/apple_lyrics_view.dart';
@@ -42,9 +46,21 @@ class FullPlayerYt extends StatefulWidget {
 class _FullPlayerYtState extends State<FullPlayerYt> {
   final PlaylistScrollAnchor _playlistScrollAnchor = PlaylistScrollAnchor();
 
+  DraggablePlayerRoute? _topBarDragRoute;
+  double _topBarDragDistance = 0.0;
+  double _topBarDragTotal = 0.0;
+  double? _topBarDragLastY;
+  Duration? _topBarDragLastTime;
+  double _topBarDragVelocity = 0.0;
+  bool _isDismissing = false;
+
+  Duration? _optimisticSeekPosition;
+  Timer? _seekTimer;
+
   @override
   void dispose() {
     _playlistScrollAnchor.dispose();
+    _seekTimer?.cancel();
     super.dispose();
   }
 
@@ -53,11 +69,91 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
     return route is DraggablePlayerRoute ? route : null;
   }
 
-  void _collapseByButton() {
-    final route = _dragRoute;
-    if (route != null) {
-      route.collapse();
+  void _onTopBarDragStart(DragStartDetails details) {
+    final route = ModalRoute.of(context);
+    if (route is! DraggablePlayerRoute) return;
+    _topBarDragRoute = route;
+    route.beginDrag();
+    route.controller.value = 1.0;
+    final total = route.dragOriginTop ?? playerDragOriginTop;
+    _topBarDragTotal = total > 0 ? total : MediaQuery.sizeOf(context).height;
+    route.topBarDragging = true;
+    route.topBarDragTotal = _topBarDragTotal;
+    _topBarDragDistance = 0.0;
+    _topBarDragLastY = toDisplaySpace(context, details.globalPosition).dy;
+    _topBarDragLastTime = null;
+    _topBarDragVelocity = 0.0;
+  }
+
+  void _onTopBarDragUpdate(DragUpdateDetails details) {
+    final route = _topBarDragRoute;
+    if (route == null) return;
+    _topBarDragDistance = (_topBarDragDistance +
+            toDisplaySpaceDelta(context, details.delta).dy)
+        .clamp(0.0, double.infinity);
+    final ts = details.sourceTimeStamp;
+    if (ts != null && _topBarDragLastTime != null && _topBarDragLastY != null) {
+      final dt = (ts - _topBarDragLastTime!).inMicroseconds / 1e6;
+      if (dt > 0) {
+        _topBarDragVelocity =
+            (toDisplaySpace(context, details.globalPosition).dy -
+                    _topBarDragLastY!) /
+                dt;
+      }
+    }
+    _topBarDragLastY = toDisplaySpace(context, details.globalPosition).dy;
+    _topBarDragLastTime = ts;
+    final total = _topBarDragTotal;
+    if (total <= 0) return;
+    final progress = (1.0 - _topBarDragDistance / total).clamp(0.0, 1.0);
+    route.controller.stop();
+    route.controller.value = progress;
+  }
+
+  void _onTopBarDragEnd(DragEndDetails details) {
+    final route = _topBarDragRoute;
+    _topBarDragRoute = null;
+    if (route == null) return;
+    route.topBarDragging = false;
+    final threshold =
+        MediaQuery.sizeOf(context).height * kPlayerExpandDistanceRatio;
+    final downVelocity = details.primaryVelocity ?? _topBarDragVelocity;
+    final collapse = downVelocity >= -kPlayerPullBackVelocityThreshold &&
+        (_topBarDragDistance >= threshold ||
+            downVelocity > kPlayerFlingVelocityThreshold);
+    if (collapse) {
+      AppHaptics.lightImpact(HapticCategory.gesture);
+      _isDismissing = true;
+      route.dismiss();
     } else {
+      route.settleToFull();
+    }
+  }
+
+  void _onTopBarDragCancel() {
+    final route = _topBarDragRoute;
+    _topBarDragRoute = null;
+    if (route == null) return;
+    route.topBarDragging = false;
+    if (route.controller.value < 1.0) {
+      route.settleToFull();
+    } else {
+      route.topBarDragTotal = null;
+    }
+  }
+
+  void _collapseByButton() {
+    if (widget.dockMode) return;
+    final route = ModalRoute.of(context);
+    if (route is DraggablePlayerRoute) {
+      _isDismissing = true;
+      route.dismiss();
+    } else if (route == null) {
+      _isDismissing = true;
+      playerDragActive.value = false;
+      playerExpansion.value = 0.0;
+    } else {
+      _isDismissing = true;
       Navigator.of(context).maybePop();
     }
   }
@@ -89,11 +185,13 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                     title: const Text('查看 MV'),
                     onTap: () {
                       Navigator.pop(sheetContext);
-                      Navigator.of(rootContext).push(
-                        MaterialPageRoute(
-                          builder: (_) => MvPlayerPage(song: song),
-                        ),
-                      );
+                      if (rootContext.mounted) {
+                        Navigator.of(rootContext).push(
+                          MaterialPageRoute(
+                            builder: (_) => MvPlayerPage(song: song),
+                          ),
+                        );
+                      }
                     },
                   ),
                 ListTile(
@@ -105,7 +203,9 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                   ),
                   onTap: () {
                     Navigator.pop(sheetContext);
-                    _navigateToAlbum(song);
+                    if (rootContext.mounted) {
+                      _navigateToAlbum(song);
+                    }
                   },
                 ),
                 ListTile(
@@ -117,7 +217,9 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                   ),
                   onTap: () {
                     Navigator.pop(sheetContext);
-                    _navigateToArtist(song);
+                    if (rootContext.mounted) {
+                      _navigateToArtist(song);
+                    }
                   },
                 ),
                 ListTile(
@@ -125,7 +227,9 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                   title: const Text('添加到歌单'),
                   onTap: () {
                     Navigator.pop(sheetContext);
-                    showAddToPlaylistDialog(rootContext, song);
+                    if (rootContext.mounted) {
+                      showAddToPlaylistDialog(rootContext, song);
+                    }
                   },
                 ),
                 ListTile(
@@ -133,11 +237,13 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                   title: const Text('均衡器与音效设置'),
                   onTap: () {
                     Navigator.pop(sheetContext);
-                    Navigator.of(rootContext).push(
-                      MaterialPageRoute(
-                        builder: (_) => const EqualizerSettingsPage(),
-                      ),
-                    );
+                    if (rootContext.mounted) {
+                      Navigator.of(rootContext).push(
+                        MaterialPageRoute(
+                          builder: (_) => const EqualizerSettingsPage(),
+                        ),
+                      );
+                    }
                   },
                 ),
                 ListTile(
@@ -145,11 +251,13 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                   title: const Text('播放速度'),
                   onTap: () {
                     Navigator.pop(sheetContext);
-                    showSpeedPickerDialog(
-                      context: rootContext,
-                      currentSpeed: player.speed,
-                      onSelected: (speed) => player.setSpeed(speed),
-                    );
+                    if (rootContext.mounted) {
+                      showSpeedPickerDialog(
+                        context: rootContext,
+                        currentSpeed: player.speed,
+                        onSelected: (speed) => player.setSpeed(speed),
+                      );
+                    }
                   },
                 ),
                 ListTile(
@@ -157,7 +265,12 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                   title: const Text('睡眠定时'),
                   onTap: () {
                     Navigator.pop(sheetContext);
-                    showSleepTimerSheet(context: rootContext, player: player);
+                    if (rootContext.mounted) {
+                      showSleepTimerSheet(
+                        context: rootContext,
+                        player: player,
+                      );
+                    }
                   },
                 ),
                 ListTile(
@@ -165,9 +278,11 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                   title: const Text('歌曲信息'),
                   onTap: () {
                     Navigator.pop(sheetContext);
-                    Navigator.of(rootContext).push(
-                      MaterialPageRoute(builder: (_) => const SongInfoPage()),
-                    );
+                    if (rootContext.mounted) {
+                      Navigator.of(rootContext).push(
+                        MaterialPageRoute(builder: (_) => const SongInfoPage()),
+                      );
+                    }
                   },
                 ),
               ],
@@ -215,6 +330,8 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
     );
   }
 
+  double _queueDragDistance = 0.0;
+
   void _showQueueDrawer(BuildContext context) {
     showModalBottomSheet(
       context: context,
@@ -260,11 +377,11 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                     ),
                     InkWell(
                       onTap: () {
-                        final currentSong = context
+                        final currentSong = sheetContext
                             .read<PlayerProvider>()
                             .currentSong;
-                        if (currentSong != null) {
-                          showAddToPlaylistDialog(context, currentSong);
+                        if (currentSong != null && sheetContext.mounted) {
+                          showAddToPlaylistDialog(sheetContext, currentSong);
                         }
                       },
                       borderRadius: BorderRadius.circular(16),
@@ -361,7 +478,7 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
       child: PopScope(
         canPop: false,
         onPopInvokedWithResult: (didPop, _) {
-          if (didPop) return;
+          if (didPop || _isDismissing) return;
           if (widget.dockMode) return;
           _collapseByButton();
         },
@@ -387,40 +504,58 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
               backgroundColor: Colors.black,
               body: Stack(
                 children: [
-                  const Positioned.fill(child: AppBackground()),
-                  Positioned.fill(
-                    child: Container(
-                      color: Colors.black.withValues(alpha: 0.45),
-                    ),
-                  ),
+                  if (LyricPreferences.instance.useFlowingBackground)
+                    Positioned.fill(
+                      child: FlowingBackground(
+                        artworkUrl: song.artworkUri,
+                        isPlaying: playerProvider.isPlaying,
+                      ),
+                    )
+                  else
+                    const Positioned.fill(child: AppBackground()),
                   SafeArea(
                     child: Column(
                       children: [
-                        Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 8,
-                          ),
-                          child: Row(
-                            children: [
-                              IconButton(
-                                icon: const Icon(
-                                  Icons.expand_more,
-                                  size: 28,
-                                  color: Colors.white,
+                        GestureDetector(
+                          behavior: HitTestBehavior.translucent,
+                          onVerticalDragStart: widget.dockMode
+                              ? null
+                              : _onTopBarDragStart,
+                          onVerticalDragUpdate: widget.dockMode
+                              ? null
+                              : _onTopBarDragUpdate,
+                          onVerticalDragEnd: widget.dockMode
+                              ? null
+                              : _onTopBarDragEnd,
+                          onVerticalDragCancel: widget.dockMode
+                              ? null
+                              : _onTopBarDragCancel,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 8,
+                            ),
+                            child: Row(
+                              children: [
+                                IconButton(
+                                  icon: const Icon(
+                                    Icons.expand_more,
+                                    size: 28,
+                                    color: Colors.white,
+                                  ),
+                                  onPressed: _collapseByButton,
                                 ),
-                                onPressed: _collapseByButton,
-                              ),
-                              const Spacer(),
-                              IconButton(
-                                icon: const Icon(
-                                  Icons.more_vert,
-                                  size: 24,
-                                  color: Colors.white,
+                                const Spacer(),
+                                IconButton(
+                                  icon: const Icon(
+                                    Icons.more_vert,
+                                    size: 24,
+                                    color: Colors.white,
+                                  ),
+                                  onPressed: () => _showMoreMenu(context),
                                 ),
-                                onPressed: () => _showMoreMenu(context),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
                         ),
                         Expanded(
@@ -442,11 +577,22 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                                       ),
                                     ],
                                   ),
-                                  child: ClipRRect(
-                                    borderRadius: BorderRadius.circular(16),
-                                    child: SmartArtworkImage(
-                                      artworkUri: song.artworkUri,
-                                      size: 320,
+                                  child: PlayerCoverSlot(
+                                    songId: song.id,
+                                    artworkUri: song.artworkUri,
+                                    fallbackFilePath: song.localPath,
+                                    iconSize: 48,
+                                    placeholderColor: Colors.white12,
+                                    shadowColor: Colors.black45,
+                                    eligible: () => true,
+                                    settledScale: 1.0,
+                                    settledAnchor: Alignment.center,
+                                    child: ClipRRect(
+                                      borderRadius: BorderRadius.circular(16),
+                                      child: SmartArtworkImage(
+                                        artworkUri: song.artworkUri,
+                                        size: 320,
+                                      ),
                                     ),
                                   ),
                                 ),
@@ -563,14 +709,43 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                         const SizedBox(height: 16),
                         Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 20.0),
-                          child: PlayerSeekBar(
-                            position: playerProvider.position,
-                            duration: playerProvider.duration ?? Duration.zero,
-                            activeColor: Colors.white,
-                            inactiveColor: Colors.white24,
-                            labelColor: Colors.white70,
-                            onSeekEnd: (pos) {
-                              playerProvider.seek(pos);
+                          child: ValueListenableBuilder<Duration>(
+                            valueListenable: playerProvider.positionNotifier,
+                            builder: (context, position, _) {
+                              if (_optimisticSeekPosition != null) {
+                                final diff = (position - _optimisticSeekPosition!).inMilliseconds.abs();
+                                if (diff < 300) {
+                                  _optimisticSeekPosition = null;
+                                  _seekTimer?.cancel();
+                                }
+                              }
+                              final displayPos = _optimisticSeekPosition ?? position;
+                              return PlayerSeekBar(
+                                position: displayPos,
+                                duration: playerProvider.duration ?? Duration.zero,
+                                isPlaying: playerProvider.isPlaying,
+                                speed: playerProvider.speed,
+                                activeColor: Colors.white,
+                                inactiveColor: Colors.white24,
+                                labelColor: Colors.white70,
+                                onSeekEnd: (pos) {
+                                  setState(() {
+                                    _optimisticSeekPosition = pos;
+                                  });
+                                  playerProvider.seek(pos);
+                                  _seekTimer?.cancel();
+                                  _seekTimer = Timer(
+                                    const Duration(milliseconds: 800),
+                                    () {
+                                      if (mounted && _optimisticSeekPosition != null) {
+                                        setState(() {
+                                          _optimisticSeekPosition = null;
+                                        });
+                                      }
+                                    },
+                                  );
+                                },
+                              );
                             },
                           ),
                         ),
@@ -657,7 +832,7 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                                   AppHaptics.lightImpact(
                                     HapticCategory.transport,
                                   );
-                                  playerProvider.cyclePlayMode();
+                                  playerProvider.toggleLoopMode();
                                 },
                               ),
                             ],
@@ -665,8 +840,26 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                         ),
                         const SizedBox(height: 8),
                         GestureDetector(
+                          behavior: HitTestBehavior.opaque,
                           onTap: () => _showQueueDrawer(context),
+                          onVerticalDragStart: (_) {
+                            _queueDragDistance = 0.0;
+                          },
+                          onVerticalDragUpdate: (details) {
+                            _queueDragDistance -= details.delta.dy;
+                            if (_queueDragDistance > 30) {
+                              _queueDragDistance = -999.0;
+                              _showQueueDrawer(context);
+                            }
+                          },
+                          onVerticalDragEnd: (details) {
+                            if (details.primaryVelocity != null &&
+                                details.primaryVelocity! < -150) {
+                              _showQueueDrawer(context);
+                            }
+                          },
                           child: Container(
+                            width: double.infinity,
                             padding: const EdgeInsets.symmetric(
                               vertical: 12,
                               horizontal: 16,
