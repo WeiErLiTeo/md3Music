@@ -123,16 +123,11 @@
 -keep class com.md3music.md3music.spectrum.** { *; }
 -keep class com.md3music.md3music.SpectrumPlugin$* { *; }
 
-# ── Flutter Plugins & Embedding ──
--keep class io.flutter.app.** { *; }
--keep class io.flutter.plugin.** { *; }
--keep class io.flutter.util.** { *; }
--keep class io.flutter.view.** { *; }
--keep class io.flutter.embedding.** { *; }
+# ── Play Core (Flutter split compat optional classes) ──
+-dontwarn com.google.android.play.core.**
 
 # ── shared_preferences ──
 -keep class io.flutter.plugins.sharedpreferences.** { *; }
--keepclassmembers class io.flutter.plugins.sharedpreferences.** { *; }
 -dontwarn io.flutter.plugins.sharedpreferences.**
 
 # ── flutter_secure_storage & crypto ──
