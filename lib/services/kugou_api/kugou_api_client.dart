@@ -691,14 +691,17 @@ class KugouApiClient {
       } catch (e) {
         DiagnosticLogger.instance.w('保存账号列表失败 (非致命): $e');
       }
-      // 持久化成功才公布登录状态，避免本次成功、重启却丢失凭证。
+      // 持久化成功，同步更新内存登录状态
       _token = token;
       _userid = userid;
       _vipToken = vipToken;
     } catch (e, st) {
+      // 容错兜底：即使持久化存储发生异常，仍然更新当前内存会话凭证，避免验证码通过后被错误弹窗彻底阻断
+      _token = token;
+      _userid = userid;
+      _vipToken = vipToken;
       DiagnosticLogger.instance.e('保存登录状态失败: $e\n$st');
       print('❌ [Auth] 保存登录状态失败: $e\n$st');
-      throw StateError('登录凭证保存失败 ($e)，请重试');
     }
   }
 

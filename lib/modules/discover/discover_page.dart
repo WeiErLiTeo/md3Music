@@ -176,13 +176,15 @@ class _DiscoverPageState extends State<DiscoverPage>
 
   /// 从 SharedPreferences 恢复每日推荐 section 的折叠状态
   Future<void> _loadCollapseStates() async {
-    final prefs = await SharedPreferences.getInstance();
-    if (!mounted) return;
-    setState(() {
-      _isDailyExpanded = !(prefs.getBool(_kCollapsedDaily) ?? false);
-      _isHomeDiscoverExpanded = !(prefs.getBool(_kCollapsedHomeDiscover) ?? false);
-      _isNewSongExpanded = !(prefs.getBool(_kCollapsedNewSong) ?? false);
-    });
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (!mounted) return;
+      setState(() {
+        _isDailyExpanded = !(prefs.getBool(_kCollapsedDaily) ?? false);
+        _isHomeDiscoverExpanded = !(prefs.getBool(_kCollapsedHomeDiscover) ?? false);
+        _isNewSongExpanded = !(prefs.getBool(_kCollapsedNewSong) ?? false);
+      });
+    } catch (_) {}
   }
 
   /// 切换 section 展开/折叠并持久化
@@ -193,17 +195,22 @@ class _DiscoverPageState extends State<DiscoverPage>
   }) async {
     final next = !currentlyExpanded;
     setState(() => apply(next));
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(prefKey, !next);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(prefKey, !next);
+    } catch (_) {}
   }
 
   /// 每天只自动加载一次：内存有数据且是同一天则跳过，否则拉取
   Future<void> _initIfNeeded() async {
     if (!mounted) return;
     final kugou = context.read<KugouProvider>();
-    final prefs = await SharedPreferences.getInstance();
-    if (!mounted) return;
-    final lastDate = prefs.getString(_kDiscoverLastDateKey);
+    String? lastDate;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (!mounted) return;
+      lastDate = prefs.getString(_kDiscoverLastDateKey);
+    } catch (_) {}
     final today = _todayString();
     if (kugou.hasLoadedDiscoverData && lastDate == today) {
       if (!mounted) return;
@@ -232,6 +239,9 @@ class _DiscoverPageState extends State<DiscoverPage>
       if (retryCount < 3 && mounted) {
         await Future.delayed(const Duration(seconds: 2));
       }
+    }
+    if (mounted && _isLoading) {
+      setState(() => _isLoading = false);
     }
   }
 

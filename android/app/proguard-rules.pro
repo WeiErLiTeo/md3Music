@@ -123,11 +123,26 @@
 -keep class com.md3music.md3music.spectrum.** { *; }
 -keep class com.md3music.md3music.SpectrumPlugin$* { *; }
 
-# ── Play Core (Flutter split compat optional classes) ──
+# ── Flutter Plugins, Embedding & Pigeon ──
+-keep class io.flutter.app.** { *; }
+-keep class io.flutter.plugin.** { *; }
+-keep class io.flutter.util.** { *; }
+-keep class io.flutter.view.** { *; }
+-keep class io.flutter.** { *; }
+-keep interface io.flutter.** { *; }
+-keep class io.flutter.plugins.** { *; }
+-keep interface io.flutter.plugins.** { *; }
+-keep class dev.flutter.pigeon.** { *; }
+-keep interface dev.flutter.pigeon.** { *; }
+-keepattributes *Annotation*,Signature,InnerClasses,EnclosingMethod
+-dontwarn io.flutter.embedding.android.FlutterPlayStoreSplitApplication
 -dontwarn com.google.android.play.core.**
 
 # ── shared_preferences ──
 -keep class io.flutter.plugins.sharedpreferences.** { *; }
+-keep interface io.flutter.plugins.sharedpreferences.** { *; }
+-keepclassmembers class io.flutter.plugins.sharedpreferences.** { *; }
+-keepclassmembers interface io.flutter.plugins.sharedpreferences.** { *; }
 -dontwarn io.flutter.plugins.sharedpreferences.**
 
 # ── flutter_secure_storage & crypto ──
@@ -137,4 +152,5 @@
 -dontwarn androidx.security.crypto.**
 -keep class com.google.crypto.tink.** { *; }
 -dontwarn com.google.crypto.tink.**
+
 
