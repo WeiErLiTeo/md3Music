@@ -20,6 +20,9 @@ name: Debug Build & Test
 # 约定：每个 run 步骤都有 id，且输出通过 tee 写入 $LOG_DIR/<id>.log。
 # 新增步骤时，需要同步更新「Report failure」步骤里的 STEP_ORDER / STEP_NAME。
 on:
+  push:
+    branches:
+      - '**'
   pull_request:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
