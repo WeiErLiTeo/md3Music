@@ -1009,6 +1009,7 @@ class _YtLyricsSheetState extends State<_YtLyricsSheet> {
   @override
   Widget build(BuildContext context) {
     final player = context.watch<PlayerProvider>();
+    final currentSong = player.currentSong ?? widget.song;
     final screenHeight = MediaQuery.of(context).size.height;
 
     return Container(
