@@ -27,9 +27,11 @@ import '../../widgets/ai_recommend_sheet.dart';
 import '../album/album_detail_page.dart';
 import '../artist/artist_detail_page.dart';
 import '../settings/equalizer_settings_page.dart';
+import '../../widgets/apple_lyrics/layout/lyric_preferences.dart';
 import 'full_player_route.dart';
 import 'mv_player_page.dart';
 import 'player_cover_morph.dart';
+import 'player_cover_morph_layer.dart';
 import 'player_page_role.dart';
 import 'sleep_timer_sheet.dart';
 import 'song_info_page.dart';
@@ -1055,8 +1057,11 @@ class _YtLyricsSheetState extends State<_YtLyricsSheet> {
               ),
             ],
           ),
-          Consumer<KugouProvider>(
-            builder: (context, kugou, _) {
+          ListenableBuilder(
+            listenable: LyricPreferences.instance,
+            builder: (context, _) {
+              final lyricPrefs = LyricPreferences.instance;
+              final showTrans = lyricPrefs.showTranslation;
               return Positioned(
                 bottom: 20,
                 left: 0,
@@ -1067,7 +1072,7 @@ class _YtLyricsSheetState extends State<_YtLyricsSheet> {
                     child: InkWell(
                       onTap: () {
                         AppHaptics.lightImpact(HapticCategory.control);
-                        kugou.toggleTranslation();
+                        lyricPrefs.setShowTranslation(!showTrans);
                       },
                       borderRadius: BorderRadius.circular(20),
                       child: Container(
@@ -1095,15 +1100,15 @@ class _YtLyricsSheetState extends State<_YtLyricsSheet> {
                             Icon(
                               Icons.translate,
                               size: 18,
-                              color: kugou.showTranslation
+                              color: showTrans
                                   ? Colors.white
                                   : Colors.white54,
                             ),
                             const SizedBox(width: 6),
                             Text(
-                              kugou.showTranslation ? '隐藏翻译' : '文A 翻译',
+                              showTrans ? '隐藏翻译' : '文A 翻译',
                               style: TextStyle(
-                                color: kugou.showTranslation
+                                color: showTrans
                                     ? Colors.white
                                     : Colors.white70,
                                 fontSize: 13,
