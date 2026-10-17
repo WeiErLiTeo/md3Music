@@ -34,10 +34,12 @@ const Duration kHomeDiscoverQueueEndBackoff = Duration(milliseconds: 600);
 /// 别的入口起播后就不再是刷歌队列了；两者都会让"还在放自己的队列"在下一次
 /// 通知里被误判成别人的，连播当场断掉。
 class HomeDiscoverRefill {
-  HomeDiscoverRefill._({required this._kugou, required this._player})
-    : // 装填那一刻列表里已有的歌全部认下来：用户可能是从第 7 首起的播，
+  HomeDiscoverRefill._({required KugouProvider kugou, required PlayerProvider player})
+    : _kugou = kugou,
+      _player = player,
+      // 装填那一刻列表里已有的歌全部认下来：用户可能是从第 7 首起的播，
       // 队列里每一首都是刷歌来的，只认后来补的那几批会把这条队列当成别人的。
-      _owned = _kugou.homeDiscoverSongs.map((e) => e.hash).toSet() {
+      _owned = kugou.homeDiscoverSongs.map((e) => e.hash).toSet() {
     _player.addListener(_onPlayerChanged);
   }
 

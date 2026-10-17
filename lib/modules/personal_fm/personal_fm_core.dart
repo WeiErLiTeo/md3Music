@@ -198,8 +198,9 @@ class FmRefill {
     required this.songPoolId,
     required List<KugouSongDetail> songs,
     bool adoptQueue = false,
-    this._sessionGeneration,
-  }) : _owned = songs.map((s) => s.hash).toSet(),
+    int? sessionGeneration,
+  }) : _sessionGeneration = sessionGeneration,
+       _owned = songs.map((s) => s.hash).toSet(),
        _cursor = songs.isEmpty ? null : songs.last {
     // 接管一条已经在放、但槽位空了的队列（发现页区块与桌面小部件的自愈路径）：
     // 队列里可能有换档前灌进去、已经不在 personalFmSongs 里的歌，不一并认下来的话
