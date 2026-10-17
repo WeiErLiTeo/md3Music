@@ -123,6 +123,9 @@
 -keep class com.md3music.md3music.spectrum.** { *; }
 -keep class com.md3music.md3music.SpectrumPlugin$* { *; }
 
+# ── 关闭 R8 激进字节码优化（防止 staticization 破坏 Kotlin 协程与 Pigeon 虚方法调用） ──
+-dontoptimize
+
 # ── Flutter Plugins, Embedding & Pigeon ──
 -keep class io.flutter.app.** { *; }
 -keep class io.flutter.plugin.** { *; }
