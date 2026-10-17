@@ -775,6 +775,7 @@ class _YtLyricsSheetState extends State<_YtLyricsSheet> {
     if (lyricText.isEmpty) {
       try {
         await SongMatchRepository().ensureLoaded();
+        if (!mounted) return;
         final matchInfo = !song.isOnline
             ? SongMatchRepository().get(song.id)
             : null;

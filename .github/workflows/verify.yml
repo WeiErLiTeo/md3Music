@@ -1,7 +1,7 @@
 name: PR Verification
 on:
   pull_request:
-    branches: [ rust-local-force, main ]
+    types: [opened, synchronize, reopened]
 
 jobs:
   check:
