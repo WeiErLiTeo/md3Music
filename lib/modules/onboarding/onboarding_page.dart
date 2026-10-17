@@ -658,38 +658,45 @@ class _OnboardingPageState extends State<OnboardingPage>
   ) {
     return FadeTransition(
       opacity: animation,
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          _buildStyleCard(
-            colorScheme: colorScheme,
-            title: 'MD3Music',
-            subtitle: 'Material 3 风格',
-            isSelected: _selectedPlayerStyle == PlayerStyle.md3,
-            onTap: () => setState(() => _selectedPlayerStyle = PlayerStyle.md3),
-            preview: _Md3StylePreview(colorScheme: colorScheme),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        physics: const BouncingScrollPhysics(),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              _buildStyleCard(
+                colorScheme: colorScheme,
+                title: 'MD3Music',
+                subtitle: 'Material 3 风格',
+                isSelected: _selectedPlayerStyle == PlayerStyle.md3,
+                onTap: () => setState(() => _selectedPlayerStyle = PlayerStyle.md3),
+                preview: _Md3StylePreview(colorScheme: colorScheme),
+              ),
+              const Gap(AppSpacing.md),
+              _buildStyleCard(
+                colorScheme: colorScheme,
+                title: 'Apple Music',
+                subtitle: '模糊封面 + 逐字歌词',
+                isSelected: _selectedPlayerStyle == PlayerStyle.appleMusic,
+                onTap: () =>
+                    setState(() => _selectedPlayerStyle = PlayerStyle.appleMusic),
+                preview: _AmStylePreview(colorScheme: colorScheme),
+              ),
+              const Gap(AppSpacing.md),
+              _buildStyleCard(
+                colorScheme: colorScheme,
+                title: 'YouTube Music',
+                subtitle: '五键操作栏 · 胶囊按钮 · 抽屉队列',
+                isSelected: _selectedPlayerStyle == PlayerStyle.ytMusic,
+                onTap: () =>
+                    setState(() => _selectedPlayerStyle = PlayerStyle.ytMusic),
+                preview: _YtStylePreview(colorScheme: colorScheme),
+              ),
+            ],
           ),
-          const Gap(AppSpacing.lg),
-          _buildStyleCard(
-            colorScheme: colorScheme,
-            title: 'Apple Music',
-            subtitle: '模糊封面 + 逐字歌词',
-            isSelected: _selectedPlayerStyle == PlayerStyle.appleMusic,
-            onTap: () =>
-                setState(() => _selectedPlayerStyle = PlayerStyle.appleMusic),
-            preview: _AmStylePreview(colorScheme: colorScheme),
-          ),
-          const Gap(AppSpacing.lg),
-          _buildStyleCard(
-            colorScheme: colorScheme,
-            title: 'YouTube Music',
-            subtitle: '五键操作栏 · 胶囊按钮 · 抽屉队列',
-            isSelected: _selectedPlayerStyle == PlayerStyle.ytMusic,
-            onTap: () =>
-                setState(() => _selectedPlayerStyle = PlayerStyle.ytMusic),
-            preview: _YtStylePreview(colorScheme: colorScheme),
-          ),
-        ],
+        ),
       ),
     );
   }

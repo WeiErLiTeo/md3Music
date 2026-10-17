@@ -212,9 +212,15 @@ class LyricPreferences extends ChangeNotifier {
   /// 是否 Pad 设备（物理屏幕最短边 >= 600dp），与 DeviceProvider 判断一致。
   /// 用于首次使用 / 重置时按设备类型提供差异化歌词默认值。
   static bool _isPadDevice() {
-    final view = ui.PlatformDispatcher.instance.views.first;
-    final size = view.physicalSize / view.devicePixelRatio;
-    return size.shortestSide >= 600;
+    try {
+      final views = ui.PlatformDispatcher.instance.views;
+      if (views.isEmpty) return false;
+      final view = views.first;
+      final size = view.physicalSize / view.devicePixelRatio;
+      return size.shortestSide >= 600;
+    } catch (_) {
+      return false;
+    }
   }
 
   // ============== SharedPreferences keys ==============

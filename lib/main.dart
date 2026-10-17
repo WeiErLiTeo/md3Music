@@ -131,9 +131,9 @@ Future<(bool, bool, bool)> runBootstrap() async {
   final prefsFuture = SharedPreferences.getInstance();
   await Future.wait([
     // 加载歌词字号/行间距偏好（从 SharedPreferences）
-    LyricPreferences.instance.load(),
+    LyricPreferences.instance.load().catchError((_) {}),
     // 加载 MD3 风格播放页的独立歌词偏好（与 Apple Music 风格完全分离）
-    Md3LyricPreferences.instance.load(),
+    Md3LyricPreferences.instance.load().catchError((_) {}),
     // 恢复震动反馈总开关与类别开关：全站震动点都在 AppHaptics 内闸门，
     // 首帧前就位才不会让刚进来的用户感到开关状态失真。
     AppHaptics.load().catchError((_) {}),

@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:ui' as ui;
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/layout/display_space.dart';
@@ -36,6 +36,7 @@ import 'dlna_cast_sheet.dart';
 import 'full_player_route.dart';
 import 'mv_player_page.dart';
 import 'player_cover_morph_layer.dart';
+import 'player_page_role.dart';
 import 'sleep_timer_sheet.dart';
 import 'song_info_page.dart';
 import 'speed_picker_sheet.dart';
@@ -84,7 +85,9 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
     return route is DraggablePlayerRoute ? route : null;
   }
 
-  bool get _isDragOverlay => ModalRoute.of(context) == null;
+  PlayerPageRole get _pageRole => PlayerPageRole.of(context);
+
+  bool get _isDragOverlay => _pageRole == PlayerPageRole.dragOverlay;
 
   void _onTopBarDragStart(DragStartDetails details) {
     final route = ModalRoute.of(context);
@@ -170,7 +173,6 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
       playerDragActive.value = false;
       playerExpansion.value = 0.0;
     } else {
-      _isDismissing = true;
       Navigator.of(context).maybePop();
     }
   }
@@ -1053,37 +1055,27 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
 
   @override
   Widget build(BuildContext context) {
-    return PlayerSystemUiScope(
-      dragRoute: _dragRoute,
-      forceMainStyle: _isDragOverlay || widget.dockMode,
-      child: PopScope(
-        canPop: false,
-        onPopInvokedWithResult: (didPop, _) {
-          if (didPop || _isDismissing) return;
-          if (widget.dockMode) return;
-          _collapseByButton();
-        },
-        child: Consumer<PlayerProvider>(
-          builder: (context, playerProvider, _) {
-            final song = playerProvider.currentSong;
-            final colorScheme = Theme.of(context).colorScheme;
+    return Consumer<PlayerProvider>(
+      builder: (context, playerProvider, _) {
+        final song = playerProvider.currentSong;
+        final colorScheme = Theme.of(context).colorScheme;
 
-            if (song == null) {
-              return Scaffold(
-                backgroundColor: colorScheme.surface,
-                appBar: AppBar(leading: const BackButton()),
-                body: const Center(child: Text('暂无播放曲目')),
-              );
-            }
+        if (song == null) {
+          return Scaffold(
+            backgroundColor: colorScheme.surface,
+            appBar: AppBar(leading: const BackButton()),
+            body: const Center(child: Text('暂无播放曲目')),
+          );
+        }
 
-            final isOnline = song.isOnline;
-            final isFavorited = isOnline
-                ? context.watch<FavoritesProvider>().isFavorite(song.id)
-                : context.watch<LocalFavoritesProvider>().isFavorite(song.id);
+        final isOnline = song.isOnline;
+        final isFavorited = isOnline
+            ? context.watch<FavoritesProvider>().isFavorite(song.id)
+            : context.watch<LocalFavoritesProvider>().isFavorite(song.id);
 
-            return Scaffold(
-              backgroundColor: const Color(0xFF030303),
-              body: Stack(
+        Widget page = Scaffold(
+          backgroundColor: const Color(0xFF030303),
+          body: Stack(
                 children: [
                   _buildBackground(song, playerProvider),
                   LayoutBuilder(
@@ -1225,11 +1217,26 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                 ],
               ),
             );
+
+            if (!_isDragOverlay && !widget.dockMode) {
+              page = PopScope(
+                canPop: false,
+                onPopInvokedWithResult: (didPop, _) {
+                  if (didPop || _isDismissing) return;
+                  _collapseByButton();
+                },
+                child: page,
+              );
+            }
+
+            return PlayerSystemUiScope(
+              dragRoute: _dragRoute,
+              forceMainStyle: _isDragOverlay || widget.dockMode,
+              child: page,
+            );
           },
-        ),
-      ),
-    );
-  }
+        );
+      }
 }
 
 class _YtLyricsSheet extends StatefulWidget {
