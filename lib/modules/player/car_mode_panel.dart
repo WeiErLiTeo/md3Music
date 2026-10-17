@@ -479,15 +479,11 @@ class _CarModePlayerBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final style = context.watch<ThemeProvider>().playerStyle;
-    switch (style) {
-      case PlayerStyle.md3:
-        return const FullPlayer(dockMode: true);
-      case PlayerStyle.appleMusic:
-        return const AmStyleFullPlayer(dockMode: true);
-      case PlayerStyle.ytMusic:
-        return const FullPlayerYt(dockMode: true);
-    }
+    final useAm = context.watch<ThemeProvider>().useAmStylePlayer;
+    final tp = context.watch<ThemeProvider>();
+    if (tp.useYtStylePlayer) return const FullPlayerYt(dockMode: true);
+    if (tp.useAmStylePlayer) return const AmStyleFullPlayer(dockMode: true);
+    return const FullPlayer(dockMode: true);
   }
 }
 

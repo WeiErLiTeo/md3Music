@@ -10,4 +10,5 @@ key.properties
 **/keystore.properties
 **/*.keystore
 **/*.jks
+
 !**/md3-debug.keystore

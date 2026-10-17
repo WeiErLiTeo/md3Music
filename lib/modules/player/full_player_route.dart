@@ -216,21 +216,14 @@ DraggablePlayerRoute<void> fullPlayerRoute(
   double? screenHeight,
   double? dragOriginBottom,
 }) {
-  final style = context.read<ThemeProvider>().playerStyle;
-  Widget playerWidget;
-  switch (style) {
-    case PlayerStyle.md3:
-      playerWidget = const FullPlayer();
-      break;
-    case PlayerStyle.appleMusic:
-      playerWidget = const AmStyleFullPlayer();
-      break;
-    case PlayerStyle.ytMusic:
-      playerWidget = const FullPlayerYt();
-      break;
-  }
+  final useAm = context.read<ThemeProvider>().useAmStylePlayer;
   return DraggablePlayerRoute<void>(
-    builder: (_) => playerWidget,
+    builder: (_) {
+      final style = context.read<ThemeProvider>().playerStyle;
+      if (style == PlayerStyle.ytMusic) return const FullPlayerYt();
+      if (style == PlayerStyle.appleMusic) return const AmStyleFullPlayer();
+      return const FullPlayer();
+    },
     scene: scene,
     dragOriginTop: dragOriginTop,
     screenHeight: screenHeight,

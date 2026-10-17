@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'package:m3e_core/m3e_core.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -8,13 +7,13 @@ import '../../core/utils/local_lyric_loader.dart';
 import '../../core/widgets/app_background.dart';
 import '../../data/models/album.dart';
 import '../../data/models/song.dart';
+import '../../data/repositories/song_match_repository.dart';
 import '../../providers/favorites_provider.dart';
+import '../../providers/kugou_provider.dart';
 import '../../providers/local_favorites_provider.dart';
 import '../../providers/player_provider.dart';
-import '../../data/repositories/song_match_repository.dart';
 import '../../widgets/add_to_playlist_dialog.dart';
 import '../../widgets/apple_lyrics/models/lyric_line.dart';
-import '../../providers/kugou_provider.dart';
 import '../../widgets/apple_lyrics/parsers/lyric_parser_chain.dart';
 import '../../widgets/player_playlist_view.dart';
 import '../../widgets/player_seek_bar.dart';
@@ -71,10 +70,13 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
     final albumTitle = song.album.isEmpty ? '查看专辑' : '查看专辑：${song.album}';
     final artistTitle = song.artist.isEmpty ? '查看歌手' : '查看歌手：${song.artist}';
 
-    showM3EModalBottomSheet(
+    showModalBottomSheet(
       context: rootContext,
       isScrollControlled: true,
-      backgroundColor: Theme.of(rootContext).colorScheme.surfaceContainerLow,
+      backgroundColor: Theme.of(rootContext).colorScheme.surfaceContainer,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
       builder: (sheetContext) {
         return SafeArea(
           child: SingleChildScrollView(
@@ -224,8 +226,8 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
         return Container(
           height: screenHeight * 0.72,
           decoration: BoxDecoration(
-            color: colorScheme.surfaceContainerHigh,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+            color: colorScheme.surfaceContainer,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
           ),
           child: Column(
             children: [
@@ -272,7 +274,7 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                           vertical: 6,
                         ),
                         decoration: BoxDecoration(
-                          color: colorScheme.surfaceContainerHighest,
+                          color: Colors.white.withValues(alpha: 0.12),
                           borderRadius: BorderRadius.circular(16),
                         ),
                         child: Row(
@@ -303,7 +305,8 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
               Expanded(
                 child: PlayerPlaylistView(
                   scrollAnchor: _playlistScrollAnchor,
-                  useAmColors: false,
+                  useAmColors: true,
+                  useDisplayName: true,
                 ),
               ),
             ],
@@ -339,9 +342,9 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
       },
       borderRadius: BorderRadius.circular(20),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.15),
+          color: Colors.white.withValues(alpha: 0.12),
           borderRadius: BorderRadius.circular(20),
         ),
         child: Row(
@@ -475,7 +478,7 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                                 children: [
                                   Expanded(
                                     child: Text(
-                                      song.title,
+                                      song.displayName,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                       style: const TextStyle(
@@ -538,21 +541,21 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                                     }
                                   },
                                 ),
-                                const SizedBox(width: 8),
+                                const SizedBox(width: 10),
                                 _buildCapsuleButton(
                                   icon: Icons.subtitles_outlined,
                                   label: '歌词',
                                   onTap: () =>
                                       _showLyricsModalSheet(context, song),
                                 ),
-                                const SizedBox(width: 8),
+                                const SizedBox(width: 10),
                                 _buildCapsuleButton(
                                   icon: Icons.playlist_add,
                                   label: '保存',
                                   onTap: () =>
                                       showAddToPlaylistDialog(context, song),
                                 ),
-                                const SizedBox(width: 8),
+                                const SizedBox(width: 10),
                                 _buildCapsuleButton(
                                   icon: Icons.graphic_eq,
                                   label: '音效',
@@ -781,8 +784,8 @@ class _YtLyricsSheetState extends State<_YtLyricsSheet> {
             : null;
         final lyricHash = matchedHash ?? (!song.isOnline ? '' : song.id);
         final searchName = song.artist != '未知艺术家'
-            ? '${song.title} ${song.artist}'
-            : song.title;
+            ? '${song.displayName} ${song.artist}'
+            : song.displayName;
         final lyric = await kugouProvider.getLyric(
           lyricHash,
           songName: searchName,
@@ -824,7 +827,7 @@ class _YtLyricsSheetState extends State<_YtLyricsSheet> {
     return Container(
       height: screenHeight * 0.72,
       decoration: BoxDecoration(
-        color: colorScheme.surfaceContainerHighest,
+        color: colorScheme.surfaceContainer,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
       ),
       child: Column(

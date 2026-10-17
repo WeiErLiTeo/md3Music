@@ -1,24 +1,8 @@
 name: Debug Build & Test
 
-# 两种触发方式：
-#   1. 自动：提交到主仓库默认分支的 PR（新建 / 推送新提交 / 重新打开）。
-#      推到普通分支不会触发；PR 目标不是默认分支时，作业会被跳过。
-#   2. 手动：Actions 页面的 Run workflow 按钮，可选 debug / release。
-# 只构建 standard 版 arm64-v8a APK，用于无线 ADB 测试。
-#
-# 报错流程：任何一步失败时，在本次运行页面的 Summary 里给出
-#   1. 出错的步骤名 + 该步骤执行的命令
-#   2. 自动提取的关键错误行 + 日志末尾，整块放在一个代码块里，点右上角即可复制
-# Dart 分析错误还会作为行内标注直接标在 PR 的对应文件/行上；完整日志另存为 Artifact。
-#
-# 签名：构建用仓库里的固定调试钥匙 android/md3-debug.keystore（由「Generate Debug Keystore」工作流生成），
-# 这样每次构建签名一致，手机上可以直接覆盖安装，不用卸载。
-#
-# 约定：每个 run 步骤都有 id，且输出通过 tee 写入 $LOG_DIR/<id>.log。
-# 新增步骤时，需要同步更新「Report failure」步骤里的 STEP_ORDER / STEP_NAME。
+# 手动触发：构建 debug APK 用于无线 ADB 测试
+# debug APK 保留调试符号 + 可抓取 logcat 日志
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
   workflow_dispatch:
     inputs:
       build_type:
@@ -43,119 +27,51 @@ concurrency:
   group: debug-build-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  # PR 自动触发时没有 inputs，固定为 debug
-  BUILD_TYPE: ${{ inputs.build_type || 'debug' }}
-  APPLICATION_ID: com.md3music.md3music
-
 jobs:
   build-debug:
-    name: Build Android standard Debug APK
+    name: Build Android ${{ matrix.package }} ${{ inputs.build_type == 'release' && 'Release' || 'Debug' }} APK
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    if: ${{ github.event_name == 'workflow_dispatch' || github.base_ref == github.event.repository.default_branch }}
-    defaults:
-      run:
-        # 显式指定 bash，GitHub 才会启用 -eo pipefail
-        shell: bash
+    strategy:
+      matrix:
+        include:
+          - package: standard
+            application_id: com.md3music.md3music
+          - package: apple-music
+            application_id: com.apple.android.music
 
     steps:
-      - name: Prepare error log directory
-        id: prep
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/step-logs"
-          echo "LOG_DIR=$RUNNER_TEMP/step-logs" >> "$GITHUB_ENV"
-
       - name: Checkout repository
-        id: checkout
         uses: actions/checkout@v4
 
       - name: Set up Java 17
-        id: java
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Use fixed debug keystore
-        id: debug_key
-        run: |
-          set -euo pipefail
-          ks="${GITHUB_WORKSPACE}/android/md3-debug.keystore"
-
-          # 写入 Gradle 初始化脚本：让 Android 应用模块的 debug 签名改用固定钥匙，
-          # 不需要改项目里的 build.gradle。
-          init_dir="${HOME}/.gradle/init.d"
-          mkdir -p "$init_dir"
-          cat > "${init_dir}/md3-debug-signing.gradle" <<'GRADLE'
-          // 由 GitHub Actions 写入，勿手动修改
-          def md3KeystorePath = System.getenv('MD3_DEBUG_KEYSTORE')
-          if (md3KeystorePath == null || md3KeystorePath.isEmpty()) {
-              throw new GradleException('环境变量 MD3_DEBUG_KEYSTORE 未设置')
-          }
-          allprojects {
-              afterEvaluate { p ->
-                  if (p.plugins.hasPlugin('com.android.application')) {
-                      def cfg = p.android.signingConfigs.getByName('debug')
-                      cfg.storeFile = new File(md3KeystorePath)
-                      cfg.storePassword = 'android'
-                      cfg.keyAlias = 'md3debug'
-                      cfg.keyPassword = 'android'
-                  }
-              }
-          }
-          GRADLE
-
-          {
-            if [[ ! -f "$ks" ]]; then
-              echo "::error title=缺少固定调试钥匙::找不到 android/md3-debug.keystore。请先在 Actions 里运行「Generate Debug Keystore」，等它提交到主分支后，再更新本 PR（推一个新提交即可）。"
-              exit 1
-            fi
-            info="$(keytool -list -v -keystore "$ks" -storepass android -alias md3debug -J-Duser.language=en)" \
-              || { echo "::error title=固定调试钥匙无法读取::keytool 读取 $ks 失败（别名应为 md3debug，密码应为 android）"; exit 1; }
-            fp="$(printf '%s\n' "$info" | sed -n 's/^[[:space:]]*SHA256:[[:space:]]*//p' | head -n 1 | tr -d ':' | tr 'A-F' 'a-f')"
-            if [[ -z "$fp" ]]; then
-              echo "::error title=固定调试钥匙无法读取::读取不到钥匙的 SHA-256 指纹"
-              exit 1
-            fi
-            {
-              echo "MD3_DEBUG_KEYSTORE=${ks}"
-              echo "MD3_DEBUG_KEYSTORE_SHA256=${fp}"
-            } >> "$GITHUB_ENV"
-            echo "固定调试钥匙就绪：${ks}"
-            echo "钥匙 SHA-256 指纹：${fp}"
-          } 2>&1 | tee "$LOG_DIR/debug_key.log"
-
       - name: Set up Android SDK & NDK
-        id: android_sdk
         uses: android-actions/setup-android@v3
         with:
           # setup-android@v3 默认还会安装已从 SDK 仓库移除的 tools 包。
           packages: platform-tools
 
       - name: Install Android SDK packages
-        id: sdk_packages
         run: |
-          set -euo pipefail
-          {
-            sdkmanager --install \
-              "cmdline-tools;latest" \
-              "platforms;android-36" \
-              "build-tools;36.0.0" \
-              "ndk;28.2.13676358" \
-              "cmake;3.22.1"
-          } 2>&1 | tee "$LOG_DIR/sdk_packages.log"
+          sdkmanager --install \
+            "cmdline-tools;latest" \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;28.2.13676358" \
+            "cmake;3.22.1"
 
       - name: Set up Flutter
-        id: flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
 
       - name: Cache Gradle
-        id: gradle_cache
         uses: actions/cache@v4
         with:
           path: |
@@ -167,333 +83,67 @@ jobs:
 
       # Flutter 构建 APK
       - name: Flutter pub get
-        id: pub_get
-        run: |
-          set -euo pipefail
-          {
-            flutter pub get
-          } 2>&1 | tee "$LOG_DIR/pub_get.log"
+        run: flutter pub get
 
       - name: Flutter analyze
-        id: analyze
-        run: |
-          set -euo pipefail
-          {
-            flutter analyze --no-fatal-infos --no-fatal-warnings
-          } 2>&1 | tee "$LOG_DIR/analyze.log"
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
       - name: Flutter build APK
-        id: build
         run: |
           set -euo pipefail
-          {
-            flutter build apk "--${BUILD_TYPE}" --flavor standard --split-per-abi \
-              --target-platform android-arm64 \
-              "--android-project-arg=md3ApplicationId=${APPLICATION_ID}"
-          } 2>&1 | tee "$LOG_DIR/build.log"
+          flutter build apk --${{ inputs.build_type }} --flavor standard --split-per-abi \
+            --target-platform android-arm64 \
+            --android-project-arg=md3ApplicationId=${{ matrix.application_id }}
 
       # ============================================================
       # 产物改名为中文（便于区分）
       # ============================================================
       # 命名规则与 scripts/lib/common.ps1 的 Get-ApkDisplayName 必须同步。
-      # 只构建 arm64-v8a。
+      # 两种包名均只构建 arm64-v8a。
       - name: Rename APK to Chinese display name
-        id: rename
         run: |
           set -euo pipefail
-          {
-            apk_dir="build/app/outputs/flutter-apk"
-            ver="$(grep -m1 '^version:' pubspec.yaml | sed 's/^version:[[:space:]]*//' | cut -d+ -f1 || true)"
-            if [[ -z "$ver" ]]; then
-              echo "::error::无法从 pubspec.yaml 读取 version"
-              exit 1
-            fi
+          apk_dir="build/app/outputs/flutter-apk"
+          ver="$(grep -m1 '^version:' pubspec.yaml | sed 's/^version:[[:space:]]*//' | cut -d+ -f1)"
+          if [[ "${{ matrix.package }}" == "apple-music" ]]; then
+            flavor_cn="随身听兼容版"
+          else
             flavor_cn="标准版"
-            src="$apk_dir/app-arm64-v8a-standard-${BUILD_TYPE}.apk"
-            if [[ ! -f "$src" ]]; then
-              echo "::error::未找到构建产物 $src"
-              ls -lh "$apk_dir"/ || true
-              exit 1
-            fi
-            dst="$apk_dir/MD3音乐-${ver}-${flavor_cn}-64位-${BUILD_TYPE}.apk"
-            mv "$src" "$dst"
-            {
-              echo "APK_FILE=$(basename "$dst")"
-              echo "FLAVOR_CN=${flavor_cn}"
-            } >> "$GITHUB_ENV"
-            echo "=== 重命名后的产物 ==="
-            ls -lh "$apk_dir"/
-          } 2>&1 | tee "$LOG_DIR/rename.log"
+          fi
+          src="$apk_dir/app-arm64-v8a-standard-${{ inputs.build_type }}.apk"
+          if [[ ! -f "$src" ]]; then echo "::error::未找到构建产物 $src"; exit 1; fi
+          dst="$apk_dir/MD3音乐-${ver}-${flavor_cn}-64位-${{ inputs.build_type }}.apk"
+          mv "$src" "$dst"
+          {
+            echo "APK_FILE=$(basename "$dst")"
+            echo "FLAVOR_CN=${flavor_cn}"
+          } >> "$GITHUB_ENV"
+          echo "=== 重命名后的产物 ==="
+          ls -lh "$apk_dir"/
 
       - name: Verify APK
-        id: verify
         run: |
           set -euo pipefail
-          {
-            apk_dir="build/app/outputs/flutter-apk"
-            apk="${apk_dir}/${APK_FILE}"
-            aapt2="${ANDROID_HOME}/build-tools/36.0.0/aapt2"
-
-            # 每项校验失败都明确说出「哪一项、期望什么、实际是什么」
-            fail() { echo "::error title=APK 校验失败::$1"; exit 1; }
-
-            ls -lh "$apk_dir"/
-            [[ -f "$apk" ]] || fail "未找到 APK：$apk"
-            unzip -l "$apk" > /dev/null || fail "产物损坏，unzip 无法读取：$apk"
-            echo "OK ($(du -h "$apk" | cut -f1))"
-            [[ -x "$aapt2" ]] || fail "找不到 aapt2：$aapt2"
-
-            badging="$("$aapt2" dump badging "$apk")" || fail "aapt2 dump badging 执行失败"
-
-            # 1) 包名
-            actual_pkg="$(printf '%s\n' "$badging" | sed -n "s/^package: name='\([^']*\)'.*/\1/p")"
-            [[ "$actual_pkg" == "$APPLICATION_ID" ]] \
-              || fail "包名不符：期望 ${APPLICATION_ID}，实际 '${actual_pkg}'"
-
-            # 2) 只含 arm64-v8a
-            native_code="$(printf '%s\n' "$badging" | sed -n "s/^native-code: //p")"
-            [[ "$native_code" == "'arm64-v8a'" ]] \
-              || fail "ABI 不符：期望只含 'arm64-v8a'，实际 native-code: ${native_code:-<空>}"
-
-            # 3) 已启用 Impeller
-            "$aapt2" dump xmltree "$apk" --file AndroidManifest.xml > "$RUNNER_TEMP/manifest.txt" \
-              || fail "aapt2 dump xmltree 执行失败"
-            if ! grep -C 5 'io.flutter.embedding.android.EnableImpeller' "$RUNNER_TEMP/manifest.txt" \
-                | grep -E '0xffffffff|"true"|=true|0x1' > /dev/null; then
-              fail "未启用 Impeller：AndroidManifest.xml 中没有 EnableImpeller=true"
-            fi
-
-            # 4) standard 不能带 3D 资产（注意：这里的 grep 不能加 -q，否则 pipefail 下 unzip 会因 SIGPIPE 误报失败）
-            leaked="$(unzip -l "$apk" | grep -E 'libonnxruntime|assets/models/' || true)"
-            if [[ -n "$leaked" ]]; then
-              printf '%s\n' "$leaked" | head -n 20 || true
-              fail "standard 包含有 3D 资产（flavor 隔离失效），泄漏文件见上方列表"
-            fi
-
-            # 5) debug 构建的签名必须是固定钥匙（否则手机上覆盖安装会提示签名冲突）
-            if [[ "$BUILD_TYPE" != "debug" ]]; then
-              echo "跳过签名指纹校验（构建类型：${BUILD_TYPE}）"
-              echo "APK 校验全部通过：$apk"
-              exit 0
-            fi
-            apksigner="${ANDROID_HOME}/build-tools/36.0.0/apksigner"
-            [[ -x "$apksigner" ]] || fail "找不到 apksigner：$apksigner"
-            [[ -n "${MD3_DEBUG_KEYSTORE_SHA256:-}" ]] || fail "缺少固定钥匙指纹（Use fixed debug keystore 步骤没有写出）"
-            sign_out="$("$apksigner" verify --print-certs "$apk")" || fail "apksigner 校验失败：APK 签名无效"
-            apk_fp="$(printf '%s\n' "$sign_out" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | tr -d ' :' | tr 'A-F' 'a-f')"
-            [[ -n "$apk_fp" ]] || fail "读取不到 APK 的签名指纹"
-            echo "APK 签名指纹 SHA-256：$apk_fp"
-            [[ "$apk_fp" == "$MD3_DEBUG_KEYSTORE_SHA256" ]] \
-              || fail "签名不是固定钥匙：期望 ${MD3_DEBUG_KEYSTORE_SHA256}，实际 ${apk_fp}。说明 Gradle 没有使用固定钥匙，可能是 android/app 的 build.gradle 里给 debug 单独指定了别的签名"
-
-            echo "APK 校验全部通过：$apk"
-          } 2>&1 | tee "$LOG_DIR/verify.log"
-
-      - name: Upload APK
-        id: upload
-        uses: actions/upload-artifact@v4
-        with:
-          name: MD3音乐-${{ env.FLAVOR_CN }}-${{ env.BUILD_TYPE }}
-          path: build/app/outputs/flutter-apk/${{ env.APK_FILE }}
-          if-no-files-found: error
-          retention-days: 7
-
-      # ============================================================
-      # 报错流程：只在有步骤失败时运行
-      # ============================================================
-      - name: Report failure (failed step + copyable error)
-        if: failure()
-        env:
-          STEPS_JSON: ${{ toJSON(steps) }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_REF: ${{ github.head_ref || github.ref_name }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          # 报告步骤自己尽量跑完，所以不开 -e
-          set -uo pipefail
-          export LC_ALL=C.UTF-8
-
-          LOG_DIR="${LOG_DIR:-${RUNNER_TEMP}/step-logs}"
-          mkdir -p "$LOG_DIR"
-          TMP="$(mktemp -d)"
-          REPORT="$LOG_DIR/error-report.md"
-          TAIL_LINES=150
-          KEY_LINES=40
-
-          # 步骤 id（按执行顺序）→ 运行页面上显示的步骤名
-          STEP_ORDER=(prep checkout java debug_key android_sdk sdk_packages flutter gradle_cache pub_get analyze build rename verify upload)
-          declare -A STEP_NAME=(
-            [prep]="Prepare error log directory"
-            [checkout]="Checkout repository"
-            [java]="Set up Java 17"
-            [debug_key]="Use fixed debug keystore"
-            [android_sdk]="Set up Android SDK & NDK"
-            [sdk_packages]="Install Android SDK packages"
-            [flutter]="Set up Flutter"
-            [gradle_cache]="Cache Gradle"
-            [pub_get]="Flutter pub get"
-            [analyze]="Flutter analyze"
-            [build]="Flutter build APK"
-            [rename]="Rename APK to Chinese display name"
-            [verify]="Verify APK"
-            [upload]="Upload APK"
-          )
-          # 只有 run 步骤有命令
-          declare -A STEP_CMD=(
-            [prep]="mkdir -p \$RUNNER_TEMP/step-logs"
-            [debug_key]="读取 android/md3-debug.keystore 并写入 Gradle 初始化脚本"
-            [sdk_packages]="sdkmanager --install cmdline-tools;latest platforms;android-36 build-tools;36.0.0 ndk;28.2.13676358 cmake;3.22.1"
-            [pub_get]="flutter pub get"
-            [analyze]="flutter analyze --no-fatal-infos --no-fatal-warnings"
-            [build]="flutter build apk --${BUILD_TYPE} --flavor standard --split-per-abi --target-platform android-arm64 --android-project-arg=md3ApplicationId=${APPLICATION_ID}"
-            [rename]="读取 pubspec.yaml 版本号并重命名 APK"
-            [verify]="aapt2/unzip/apksigner 校验：包名、ABI、Impeller、3D 资产隔离、签名指纹"
-          )
-
-          # 去掉颜色控制符，并把进度条的 \r 变成换行
-          clean() { sed -E 's/\x1b\[[0-9;?]*[A-Za-z]//g' | tr '\r' '\n'; }
-
-          # GitHub 工作流命令转义
-          esc_data() {
-            local s="$1"
-            s="${s//'%'/'%25'}"; s="${s//$'\r'/'%0D'}"; s="${s//$'\n'/'%0A'}"
-            printf '%s' "$s"
-          }
-          esc_prop() {
-            local s
-            s="$(esc_data "$1")"
-            s="${s//':'/'%3A'}"; s="${s//','/'%2C'}"
-            printf '%s' "$s"
-          }
-
-          # 从已清洗的日志里提取关键错误行
-          extract_key_lines() {
-            local id="$1" file="$2" pat
-            if [[ "$id" == "analyze" ]]; then
-              pat='^[ \t]*error[ \t:]|issues? found'
-            else
-              pat='^e: |: error: |^error: |^Error: |^ERROR: |Execution failed for task|^FAILURE: |Gradle task .* failed|Exception in thread|command not found|No such file or directory|Permission denied'
-            fi
-            awk -v pat="$pat" '
-              ctx > 0 { print; ctx--; next }
-              /^[*] What went wrong:/ { print; ctx = 3; next }
-              $0 ~ pat { print }
-            ' "$file" | awk '!seen[$0]++' | cut -c1-600 | head -n "$KEY_LINES"
-          }
-
-          # flutter analyze 的 error 行 → 行内标注（最多 10 条，GitHub 单步骤上限）
-          annotate_dart_errors() {
-            local file="$1" count=0 line
-            local re='^[[:space:]]*error[[:space:]]+[•-][[:space:]]+(.*)[[:space:]]+[•-][[:space:]]+([^[:space:]]+):([0-9]+):([0-9]+)[[:space:]]+[•-][[:space:]]+([A-Za-z0-9_]+)[[:space:]]*$'
-            while IFS= read -r line; do
-              if [[ "$line" =~ $re ]]; then
-                echo "::error file=$(esc_prop "${BASH_REMATCH[2]}"),line=${BASH_REMATCH[3]},col=${BASH_REMATCH[4]},title=$(esc_prop "Dart 分析错误 ${BASH_REMATCH[5]}")::$(esc_data "${BASH_REMATCH[1]}")"
-                count=$((count + 1))
-                if (( count >= 10 )); then break; fi
-              fi
-            done < "$file"
-          }
-
-          # ---- 1. 找出失败的步骤 ----
-          failed=()
-          for id in "${STEP_ORDER[@]}"; do
-            outcome="$(jq -r --arg id "$id" '.[$id].outcome // "skipped"' <<<"$STEPS_JSON" 2>/dev/null)"
-            if [[ "$outcome" == "failure" ]]; then failed+=("$id"); fi
-          done
-          # 兜底：失败的步骤 id 不在 STEP_ORDER 里
-          while IFS= read -r id; do
-            [[ -z "$id" ]] && continue
-            if [[ " ${STEP_ORDER[*]} " != *" $id "* ]]; then failed+=("$id"); fi
-          done < <(jq -r 'to_entries[] | select(.value.outcome == "failure") | .key' <<<"$STEPS_JSON" 2>/dev/null)
-
-          # ---- 2. 逐个生成报告 ----
-          {
-            echo "## 构建失败"
-            echo
-          } > "$REPORT"
-
-          if (( ${#failed[@]} == 0 )); then
-            {
-              echo "未能定位到具体失败的步骤（可能是超时或 Runner 异常），请打开运行页面查看：${RUN_URL}"
-            } >> "$REPORT"
-            echo "::error title=构建失败::未能定位到具体失败的步骤，请查看运行页面日志"
+          apk="build/app/outputs/flutter-apk/${APK_FILE}"
+          ls -lh build/app/outputs/flutter-apk/
+          if ! unzip -l "$apk" > /dev/null; then
+            echo "::error::产物损坏：$apk"; exit 1
+          fi
+          echo "OK ($(du -h "$apk" | cut -f1))"
+          aapt2="$ANDROID_HOME/build-tools/36.0.0/aapt2"
+          test "$("$aapt2" dump badging "$apk" | sed -n "s/^package: name='\([^']*\)'.*/\1/p")" = "${{ matrix.application_id }}"
+          # 校验最终 APK 只含 arm64-v8a，并已启用 Impeller。
+          test "$("$aapt2" dump badging "$apk" | sed -n "s/^native-code: //p")" = "'arm64-v8a'"
+          "$aapt2" dump xmltree "$apk" --file AndroidManifest.xml > "$RUNNER_TEMP/manifest.txt"
+          grep -A1 'io.flutter.embedding.android.EnableImpeller' "$RUNNER_TEMP/manifest.txt" | grep '0xffffffff' > /dev/null
+          if unzip -l "$apk" | grep -E 'libonnxruntime|assets/models/' > /dev/null; then
+            echo "::error::standard 包含有 3D 资产（flavor 隔离失效）"; exit 1
           fi
 
-          for id in "${failed[@]}"; do
-            name="${STEP_NAME[$id]:-$id}"
-            cmd="${STEP_CMD[$id]:-}"
-            log="$LOG_DIR/$id.log"
-            copy="$TMP/$id.copy.txt"
-            first_key=""
-
-            {
-              echo "失败步骤: ${name} (id: ${id})"
-              if [[ -n "$cmd" ]]; then echo "执行命令: ${cmd}"; fi
-              echo "仓库: ${GITHUB_REPOSITORY:-}"
-              if [[ -n "${PR_NUMBER:-}" ]]; then pr_text="PR: #${PR_NUMBER}"; else pr_text="手动运行"; fi
-              echo "${pr_text}  分支: ${HEAD_REF:-?}  提交: ${HEAD_SHA:-?}"
-              echo "运行页面: ${RUN_URL}"
-              echo
-            } > "$copy"
-
-            if [[ -s "$log" ]]; then
-              clean < "$log" > "$TMP/$id.clean"
-              total="$(wc -l < "$TMP/$id.clean" | tr -d ' ')"
-              extract_key_lines "$id" "$TMP/$id.clean" > "$TMP/$id.key"
-              first_key="$(head -n 1 "$TMP/$id.key" | sed -E 's/^[[:space:]]+//')"
-
-              {
-                echo "===== 关键错误行（自动提取）====="
-                if [[ -s "$TMP/$id.key" ]]; then
-                  cat "$TMP/$id.key"
-                else
-                  echo "（没有自动匹配到关键错误行，请看下面的日志末尾）"
-                fi
-                echo
-                if (( total > TAIL_LINES )); then
-                  echo "===== 日志末尾 ${TAIL_LINES} 行（共 ${total} 行，完整日志见 Artifact）====="
-                else
-                  echo "===== 完整日志（共 ${total} 行）====="
-                fi
-                cat -s "$TMP/$id.clean" | tail -n "$TAIL_LINES" | cut -c1-600
-              } >> "$copy"
-
-              if [[ "$id" == "analyze" ]]; then annotate_dart_errors "$TMP/$id.clean"; fi
-            else
-              {
-                echo "该步骤是官方 Action（或日志未能写出），错误日志无法在 Job 内捕获。"
-                echo "请打开运行页面，展开该步骤查看具体报错：${RUN_URL}"
-              } >> "$copy"
-            fi
-
-            # 防止日志里的反引号提前结束代码块
-            sed -i -E 's/`{6,}/`````/g' "$copy"
-
-            {
-              echo "- **出错步骤**：${name}（\`${id}\`）"
-              if [[ -n "$cmd" ]]; then echo "- **执行命令**：\`${cmd}\`"; fi
-              echo
-              echo "下面整块内容可以一键复制（代码块右上角的复制按钮）："
-              echo
-              echo '``````text'
-              cat "$copy"
-              echo '``````'
-              echo
-            } >> "$REPORT"
-
-            ann_msg="步骤「${name}」失败。${first_key:+ ${first_key}}"
-            echo "::error title=$(esc_prop "构建失败：${name}")::$(esc_data "$(printf '%s' "$ann_msg" | cut -c1-800)")"
-          done
-
-          cat "$REPORT" >> "$GITHUB_STEP_SUMMARY"
-          rm -rf "$TMP"
-
-      - name: Upload error logs
-        if: failure()
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: MD3音乐-错误日志-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/step-logs
-          if-no-files-found: ignore
+          name: MD3音乐-${{ env.FLAVOR_CN }}-${{ inputs.build_type }}
+          path: build/app/outputs/flutter-apk/${{ env.APK_FILE }}
+          if-no-files-found: error
           retention-days: 7

@@ -32,8 +32,8 @@ class _OnboardingPageState extends State<OnboardingPage>
   int _currentPage = 0;
   late final AnimationController _pageAnimController;
 
-  /// 播放器风格选择：MD3Music / AppleMusic / YtMusic。
-  PlayerStyle _playerStyle = PlayerStyle.md3;
+  /// 播放器风格选择：false = MD3Music（默认），true = AppleMusic。
+  PlayerStyle _selectedPlayerStyle = PlayerStyle.md3;
 
   @override
   void initState() {
@@ -88,7 +88,7 @@ class _OnboardingPageState extends State<OnboardingPage>
     // 将播放器风格选择应用到 ThemeProvider
     if (mounted) {
       final themeProvider = context.read<ThemeProvider>();
-      await themeProvider.setPlayerStyle(_playerStyle);
+      await themeProvider.setPlayerStyle(_selectedPlayerStyle);
     }
 
     if (!mounted) return;
@@ -665,26 +665,28 @@ class _OnboardingPageState extends State<OnboardingPage>
             colorScheme: colorScheme,
             title: 'MD3Music',
             subtitle: 'Material 3 风格',
-            isSelected: _playerStyle == PlayerStyle.md3,
-            onTap: () => setState(() => _playerStyle = PlayerStyle.md3),
+            isSelected: _selectedPlayerStyle == PlayerStyle.md3,
+            onTap: () => setState(() => _selectedPlayerStyle = PlayerStyle.md3),
             preview: _Md3StylePreview(colorScheme: colorScheme),
           ),
-          const Gap(AppSpacing.md),
+          const Gap(AppSpacing.lg),
           _buildStyleCard(
             colorScheme: colorScheme,
             title: 'Apple Music',
             subtitle: '模糊封面 + 逐字歌词',
-            isSelected: _playerStyle == PlayerStyle.appleMusic,
-            onTap: () => setState(() => _playerStyle = PlayerStyle.appleMusic),
+            isSelected: _selectedPlayerStyle == PlayerStyle.appleMusic,
+            onTap: () =>
+                setState(() => _selectedPlayerStyle = PlayerStyle.appleMusic),
             preview: _AmStylePreview(colorScheme: colorScheme),
           ),
-          const Gap(AppSpacing.md),
+          const Gap(AppSpacing.lg),
           _buildStyleCard(
             colorScheme: colorScheme,
             title: 'YouTube Music',
-            subtitle: '队列与歌词抽屉',
-            isSelected: _playerStyle == PlayerStyle.ytMusic,
-            onTap: () => setState(() => _playerStyle = PlayerStyle.ytMusic),
+            subtitle: '五键操作栏 · 胶囊按钮 · 抽屉队列',
+            isSelected: _selectedPlayerStyle == PlayerStyle.ytMusic,
+            onTap: () =>
+                setState(() => _selectedPlayerStyle = PlayerStyle.ytMusic),
             preview: _YtStylePreview(colorScheme: colorScheme),
           ),
         ],
@@ -1160,113 +1162,77 @@ class _HiddenOp {
 }
 
 class _YtStylePreview extends StatelessWidget {
-  final ColorScheme colorScheme;
-
   const _YtStylePreview({required this.colorScheme});
+  final ColorScheme colorScheme;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      color: colorScheme.surfaceContainerLowest,
+      height: 90,
+      decoration: BoxDecoration(
+        color: Colors.black,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      padding: const EdgeInsets.all(10),
       child: Column(
         children: [
-          Container(
-            height: 24,
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: Row(
-              children: [
-                Icon(Icons.expand_more, size: 14, color: colorScheme.onSurface),
-                const Spacer(),
-                Icon(Icons.more_vert, size: 12, color: colorScheme.onSurface),
-              ],
-            ),
-          ),
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Container(
-                    height: 48,
-                    width: 48,
-                    decoration: BoxDecoration(
-                      color: colorScheme.primaryContainer,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Icon(
-                      Icons.music_note,
-                      size: 24,
-                      color: colorScheme.onPrimaryContainer,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Container(
-                    height: 4,
-                    width: 40,
-                    decoration: BoxDecoration(
-                      color: colorScheme.onSurface,
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                  const SizedBox(height: 3),
-                  Container(
-                    height: 3,
-                    width: 24,
-                    decoration: BoxDecoration(
-                      color: colorScheme.onSurfaceVariant.withValues(
-                        alpha: 0.6,
-                      ),
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 6,
-                    vertical: 2,
-                  ),
-                  decoration: BoxDecoration(
-                    color: colorScheme.surfaceContainerHigh,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(Icons.favorite, size: 8, color: colorScheme.primary),
-                      const SizedBox(width: 4),
-                      Icon(
-                        Icons.subtitles,
-                        size: 8,
-                        color: colorScheme.onSurface,
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 4),
-          Container(
-            height: 16,
-            color: colorScheme.surfaceContainer,
-            child: Center(
-              child: Container(
-                height: 2,
-                width: 20,
+          Row(
+            children: [
+              Container(
+                width: 28,
+                height: 28,
                 decoration: BoxDecoration(
-                  color: colorScheme.onSurfaceVariant,
-                  borderRadius: BorderRadius.circular(1),
+                  color: Colors.grey[800],
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: const Icon(
+                  Icons.music_note,
+                  color: Colors.white,
+                  size: 16,
                 ),
               ),
-            ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: const [
+                    Text(
+                      'YouTube Music',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
+                      ),
+                    ),
+                    Text(
+                      '五键操作栏',
+                      style: TextStyle(color: Colors.white70, fontSize: 10),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const Spacer(),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              const Icon(Icons.skip_previous, size: 18, color: Colors.white),
+              Container(
+                width: 22,
+                height: 22,
+                decoration: const BoxDecoration(
+                  color: Colors.white,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.play_arrow,
+                  size: 14,
+                  color: Colors.black,
+                ),
+              ),
+              const Icon(Icons.skip_next, size: 18, color: Colors.white),
+            ],
           ),
         ],
       ),

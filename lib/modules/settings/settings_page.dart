@@ -162,6 +162,7 @@ class _SettingsPageState extends State<SettingsPage>
   bool _useCoverSeedColor = false;
   // Apple Music 风格播放页开关（默认关闭，开启后用 AM 风格 FullPlayer）
   bool _useAmStylePlayer = false;
+  bool _useYtStylePlayer = false;
   bool _useGaussianBlur = true;
   bool _useArtistPhotoBackground = false;
   int _artistPhotoInterval = 15;
@@ -5830,7 +5831,6 @@ class _SettingsPageState extends State<SettingsPage>
   // ─────────────────────────────────────────────────────────────────────
 
   Widget _buildStyleCards(ColorScheme colorScheme) {
-    final currentStyle = context.watch<ThemeProvider>().playerStyle;
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
@@ -5838,35 +5838,47 @@ class _SettingsPageState extends State<SettingsPage>
           colorScheme: colorScheme,
           title: 'MD3Music',
           subtitle: 'Material 3 风格',
-          isSelected: currentStyle == PlayerStyle.md3,
+          isSelected: !_useAmStylePlayer && !_useYtStylePlayer,
           onTap: () {
             AppHaptics.lightImpact(HapticCategory.control);
+            setState(() {
+              _useAmStylePlayer = false;
+              _useYtStylePlayer = false;
+            });
             context.read<ThemeProvider>().setPlayerStyle(PlayerStyle.md3);
           },
           preview: _SettingsMd3StylePreview(colorScheme: colorScheme),
         ),
-        const Gap(AppSpacing.md),
+        const Gap(AppSpacing.lg),
         _buildStyleCard(
           colorScheme: colorScheme,
           title: 'Apple Music',
           subtitle: '模糊封面 + 逐字歌词',
-          isSelected: currentStyle == PlayerStyle.appleMusic,
+          isSelected: _useAmStylePlayer,
           onTap: () {
             AppHaptics.lightImpact(HapticCategory.control);
+            setState(() {
+              _useAmStylePlayer = true;
+              _useYtStylePlayer = false;
+            });
             context.read<ThemeProvider>().setPlayerStyle(
               PlayerStyle.appleMusic,
             );
           },
           preview: _SettingsAmStylePreview(colorScheme: colorScheme),
         ),
-        const Gap(AppSpacing.md),
+        const Gap(AppSpacing.lg),
         _buildStyleCard(
           colorScheme: colorScheme,
           title: 'YouTube Music',
-          subtitle: '队列与歌词抽屉',
-          isSelected: currentStyle == PlayerStyle.ytMusic,
+          subtitle: '五键操作栏 · 胶囊按钮 · 抽屉队列',
+          isSelected: _useYtStylePlayer,
           onTap: () {
             AppHaptics.lightImpact(HapticCategory.control);
+            setState(() {
+              _useAmStylePlayer = false;
+              _useYtStylePlayer = true;
+            });
             context.read<ThemeProvider>().setPlayerStyle(PlayerStyle.ytMusic);
           },
           preview: _SettingsYtStylePreview(colorScheme: colorScheme),
@@ -6936,113 +6948,80 @@ class _FlymeLyricAdvanceTileState extends State<_FlymeLyricAdvanceTile> {
 }
 
 class _SettingsYtStylePreview extends StatelessWidget {
-  final ColorScheme colorScheme;
-
   const _SettingsYtStylePreview({required this.colorScheme});
+  final ColorScheme colorScheme;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      color: colorScheme.surfaceContainerLowest,
+      height: 100,
+      decoration: BoxDecoration(
+        color: Colors.black,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      padding: const EdgeInsets.all(12),
       child: Column(
         children: [
-          Container(
-            height: 24,
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: Row(
-              children: [
-                Icon(Icons.expand_more, size: 14, color: colorScheme.onSurface),
-                const Spacer(),
-                Icon(Icons.more_vert, size: 12, color: colorScheme.onSurface),
-              ],
-            ),
-          ),
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Container(
-                    height: 48,
-                    width: 48,
-                    decoration: BoxDecoration(
-                      color: colorScheme.primaryContainer,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Icon(
-                      Icons.music_note,
-                      size: 24,
-                      color: colorScheme.onPrimaryContainer,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Container(
-                    height: 4,
-                    width: 40,
-                    decoration: BoxDecoration(
-                      color: colorScheme.onSurface,
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                  const SizedBox(height: 3),
-                  Container(
-                    height: 3,
-                    width: 24,
-                    decoration: BoxDecoration(
-                      color: colorScheme.onSurfaceVariant.withValues(
-                        alpha: 0.6,
-                      ),
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 6,
-                    vertical: 2,
-                  ),
-                  decoration: BoxDecoration(
-                    color: colorScheme.surfaceContainerHigh,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(Icons.favorite, size: 8, color: colorScheme.primary),
-                      const SizedBox(width: 4),
-                      Icon(
-                        Icons.subtitles,
-                        size: 8,
-                        color: colorScheme.onSurface,
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 4),
-          Container(
-            height: 16,
-            color: colorScheme.surfaceContainer,
-            child: Center(
-              child: Container(
-                height: 2,
-                width: 20,
+          Row(
+            children: [
+              Container(
+                width: 32,
+                height: 32,
                 decoration: BoxDecoration(
-                  color: colorScheme.onSurfaceVariant,
-                  borderRadius: BorderRadius.circular(1),
+                  color: Colors.grey[800],
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: const Icon(
+                  Icons.music_note,
+                  color: Colors.white,
+                  size: 18,
                 ),
               ),
-            ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: const [
+                    Text(
+                      'YouTube Music',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                      ),
+                    ),
+                    SizedBox(height: 2),
+                    Text(
+                      '五键栏 · 胶囊组 · 抽屉队列',
+                      style: TextStyle(color: Colors.white70, fontSize: 11),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const Spacer(),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              const Icon(Icons.shuffle, size: 16, color: Colors.white70),
+              const Icon(Icons.skip_previous, size: 20, color: Colors.white),
+              Container(
+                width: 24,
+                height: 24,
+                decoration: const BoxDecoration(
+                  color: Colors.white,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.play_arrow,
+                  size: 16,
+                  color: Colors.black,
+                ),
+              ),
+              const Icon(Icons.skip_next, size: 20, color: Colors.white),
+              const Icon(Icons.repeat, size: 16, color: Colors.white70),
+            ],
           ),
         ],
       ),
