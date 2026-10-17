@@ -804,7 +804,11 @@ class _YtLyricsSheetState extends State<_YtLyricsSheet> {
     final currentSong = player.currentSong ?? widget.song;
 
     if (_loadedSongId != currentSong.id) {
-      _loadLyricsFor(currentSong);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _loadedSongId != currentSong.id) {
+          _loadLyricsFor(currentSong);
+        }
+      });
     }
 
     final screenHeight = MediaQuery.of(context).size.height;
