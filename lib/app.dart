@@ -748,11 +748,9 @@ class _AppViewState extends State<_AppView> {
             pageBuilder: (_, _, _) => UserAgreementPage(
               isFirstLaunch: true,
               onAgreed: () {
-                // 用 pushReplacement 替换协议页，next 路由由 isFirstLaunch 决定
-                // 避免新协议栈里残留协议页（用户按返回能跳过）
-                appNavigatorKey.currentState?.pushReplacementNamed(
-                  widget.showOnboarding ? '/onboarding' : '/',
-                );
+                // 用 pushReplacement 替换协议页，首次进入协议页点击"下一步"进入新手向导
+                // 引导页完成后统一落地到主页
+                appNavigatorKey.currentState?.pushReplacementNamed('/onboarding');
               },
             ),
             transitionsBuilder: (_, animation, _, child) {

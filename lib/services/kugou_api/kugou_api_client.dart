@@ -15,6 +15,7 @@ import 'kugou_models.dart';
 import 'lyric_lookup_result.dart';
 import 'comment_send_result.dart';
 import '../local_server_lifecycle.dart';
+import '../../core/services/diagnostic_logger.dart';
 
 /// 一次广告领取（/youth/vip → /youth/v1/ad/play_report）的判定结果。
 enum AdClaimOutcome {
@@ -504,20 +505,22 @@ class KugouApiClient {
     }
   }
 
-  static const FlutterSecureStorage _secure = FlutterSecureStorage();
+  static const FlutterSecureStorage _secure = FlutterSecureStorage(
+    aOptions: AndroidOptions(resetOnError: true),
+  );
 
   static Future<void> _writeSecure(
     SharedPreferences prefs,
     String key,
     String value,
   ) async {
+    // 始终先写入 SharedPreferences 作为绝对可靠的持久化兜底（绝不因 Keystore 异常丢失凭证）
+    await prefs.setString(key, value);
     try {
       await _secure.write(key: key, value: value);
-      // 加密写入成功后，清除 prefs 中的明文副本（避免明文残留）
-      await prefs.remove(key);
     } catch (e) {
-      print('⚠️ [Auth] secure.write 失败，降级到 SharedPreferences: $e');
-      await prefs.setString(key, value);
+      DiagnosticLogger.instance.w('FlutterSecureStorage.write 失败，已保留 SharedPreferences 降级: $e');
+      print('⚠️ [Auth] secure.write 失败，已保留 SharedPreferences: $e');
     }
   }
 
@@ -529,6 +532,7 @@ class KugouApiClient {
       final val = await _secure.read(key: key);
       if (val != null && val.isNotEmpty) return val;
     } catch (e) {
+      DiagnosticLogger.instance.w('FlutterSecureStorage.read 失败，降级到 SharedPreferences: $e');
       print('⚠️ [Auth] secure.read 失败，降级到 SharedPreferences: $e');
     }
     return prefs.getString(key);
@@ -647,9 +651,6 @@ class KugouApiClient {
 
     try {
       final prefs = await SharedPreferences.getInstance();
-      // 敏感凭证（token/vip_token）写入加密存储（Keystore），
-      // userid/账号列表等非机密数据仍用 prefs（用于定位与展示）
-      const secure = FlutterSecureStorage();
 
       // 仅清除旧版本全局键（一次性迁移清理，不碰其他账号的按用户键）
       await prefs.remove('kugou_token');
@@ -685,14 +686,19 @@ class KugouApiClient {
       } else {
         _accounts.add(KugouAccount(userid: userid, loginTime: now));
       }
-      await prefs.setString(_kAccountsKey, KugouAccount.encodeList(_accounts));
+      try {
+        await prefs.setString(_kAccountsKey, KugouAccount.encodeList(_accounts));
+      } catch (e) {
+        DiagnosticLogger.instance.w('保存账号列表失败 (非致命): $e');
+      }
       // 持久化成功才公布登录状态，避免本次成功、重启却丢失凭证。
       _token = token;
       _userid = userid;
       _vipToken = vipToken;
-    } catch (e) {
-      print('❌ [Auth] 保存登录状态失败: $e');
-      throw StateError('登录凭证保存失败，请重试');
+    } catch (e, st) {
+      DiagnosticLogger.instance.e('保存登录状态失败: $e\n$st');
+      print('❌ [Auth] 保存登录状态失败: $e\n$st');
+      throw StateError('登录凭证保存失败 ($e)，请重试');
     }
   }
 
