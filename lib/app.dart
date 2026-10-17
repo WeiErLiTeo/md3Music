@@ -123,7 +123,7 @@ import 'core/widgets/local_server_down_banner.dart';
 /// 通过全局 [playerExpansion] 限制只对 FullPlayer 生效，
 /// 避免 /search /settings /playlist 等也触发 up-fade。
 class _UpFadeMainRoute<T> extends MaterialPageRoute<T> {
-  _UpFadeMainRoute({required super.builder});
+  _UpFadeMainRoute({required super.builder, super.settings});
 
   @override
   Widget buildTransitions(
@@ -760,7 +760,10 @@ class _AppViewState extends State<_AppView> {
           );
         }
         if (settings.name == '/') {
-          return _UpFadeMainRoute<void>(builder: (_) => const _MainLayout());
+          return _UpFadeMainRoute<void>(
+            builder: (_) => const _MainLayout(),
+            settings: settings,
+          );
         }
         if (settings.name == '/playlist') {
           final playlist = settings.arguments as Playlist;

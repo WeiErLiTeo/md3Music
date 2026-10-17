@@ -419,12 +419,12 @@ Future<void> requestPermissions() async {
   if (!await _isFirstLaunchFlowFinished()) return;
 
   // Android 13+ 通知权限
-  if (await Permission.notification.isDenied) {
-    try {
+  try {
+    if (await Permission.notification.isDenied) {
       await Permission.notification.request();
-    } catch (e) {
-      print('Notification permission request failed: $e');
     }
+  } catch (e) {
+    print('Notification permission request failed: $e');
   }
 }
 

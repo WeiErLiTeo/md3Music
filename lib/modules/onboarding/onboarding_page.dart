@@ -1,14 +1,16 @@
+import 'dart:async' show unawaited;
 import 'dart:ui' show lerpDouble;
 
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../core/services/diagnostic_logger.dart';
 import '../../core/theme/app_dimens.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/motion_constants.dart';
 import '../../core/utils/app_haptics.dart';
-import '../../main.dart' show requestPermissions;
+import '../../main.dart' show appNavigatorKey, requestPermissions;
 import '../../providers/theme_provider.dart';
 import 'onboarding_content.dart';
 import '../player/car_mode_panel.dart';
@@ -78,25 +80,70 @@ class _OnboardingPageState extends State<OnboardingPage>
     );
   }
 
-  Future<void> _completeOnboarding() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(kOnboardingCompletedKey, true);
-    await prefs.setBool('user_agreement_accepted_v1', true);
-    // 首启流程到此走完，才轮到请求通知权限（不 await：系统授权窗不能挡住跳转）
-    // ignore: discarded_futures
-    requestPermissions();
+  bool _completing = false;
 
-    // 将播放器风格选择应用到 ThemeProvider
-    if (mounted) {
-      final themeProvider = context.read<ThemeProvider>();
-      await themeProvider.setPlayerStyle(_selectedPlayerStyle);
+  Future<void> _completeOnboarding() async {
+    if (_completing) return;
+    _completing = true;
+    AppHaptics.lightImpact(HapticCategory.control);
+
+    DiagnosticLogger.instance.i('[Onboarding] 用户点击开始使用，持久化标记并导航至主页');
+
+    // 1. 异步持久化标记（绝不因偏好读写卡死主线程或阻止跳转）
+    unawaited(() async {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setBool(kOnboardingCompletedKey, true);
+        await prefs.setBool('user_agreement_accepted_v1', true);
+      } catch (e) {
+        DiagnosticLogger.instance.e('[Onboarding] 保存完成标记失败: $e');
+      }
+    }());
+
+    // 2. 权限请求异步触发
+    try {
+      unawaited(requestPermissions());
+    } catch (_) {}
+
+    // 3. 提取当前风格与 ThemeProvider（跳转前读取 context，跳转后异步应用，避免 notifyListeners 导致转场前 rebuild/unmount）
+    final styleToSet = _selectedPlayerStyle;
+    ThemeProvider? themeProvider;
+    try {
+      if (mounted) {
+        themeProvider = context.read<ThemeProvider>();
+      }
+    } catch (_) {}
+
+    // 4. 立即导航进入主应用
+    try {
+      if (widget.isReview) {
+        final nav = (mounted ? Navigator.of(context) : null) ?? appNavigatorKey.currentState;
+        nav?.pop();
+      } else {
+        final nav = appNavigatorKey.currentState ?? (mounted ? Navigator.of(context) : null);
+        if (nav != null) {
+          nav.pushNamedAndRemoveUntil('/', (route) => false);
+        } else {
+          appNavigatorKey.currentState?.pushReplacementNamed('/');
+        }
+      }
+    } catch (e, st) {
+      DiagnosticLogger.instance.e('[Onboarding] 导航跳转失败: $e\n$st');
+      try {
+        appNavigatorKey.currentState?.pushReplacementNamed('/');
+      } catch (_) {}
     }
 
-    if (!mounted) return;
-    if (widget.isReview) {
-      Navigator.of(context).pop();
-    } else {
-      Navigator.of(context).pushNamedAndRemoveUntil('/', (route) => false);
+    // 5. 导航发起后再异步更新播放器风格
+    final tp = themeProvider;
+    if (tp != null) {
+      unawaited(() async {
+        try {
+          await tp.setPlayerStyle(styleToSet);
+        } catch (e) {
+          DiagnosticLogger.instance.e('[Onboarding] 设置播放器风格失败: $e');
+        }
+      }());
     }
   }
 
