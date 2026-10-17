@@ -504,12 +504,50 @@ class KugouApiClient {
     }
   }
 
+  static const FlutterSecureStorage _secure = FlutterSecureStorage();
+
+  static Future<void> _writeSecure(
+    SharedPreferences prefs,
+    String key,
+    String value,
+  ) async {
+    try {
+      await _secure.write(key: key, value: value);
+      // 加密写入成功后，清除 prefs 中的明文副本（避免明文残留）
+      await prefs.remove(key);
+    } catch (e) {
+      print('⚠️ [Auth] secure.write 失败，降级到 SharedPreferences: $e');
+      await prefs.setString(key, value);
+    }
+  }
+
+  static Future<String?> _readSecure(
+    SharedPreferences prefs,
+    String key,
+  ) async {
+    try {
+      final val = await _secure.read(key: key);
+      if (val != null && val.isNotEmpty) return val;
+    } catch (e) {
+      print('⚠️ [Auth] secure.read 失败，降级到 SharedPreferences: $e');
+    }
+    return prefs.getString(key);
+  }
+
+  static Future<void> _deleteSecure(
+    SharedPreferences prefs,
+    String key,
+  ) async {
+    try {
+      await _secure.delete(key: key);
+    } catch (_) {}
+    await prefs.remove(key);
+  }
+
   Future<void> _initFromStorage() async {
     _initCompleter = Completer<void>();
     try {
       final prefs = await SharedPreferences.getInstance();
-      // 敏感凭证（token/vip_token）从加密存储（Android Keystore）读取
-      const secure = FlutterSecureStorage();
 
       // 读取已保存的账号列表（多账号）
       _accounts
@@ -522,29 +560,21 @@ class KugouApiClient {
       if (currentUserid != null && currentUserid.isNotEmpty) {
         final userIdKey = 'kugou_userid_$currentUserid';
 
-        // token/vip_token 从加密存储读取；userid 仍用 prefs（非机密、用于定位账号）
-        _token = await secure.read(key: 'kugou_token_$currentUserid');
+        // token/vip_token 从加密存储读取（带 prefs 降级兜底）；userid 仍用 prefs（非机密、用于定位账号）
+        _token = await _readSecure(prefs, 'kugou_token_$currentUserid');
         _userid = prefs.getString(userIdKey);
-        _vipToken = await secure.read(key: 'kugou_vip_token_$currentUserid');
+        _vipToken = await _readSecure(prefs, 'kugou_vip_token_$currentUserid');
 
-        // 兼容旧版本明文存储：加密存储无值但存在明文 token → 迁移并删除明文
+        // 兼容旧版本明文存储：加密存储无值但存在明文 token → 迁移
         final legacyToken = prefs.getString('kugou_token_$currentUserid');
         if (_token == null && legacyToken != null) {
           _token = legacyToken;
-          await secure.write(
-            key: 'kugou_token_$currentUserid',
-            value: legacyToken,
-          );
-          await prefs.remove('kugou_token_$currentUserid');
+          await _writeSecure(prefs, 'kugou_token_$currentUserid', legacyToken);
         }
         final legacyVip = prefs.getString('kugou_vip_token_$currentUserid');
         if (_vipToken == null && legacyVip != null) {
           _vipToken = legacyVip;
-          await secure.write(
-            key: 'kugou_vip_token_$currentUserid',
-            value: legacyVip,
-          );
-          await prefs.remove('kugou_vip_token_$currentUserid');
+          await _writeSecure(prefs, 'kugou_vip_token_$currentUserid', legacyVip);
         }
 
         if (_token != null && _userid != null) {
@@ -563,9 +593,9 @@ class KugouApiClient {
 
         if (_token != null && _userid != null && _userid!.isNotEmpty) {
           final uid = _userid!;
-          await secure.write(key: 'kugou_token_$uid', value: _token!);
+          await _writeSecure(prefs, 'kugou_token_$uid', _token!);
           if (_vipToken != null && _vipToken!.isNotEmpty) {
-            await secure.write(key: 'kugou_vip_token_$uid', value: _vipToken!);
+            await _writeSecure(prefs, 'kugou_vip_token_$uid', _vipToken!);
           }
           await prefs.setString('kugou_userid_$uid', uid);
           await prefs.setString('kugou_current_userid', uid);
@@ -631,16 +661,13 @@ class KugouApiClient {
       final userIdKey = 'kugou_userid_$userid';
       final currentUserKey = 'kugou_current_userid';
 
-      // token / vip_token → 加密存储；vipToken 为空时清除旧值
-      await secure.write(key: 'kugou_token_$userid', value: token);
+      // token / vip_token → 加密存储（带 prefs 降级兜底）；vipToken 为空时清除旧值
+      await _writeSecure(prefs, 'kugou_token_$userid', token);
       if (vipToken != null && vipToken.isNotEmpty) {
-        await secure.write(key: 'kugou_vip_token_$userid', value: vipToken);
+        await _writeSecure(prefs, 'kugou_vip_token_$userid', vipToken);
       } else {
-        await secure.delete(key: 'kugou_vip_token_$userid');
+        await _deleteSecure(prefs, 'kugou_vip_token_$userid');
       }
-      // 清除该账号历史明文 token（旧版本迁移遗留）
-      await prefs.remove('kugou_token_$userid');
-      await prefs.remove('kugou_vip_token_$userid');
 
       await prefs.setString(userIdKey, userid);
 
@@ -675,17 +702,15 @@ class KugouApiClient {
     await _ensureInitialized();
     try {
       final prefs = await SharedPreferences.getInstance();
-      // 凭证从加密存储读取
-      const secure = FlutterSecureStorage();
       final userIdKey = 'kugou_userid_$userid';
 
-      final token = await secure.read(key: 'kugou_token_$userid');
+      final token = await _readSecure(prefs, 'kugou_token_$userid');
       final uid = prefs.getString(userIdKey);
       if (token == null || uid == null || uid.isEmpty) return false;
 
       _token = token;
       _userid = uid;
-      _vipToken = await secure.read(key: 'kugou_vip_token_$userid');
+      _vipToken = await _readSecure(prefs, 'kugou_vip_token_$userid');
 
       await prefs.setString('kugou_current_userid', uid);
       return true;
@@ -743,13 +768,10 @@ class KugouApiClient {
     await _ensureInitialized();
     try {
       final prefs = await SharedPreferences.getInstance();
-      const secure = FlutterSecureStorage();
       // 清除加密存储中的凭证 + prefs 中的 userid 定位键与明文遗留
-      await secure.delete(key: 'kugou_token_$userid');
-      await secure.delete(key: 'kugou_vip_token_$userid');
-      await prefs.remove('kugou_token_$userid');
+      await _deleteSecure(prefs, 'kugou_token_$userid');
+      await _deleteSecure(prefs, 'kugou_vip_token_$userid');
       await prefs.remove('kugou_userid_$userid');
-      await prefs.remove('kugou_vip_token_$userid');
 
       _accounts.removeWhere((a) => a.userid == userid);
       await prefs.setString(_kAccountsKey, KugouAccount.encodeList(_accounts));
@@ -775,15 +797,12 @@ class KugouApiClient {
 
     try {
       final prefs = await SharedPreferences.getInstance();
-      const secure = FlutterSecureStorage();
 
       // 清除当前用户的加密凭证 + prefs 定位键（加密存储无旧全局键，无需清除）
       if (oldUserid != null) {
-        await secure.delete(key: 'kugou_token_$oldUserid');
-        await secure.delete(key: 'kugou_vip_token_$oldUserid');
-        await prefs.remove('kugou_token_$oldUserid');
+        await _deleteSecure(prefs, 'kugou_token_$oldUserid');
+        await _deleteSecure(prefs, 'kugou_vip_token_$oldUserid');
         await prefs.remove('kugou_userid_$oldUserid');
-        await prefs.remove('kugou_vip_token_$oldUserid');
       }
 
       // 清除全局键（兼容旧版本，新版本加密存储无这些键）

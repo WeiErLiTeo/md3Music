@@ -81,6 +81,7 @@ class _OnboardingPageState extends State<OnboardingPage>
   Future<void> _completeOnboarding() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(kOnboardingCompletedKey, true);
+    await prefs.setBool('user_agreement_accepted_v1', true);
     // 首启流程到此走完，才轮到请求通知权限（不 await：系统授权窗不能挡住跳转）
     // ignore: discarded_futures
     requestPermissions();

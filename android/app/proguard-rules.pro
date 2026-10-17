@@ -122,3 +122,24 @@
 #    这类「只在回调里出现」的内部类，历史上踩过 ClassNotFoundException。 ──
 -keep class com.md3music.md3music.spectrum.** { *; }
 -keep class com.md3music.md3music.SpectrumPlugin$* { *; }
+
+# ── Flutter Plugins & Embedding ──
+-keep class io.flutter.app.** { *; }
+-keep class io.flutter.plugin.** { *; }
+-keep class io.flutter.util.** { *; }
+-keep class io.flutter.view.** { *; }
+-keep class io.flutter.embedding.** { *; }
+
+# ── shared_preferences ──
+-keep class io.flutter.plugins.sharedpreferences.** { *; }
+-keepclassmembers class io.flutter.plugins.sharedpreferences.** { *; }
+-dontwarn io.flutter.plugins.sharedpreferences.**
+
+# ── flutter_secure_storage & crypto ──
+-keep class com.it_nomads.fluttersecurestorage.** { *; }
+-dontwarn com.it_nomads.fluttersecurestorage.**
+-keep class androidx.security.crypto.** { *; }
+-dontwarn androidx.security.crypto.**
+-keep class com.google.crypto.tink.** { *; }
+-dontwarn com.google.crypto.tink.**
+

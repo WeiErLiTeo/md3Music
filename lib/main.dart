@@ -271,7 +271,11 @@ Future<(bool, bool, bool)> runBootstrap() async {
   markStartup('onboarding_state_ready');
 
   // 检测是否需要展示用户协议（首次启动）
-  final needsUserAgreement = !(await isUserAgreementAccepted());
+  SharedPreferences? loadedPrefs;
+  try {
+    loadedPrefs = await prefsFuture;
+  } catch (_) {}
+  final needsUserAgreement = !(await isUserAgreementAccepted(loadedPrefs));
   markStartup('agreement_state_ready');
 
   // 启动后静默检查 GitHub Release：发现新版本仅 toast 提醒。
@@ -431,7 +435,7 @@ Future<bool> _isFirstLaunchFlowFinished() async {
   try {
     final prefs = await SharedPreferences.getInstance();
     final onboardingDone = prefs.getBool(kOnboardingCompletedKey) ?? false;
-    return onboardingDone && await isUserAgreementAccepted();
+    return onboardingDone && await isUserAgreementAccepted(prefs);
   } catch (_) {
     return true;
   }

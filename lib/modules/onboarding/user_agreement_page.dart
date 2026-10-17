@@ -8,6 +8,7 @@ import 'package:md3music/providers/theme_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../player/car_mode_panel.dart';
+import 'onboarding_content.dart' show kOnboardingCompletedKey;
 
 /// 用户协议页（首次启动展示）。
 ///
@@ -342,11 +343,25 @@ class _Clause extends StatelessWidget {
 }
 
 /// 读取"用户协议"是否已被同意。
-Future<bool> isUserAgreementAccepted() async {
+///
+/// [prefs] 可选传入已预取的 [SharedPreferences] 实例，避免重复 await。
+Future<bool> isUserAgreementAccepted([SharedPreferences? prefs]) async {
   try {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_UserAgreementPageState._kAcceptedKey) ?? false;
-  } catch (_) {
+    final p = prefs ?? await SharedPreferences.getInstance();
+    // 1. 若已记录同意协议，直接返回已同意
+    if (p.getBool(_UserAgreementPageState._kAcceptedKey) ?? false) {
+      return true;
+    }
+    // 2. 若老用户已经完成过新手引导，自动视为已同意，避免覆盖安装后反复弹窗打扰
+    if (p.getBool(kOnboardingCompletedKey) ?? false) {
+      try {
+        await p.setBool(_UserAgreementPageState._kAcceptedKey, true);
+      } catch (_) {}
+      return true;
+    }
     return false;
+  } catch (_) {
+    // 读偏好异常时安全兜底为 true，绝不打扰用户或造成死循环弹窗
+    return true;
   }
 }
