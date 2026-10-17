@@ -331,8 +331,11 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
   }
 
   double _queueDragDistance = 0.0;
+  bool _isQueueDrawerOpen = false;
 
   void _showQueueDrawer(BuildContext context) {
+    if (_isQueueDrawerOpen) return;
+    _isQueueDrawerOpen = true;
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -430,7 +433,9 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
           ),
         );
       },
-    );
+    ).whenComplete(() {
+      _isQueueDrawerOpen = false;
+    });
   }
 
 
@@ -712,14 +717,8 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
                           child: ValueListenableBuilder<Duration>(
                             valueListenable: playerProvider.positionNotifier,
                             builder: (context, position, _) {
-                              if (_optimisticSeekPosition != null) {
-                                final diff = (position - _optimisticSeekPosition!).inMilliseconds.abs();
-                                if (diff < 300) {
-                                  _optimisticSeekPosition = null;
-                                  _seekTimer?.cancel();
-                                }
-                              }
-                              final displayPos = _optimisticSeekPosition ?? position;
+                              final optimistic = _optimisticSeekPosition;
+                              final displayPos = optimistic ?? position;
                               return PlayerSeekBar(
                                 position: displayPos,
                                 duration: playerProvider.duration ?? Duration.zero,
@@ -913,6 +912,7 @@ class _YtLyricsSheetState extends State<_YtLyricsSheet> {
   bool _loading = true;
   List<LyricLine> _parsedLines = const [];
   String? _loadedSongId;
+  String? _fetchingSongId;
 
   @override
   void initState() {
@@ -921,7 +921,8 @@ class _YtLyricsSheetState extends State<_YtLyricsSheet> {
   }
 
   Future<void> _loadLyricsFor(Song song) async {
-    if (_loadedSongId == song.id) return;
+    if (_loadedSongId == song.id || _fetchingSongId == song.id) return;
+    _fetchingSongId = song.id;
     _loadedSongId = song.id;
 
     setState(() {
@@ -992,18 +993,22 @@ class _YtLyricsSheetState extends State<_YtLyricsSheet> {
   }
 
   @override
-  Widget build(BuildContext context) {
-    final player = context.watch<PlayerProvider>();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final player = context.read<PlayerProvider>();
     final currentSong = player.currentSong ?? widget.song;
-
-    if (_loadedSongId != currentSong.id) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && _loadedSongId != currentSong.id) {
+    if (_loadedSongId != currentSong.id && _fetchingSongId != currentSong.id) {
+      scheduleMicrotask(() {
+        if (mounted && _loadedSongId != currentSong.id && _fetchingSongId != currentSong.id) {
           _loadLyricsFor(currentSong);
         }
       });
     }
+  }
 
+  @override
+  Widget build(BuildContext context) {
+    final player = context.watch<PlayerProvider>();
     final screenHeight = MediaQuery.of(context).size.height;
 
     return Container(
