@@ -451,7 +451,11 @@ void main() {
   });
 
   group('强调波浪 - 字尾尾巴（v8）', () {
-    test('字唱完后波浪继续推进不被截断，走完才 idle', () {
+    test('字唱完后波浪继续推进不被截断，走完才 idle', () async {
+      // 效果默认关闭；验证辉光状态机时显式开启，并在结束后恢复默认。
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      addTearDown(() => LyricPreferences.instance.reset());
+      await LyricPreferences.instance.setUseGlowEffect(true);
       // 双字强调字 '命运'（时长 2000ms）：错位启动使第二个字符波浪
       // 比字尾晚 400ms 结束，字切换后应继续推进（尾巴）直至走完。
       const line2 = LyricLine(
@@ -655,7 +659,9 @@ void main() {
       return [for (final y in ys) byY[y]!];
     }
 
-    test('绘制分组 == 计划分组（贪心残留会被这条抓住）', () {
+    test('绘制分组 == 计划分组（贪心残留会被这条抓住）', () async {
+      // 不依赖用户默认值，明确验证开启平衡换行后的分组。
+      await LyricPreferences.instance.setLineBalance(true);
       const fontSize = 15.0;
       const maxWidth = 55.0;
       final line = sevenChars();
