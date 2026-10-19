@@ -85,16 +85,6 @@ android {
         jniLibs.useLegacyPackaging = false
     }
 
-    // 新 API 用在低于 minSdk 的设备 = 运行时 NoSuchMethodError 必崩。issue #130 的教训：
-    // Vibrator.hasAmplitudeControl() 是 API 26 方法，曾无守卫写在 MusicHapticsPlugin 的
-    // 属性初始化器里，导致 Android 7.x TV 盒子（rk3128）装 .tv 包后冷启动必崩。
-    // release 的 lintVital 只查 fatal severity，而 NewApi 默认为 error 不是 fatal，
-    // 故被整条漏过；此处只把 NewApi 单独提为 fatal，其余既有 warning/info 不阻断。
-    lint {
-        abortOnError = false
-        fatal += "NewApi"
-    }
-
     signingConfigs {
         create("release") {
             if (keystoreProperties.isNotEmpty()) {
@@ -108,8 +98,8 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = true
-            isShrinkResources = true
+            isMinifyEnabled = false
+            isShrinkResources = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

@@ -11,6 +11,7 @@ import '../../providers/car_mode_provider.dart';
 import '../../utils/landscape_immersive.dart';
 import 'full_player.dart';
 import 'full_player_am.dart';
+import 'full_player_yt.dart';
 import 'player_cover_morph.dart';
 import 'player_morph_scene.dart';
 import 'player_panel_frame.dart';
@@ -215,9 +216,13 @@ DraggablePlayerRoute<void> fullPlayerRoute(
   double? screenHeight,
   double? dragOriginBottom,
 }) {
-  final useAm = context.read<ThemeProvider>().useAmStylePlayer;
   return DraggablePlayerRoute<void>(
-    builder: (_) => useAm ? const AmStyleFullPlayer() : const FullPlayer(),
+    builder: (_) {
+      final style = context.read<ThemeProvider>().playerStyle;
+      if (style == PlayerStyle.ytMusic) return const FullPlayerYt();
+      if (style == PlayerStyle.appleMusic) return const AmStyleFullPlayer();
+      return const FullPlayer();
+    },
     scene: scene,
     dragOriginTop: dragOriginTop,
     screenHeight: screenHeight,

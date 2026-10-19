@@ -10,6 +10,8 @@ import '../core/services/custom_font_loader.dart';
 import '../core/theme/app_theme.dart';
 import '../data/repositories/settings_repository.dart';
 
+enum PlayerStyle { md3, appleMusic, ytMusic }
+
 class ThemeProvider extends ChangeNotifier {
   static const String _key = 'theme_mode';
   static const String _dynamicKey = 'use_dynamic_color';
@@ -53,6 +55,7 @@ class ThemeProvider extends ChangeNotifier {
   bool _useCoverSeedColor = false;
   Color? _coverSeedColor;
   bool _useAmStylePlayer = false;
+  PlayerStyle _playerStyle = PlayerStyle.md3;
   Color? _manualSeedColor;
   bool _useOledBlack = false;
   double _displayScale = kDefaultDisplayScale;
@@ -94,7 +97,9 @@ class ThemeProvider extends ChangeNotifier {
   Color? get systemSeedColor => _systemSeedColor;
   bool get useCoverSeedColor => _useCoverSeedColor;
   Color? get coverSeedColor => _coverSeedColor;
-  bool get useAmStylePlayer => _useAmStylePlayer;
+  bool get useAmStylePlayer => _playerStyle == PlayerStyle.appleMusic;
+  bool get useYtStylePlayer => _playerStyle == PlayerStyle.ytMusic;
+  PlayerStyle get playerStyle => _playerStyle;
   Color? get manualSeedColor => _manualSeedColor;
   bool get useOledBlack => _useOledBlack;
   double get displayScale => _displayScale;
@@ -316,23 +321,43 @@ class ThemeProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 加载「Apple Music 风格播放页」开关持久化值，默认关闭。
+  /// 加载「播放器风格」持久化值，默认 MD3 风格。
   Future<void> _loadAmStylePlayer() async {
     final prefs = await SharedPreferences.getInstance();
-    _useAmStylePlayer = prefs.getBool(_amStylePlayerKey) ?? false;
+    final styleStr = prefs.getString('player_style');
+    if (styleStr != null) {
+      _playerStyle = PlayerStyle.values.firstWhere(
+        (e) => e.name == styleStr,
+        orElse: () => PlayerStyle.md3,
+      );
+    } else {
+      _useAmStylePlayer = prefs.getBool(_amStylePlayerKey) ?? false;
+      _playerStyle = _useAmStylePlayer
+          ? PlayerStyle.appleMusic
+          : PlayerStyle.md3;
+    }
     notifyListeners();
   }
 
-  /// 切换「Apple Music 风格播放页」开关。
-  /// - 开启：用 AM 风格 FullPlayer（模糊封面背景 + 弹簧动画 + KRC 逐字歌词）
-  /// - 关闭：用原版 MD3 FullPlayer（标准主题色 + LRC 行级歌词）
-  /// 切换后已打开的 FullPlayer 不会立即换 widget，下次 push 时才走新分支。
+  /// 切换播放器风格（MD3 / Apple Music / YouTube Music）。
+  Future<void> setPlayerStyle(PlayerStyle style) async {
+    if (_playerStyle == style) return;
+    _playerStyle = style;
+    _useAmStylePlayer = style == PlayerStyle.appleMusic;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('player_style', style.name);
+    await prefs.setBool(_amStylePlayerKey, _useAmStylePlayer);
+  }
+
   Future<void> setUseAmStylePlayer(bool enabled) async {
     if (_useAmStylePlayer == enabled) return;
     _useAmStylePlayer = enabled;
+    _playerStyle = enabled ? PlayerStyle.appleMusic : PlayerStyle.md3;
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_amStylePlayerKey, enabled);
+    await prefs.setString('player_style', _playerStyle.name);
   }
 
   /// 加载「歌词双击跳转」开关持久化值，默认关闭。

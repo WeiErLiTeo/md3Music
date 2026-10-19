@@ -168,6 +168,7 @@ class _SettingsPageState extends State<SettingsPage>
   bool _useCoverSeedColor = false;
   // Apple Music 风格播放页开关（默认关闭，开启后用 AM 风格 FullPlayer）
   bool _useAmStylePlayer = false;
+  bool _useYtStylePlayer = false;
   bool _useGaussianBlur = false;
   bool _useArtistPhotoBackground = false;
   int _artistPhotoInterval = 15;
@@ -5934,6 +5935,7 @@ static const Set<String> _kAndroidOnlyAudioLabels = {
   // ─────────────────────────────────────────────────────────────────────
 
   Widget _buildStyleCards(ColorScheme colorScheme) {
+    final currentStyle = context.watch<ThemeProvider>().playerStyle;
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
@@ -5941,11 +5943,14 @@ static const Set<String> _kAndroidOnlyAudioLabels = {
           colorScheme: colorScheme,
           title: 'MD3Music',
           subtitle: 'Material 3 风格',
-          isSelected: !_useAmStylePlayer,
+          isSelected: currentStyle == PlayerStyle.md3,
           onTap: () {
             AppHaptics.lightImpact(HapticCategory.control);
-            setState(() => _useAmStylePlayer = false);
-            context.read<ThemeProvider>().setUseAmStylePlayer(false);
+            setState(() {
+              _useAmStylePlayer = false;
+              _useYtStylePlayer = false;
+            });
+            context.read<ThemeProvider>().setPlayerStyle(PlayerStyle.md3);
           },
           preview: _SettingsMd3StylePreview(colorScheme: colorScheme),
         ),
@@ -5954,13 +5959,34 @@ static const Set<String> _kAndroidOnlyAudioLabels = {
           colorScheme: colorScheme,
           title: 'Apple Music',
           subtitle: '模糊封面 + 逐字歌词',
-          isSelected: _useAmStylePlayer,
+          isSelected: currentStyle == PlayerStyle.appleMusic,
           onTap: () {
             AppHaptics.lightImpact(HapticCategory.control);
-            setState(() => _useAmStylePlayer = true);
-            context.read<ThemeProvider>().setUseAmStylePlayer(true);
+            setState(() {
+              _useAmStylePlayer = true;
+              _useYtStylePlayer = false;
+            });
+            context.read<ThemeProvider>().setPlayerStyle(
+              PlayerStyle.appleMusic,
+            );
           },
           preview: _SettingsAmStylePreview(colorScheme: colorScheme),
+        ),
+        const Gap(AppSpacing.lg),
+        _buildStyleCard(
+          colorScheme: colorScheme,
+          title: 'YouTube Music',
+          subtitle: '五键操作栏 · 胶囊按钮 · 抽屉队列',
+          isSelected: currentStyle == PlayerStyle.ytMusic,
+          onTap: () {
+            AppHaptics.lightImpact(HapticCategory.control);
+            setState(() {
+              _useAmStylePlayer = false;
+              _useYtStylePlayer = true;
+            });
+            context.read<ThemeProvider>().setPlayerStyle(PlayerStyle.ytMusic);
+          },
+          preview: _SettingsYtStylePreview(colorScheme: colorScheme),
         ),
       ],
     );
@@ -7025,3 +7051,151 @@ class _FlymeLyricAdvanceTileState extends State<_FlymeLyricAdvanceTile> {
     );
   }
 }
+
+class _SettingsYtStylePreview extends StatelessWidget {
+  const _SettingsYtStylePreview({required this.colorScheme});
+  final ColorScheme colorScheme;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        color: Color(0xFF0F0F0F),
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Color(0xFF262626),
+            Color(0xFF0F0F0F),
+          ],
+        ),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      child: Column(
+        children: [
+          // 顶栏
+          Row(
+            children: const [
+              Icon(Icons.keyboard_arrow_down, size: 14, color: Colors.white70),
+              Spacer(),
+              Icon(Icons.more_vert, size: 12, color: Colors.white70),
+            ],
+          ),
+          const SizedBox(height: 4),
+          // 封面
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: const Color(0xFF2A2A2A),
+              borderRadius: BorderRadius.circular(6),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.5),
+                  blurRadius: 6,
+                  offset: const Offset(0, 3),
+                ),
+              ],
+            ),
+            child: const Center(
+              child: Icon(
+                Icons.music_note,
+                color: Colors.white70,
+                size: 20,
+              ),
+            ),
+          ),
+          const SizedBox(height: 5),
+          // 歌曲名与歌手
+          Container(
+            height: 4,
+            width: 54,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(height: 3),
+          Container(
+            height: 3,
+            width: 36,
+            decoration: BoxDecoration(
+              color: Colors.white54,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(height: 5),
+          // 胶囊行
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              _buildMiniChip(Icons.favorite_border),
+              const SizedBox(width: 4),
+              _buildMiniChip(Icons.subtitles_outlined),
+              const SizedBox(width: 4),
+              _buildMiniChip(Icons.playlist_add),
+            ],
+          ),
+          const SizedBox(height: 5),
+          // 进度条
+          Container(
+            height: 2,
+            margin: const EdgeInsets.symmetric(horizontal: 4),
+            decoration: BoxDecoration(
+              color: Colors.white24,
+              borderRadius: BorderRadius.circular(1),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 28,
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(1),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Spacer(),
+          // 五键控制行
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              const Icon(Icons.shuffle, size: 10, color: Colors.white54),
+              const Icon(Icons.skip_previous, size: 13, color: Colors.white),
+              Container(
+                width: 18,
+                height: 18,
+                decoration: const BoxDecoration(
+                  color: Colors.white,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.play_arrow,
+                  size: 12,
+                  color: Colors.black,
+                ),
+              ),
+              const Icon(Icons.skip_next, size: 13, color: Colors.white),
+              const Icon(Icons.repeat, size: 10, color: Colors.white54),
+            ],
+          ),
+          const SizedBox(height: 2),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMiniChip(IconData icon) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Icon(icon, size: 8, color: Colors.white70),
+    );
+  }
+}
+
