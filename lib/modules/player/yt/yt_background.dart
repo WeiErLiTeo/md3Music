@@ -62,9 +62,8 @@ class YtBackground extends StatelessWidget {
               if (useArtistPhoto && song.isOnline)
                 ArtistPhotoBackground(hash: song.id),
             ],
-          ),
-        );
-      },
-    );
+          );
+        },
+      );
   }
 }

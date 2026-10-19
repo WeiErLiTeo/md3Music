@@ -367,7 +367,13 @@ class YtMainView extends StatelessWidget {
                       color: Colors.black,
                       size: 38,
                     ),
-              onPressed: () => playerProvider.togglePlay(),
+              onPressed: () {
+                if (playerProvider.isPlaying) {
+                  playerProvider.pause();
+                } else {
+                  playerProvider.resume();
+                }
+              },
             ),
           ),
           IconButton(

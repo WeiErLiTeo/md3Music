@@ -240,7 +240,7 @@ class _FullPlayerYtState extends State<FullPlayerYt>
                             borderRadius: BorderRadius.circular(curRadius),
                             child: SmartArtworkImage(
                               artworkUri: currentSong.artworkUri,
-                              size: curSize.toInt(),
+                              size: curSize,
                             ),
                           ),
                         ),

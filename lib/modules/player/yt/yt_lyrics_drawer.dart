@@ -85,7 +85,13 @@ class YtMiniBar extends StatelessWidget {
                     color: Colors.white,
                     size: 28,
                   ),
-                  onPressed: () => player.togglePlay(),
+                  onPressed: () {
+                    if (player.isPlaying) {
+                      player.pause();
+                    } else {
+                      player.resume();
+                    }
+                  },
                 ),
                 IconButton(
                   icon: const Icon(
@@ -326,31 +332,25 @@ class _YtLyricsDrawerState extends State<YtLyricsDrawer> {
                                     ).createShader(bounds);
                                   },
                                   blendMode: BlendMode.dstIn,
-                                  child: AppleLyricsView(
-                                    lines: _parsedLines,
-                                    currentTimeMs: 0,
-                                    positionListenable: player.positionNotifier,
-                                    isPlaying: player.isPlaying,
-                                    playbackNotReady: player.isPlaybackNotReady,
-                                    forceDarkBackground: true,
-                                    disableVibration: true,
-                                    enableNonPlayingScrollAnimation: true,
-                                    padding: const EdgeInsets.only(
-                                      left: 24,
-                                      right: 24,
-                                      top: 16,
-                                      bottom: 96,
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 24,
                                     ),
-                                    onSeek: (positionMs) {
-                                      player.seek(
-                                        Duration(milliseconds: positionMs),
-                                      );
-                                    },
-                                    onFastSeek: (positionMs) {
-                                      player.fastSeek(
-                                        Duration(milliseconds: positionMs),
-                                      );
-                                    },
+                                    child: AppleLyricsView(
+                                      lines: _parsedLines,
+                                      currentTimeMs: 0,
+                                      positionListenable:
+                                          player.positionNotifier,
+                                      isPlaying: player.isPlaying,
+                                      playbackNotReady:
+                                          player.isPlaybackNotReady,
+                                      forceDarkBackground: true,
+                                      onSeek: (positionMs) {
+                                        player.seek(
+                                          Duration(milliseconds: positionMs),
+                                        );
+                                      },
+                                    ),
                                   ),
                                 ),
                     ),
