@@ -191,7 +191,7 @@ jobs:
           {
             flutter build apk "--${BUILD_TYPE}" --flavor standard --split-per-abi \
               --target-platform android-arm64 \
-              "--android-project-arg=md3ApplicationId=${APPLICATION_ID}" \
+              "--android-project-arg=md3ApplicationId=${APPLICATION_ID}"
           } 2>&1 | tee "$LOG_DIR/build.log"
 
       # ============================================================
