@@ -39,7 +39,7 @@ class YtMainView extends StatelessWidget {
     final localFavoritesProvider = context.watch<LocalFavoritesProvider>();
     final isOnline = song.isOnline;
     final isFavorited = isOnline
-        ? favoritesProvider.isFavorite(song)
+        ? favoritesProvider.isFavorite(song.id)
         : localFavoritesProvider.isFavorite(song.id);
 
     final resolvedSong = YtMoreMenu.resolveMatchedSong(song);
@@ -280,15 +280,16 @@ class YtMainView extends StatelessWidget {
             return PlayerSeekBar(
               position: position,
               duration: playerProvider.duration ?? Duration.zero,
+              activeColor: Colors.white,
+              inactiveColor: Colors.white24,
+              labelColor: Colors.white70,
               isPlaying: playerProvider.isPlaying,
               speed: playerProvider.speed,
               md3Style: true,
               waveEnabled: waveEnabled,
-              dense: false,
-              hideThumb: false,
-              showCountdown: true,
-              onSeek: (newPos) => playerProvider.seek(newPos),
-              onFastSeek: (newPos) => playerProvider.fastSeek(newPos),
+              climaxStart: song.climaxStart?.toDouble(),
+              climaxEnd: song.climaxEnd?.toDouble(),
+              onSeekEnd: (newPos) => playerProvider.seek(newPos),
             );
           },
         );
