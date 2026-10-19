@@ -146,8 +146,8 @@ class YtMainView extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Flexible(
-                  child: MarqueeText(
-                    text: title,
+                  child: GentleScrollingText(
+                    title,
                     style: const TextStyle(
                       color: Colors.white,
                       fontSize: 22,
@@ -308,22 +308,22 @@ class YtMainView extends StatelessWidget {
     IconData loopIcon;
     Color loopColor = Colors.white70;
     switch (loopMode) {
-      case LoopMode.single:
+      case AppLoopMode.one:
         loopIcon = Icons.repeat_one;
         loopColor = Colors.white;
         break;
-      case LoopMode.shuffle:
-        loopIcon = Icons.shuffle;
+      case AppLoopMode.all:
+        loopIcon = Icons.repeat;
         loopColor = Colors.white;
         break;
-      case LoopMode.list:
+      case AppLoopMode.off:
       default:
-        loopIcon = Icons.repeat;
-        loopColor = Colors.white70;
+        loopIcon = Icons.repeat_outlined;
+        loopColor = Colors.white38;
         break;
     }
 
-    final isShuffle = loopMode == LoopMode.shuffle;
+    final isShuffle = playerProvider.shuffleEnabled;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 4),
