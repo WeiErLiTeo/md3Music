@@ -40,13 +40,18 @@ import 'settings_preview_frame.dart';
 /// 为 false 时**不能**把 AM 的开关状态画进演示卡——那会让用户在 MD3 播放页
 /// 看到一个根本不存在的效果。
 class LyricEffectPreview extends StatelessWidget {
-  /// true = 演示 Apple Music 风格歌词；false = Material 风格。
+  /// true = 演示 Apple Music / YouTube Music 风格歌词；false = Material 风格。
   final bool isAmStyle;
+  final String? styleSubtitle;
 
   /// 当前行索引（0..2）。默认 1（中间行），上下各留一行做对照。
   static const int _currentLineIndex = 1;
 
-  const LyricEffectPreview({super.key, required this.isAmStyle});
+  const LyricEffectPreview({
+    super.key,
+    required this.isAmStyle,
+    this.styleSubtitle,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -63,7 +68,7 @@ class LyricEffectPreview extends StatelessWidget {
 
         return SettingsPreviewFrame(
           title: '歌词效果预览',
-          subtitle: isAmStyle ? '当前：Apple Music 风格' : '当前：Material 风格',
+          subtitle: styleSubtitle ?? (isAmStyle ? '当前：Apple Music 风格' : '当前：Material 风格'),
           footnote: '对唱 / 模糊 / 辉光 / 换行 等开关与滑块即时生效',
           height: 190,
           background: colorScheme.surfaceContainerHighest,

@@ -191,7 +191,8 @@ jobs:
           {
             flutter build apk "--${BUILD_TYPE}" --flavor standard --split-per-abi \
               --target-platform android-arm64 \
-              "--android-project-arg=md3ApplicationId=${APPLICATION_ID}"
+              "--android-project-arg=md3ApplicationId=${APPLICATION_ID}" \
+              --android-project-arg=md3EnableImpeller=false
           } 2>&1 | tee "$LOG_DIR/build.log"
 
       # ============================================================
@@ -373,7 +374,7 @@ jobs:
             [sdk_packages]="sdkmanager --install cmdline-tools;latest platforms;android-36 build-tools;36.0.0 ndk;28.2.13676358 cmake;3.22.1"
             [pub_get]="flutter pub get"
             [analyze]="flutter analyze --no-fatal-infos --no-fatal-warnings"
-            [build]="flutter build apk --${BUILD_TYPE} --flavor standard --split-per-abi --target-platform android-arm64 --android-project-arg=md3ApplicationId=${APPLICATION_ID}"
+            [build]="flutter build apk --${BUILD_TYPE} --flavor standard --split-per-abi --target-platform android-arm64 --android-project-arg=md3ApplicationId=${APPLICATION_ID} --android-project-arg=md3EnableImpeller=false"
             [rename]="读取 pubspec.yaml 版本号并重命名 APK"
             [mark_unverified]="给 APK 文件名加上「-未通过校验」"
             [verify]="aapt2/unzip/apksigner 校验：包名、ABI、3D 资产隔离、签名指纹"

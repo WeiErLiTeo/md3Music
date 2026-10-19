@@ -1464,14 +1464,31 @@ class _SettingsPageState extends State<SettingsPage>
     ColorScheme colorScheme, {
     required bool first,
   }) {
+    final playerStyle = context.watch<ThemeProvider>().playerStyle;
+    final isYtStyle = playerStyle == PlayerStyle.ytMusic;
+
+    bool enabled = true;
+    String? subtitle = subpage.description;
+
+    if (isYtStyle) {
+      if (subpage.title == '音乐频谱') {
+        enabled = false;
+        subtitle = 'YouTube Music 风格不适用';
+      } else if (subpage.title == '顶栏与页签') {
+        enabled = false;
+        subtitle = '仅多页签布局支持';
+      }
+    }
+
     return Padding(
       padding: EdgeInsets.only(top: first ? AppSpacing.sm : 0),
       child: _buildNavEntryTile(
         icon: subpage.icon,
         title: subpage.title,
-        subtitle: subpage.description,
+        subtitle: subtitle,
         colorScheme: colorScheme,
-        onTap: () => _openSubpage(subpage.title),
+        enabled: enabled,
+        onTap: enabled ? () => _openSubpage(subpage.title) : null,
       ),
     );
   }
@@ -1483,31 +1500,39 @@ class _SettingsPageState extends State<SettingsPage>
     required String title,
     required String? subtitle,
     required ColorScheme colorScheme,
-    required VoidCallback onTap,
+    required VoidCallback? onTap,
+    bool enabled = true,
   }) {
+    final disabledColor = colorScheme.onSurface.withValues(alpha: 0.38);
     return ListTile(
+      enabled: enabled,
       contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
       minVerticalPadding: AppSpacing.md,
-      leading: Icon(icon, color: colorScheme.primary),
+      leading: Icon(icon, color: enabled ? colorScheme.primary : disabledColor),
       title: Text(
         title,
         style: Theme.of(
           context,
-        ).textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w600),
+        ).textTheme.bodyLarge?.copyWith(
+          fontWeight: FontWeight.w600,
+          color: enabled ? null : disabledColor,
+        ),
       ),
       subtitle: subtitle == null
           ? null
           : Text(
               subtitle,
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: colorScheme.onSurfaceVariant,
+                color: enabled ? colorScheme.onSurfaceVariant : disabledColor,
               ),
             ),
-      trailing: Icon(
-        Icons.chevron_right,
-        size: 20,
-        color: colorScheme.onSurfaceVariant,
-      ),
+      trailing: enabled
+          ? Icon(
+              Icons.chevron_right,
+              size: 20,
+              color: colorScheme.onSurfaceVariant,
+            )
+          : null,
       onTap: onTap,
     );
   }
@@ -3409,8 +3434,16 @@ static const Set<String> _kAndroidOnlyAudioLabels = {
     );
   }
 
-  /// 「歌词效果」三级子页：AM 歌词的对唱 / 取色 / 模糊 / 辉光 / 省电模式。
+  /// 「歌词效果」三级子页：AM / YT 歌词的对唱 / 取色 / 模糊 / 辉光 / 省电模式。
   Widget _buildLyricEffectSubpage(ColorScheme colorScheme) {
+    final playerStyle = context.watch<ThemeProvider>().playerStyle;
+    final isYtStyle = playerStyle == PlayerStyle.ytMusic;
+    final isAmStyle = playerStyle == PlayerStyle.appleMusic;
+    final supportsAdvancedLyrics = isAmStyle || isYtStyle;
+    final styleSubtitle = isYtStyle
+        ? '当前：YouTube Music 风格'
+        : (isAmStyle ? '当前：Apple Music 风格' : '当前：Material 风格');
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -3419,13 +3452,16 @@ static const Set<String> _kAndroidOnlyAudioLabels = {
         // 「辉光」「模糊」「平衡换行」具体指什么。控件在下方实时驱动上方画面。
         // 真值源与播放页同一份（LyricPreferences / Md3LyricPreferences），
         // 不另存状态，故不会出现「演示一套、播放页另一套」。
-        LyricEffectPreview(isAmStyle: _useAmStylePlayer),
+        LyricEffectPreview(
+          isAmStyle: supportsAdvancedLyrics,
+          styleSubtitle: styleSubtitle,
+        ),
         const Gap(AppSpacing.sm),
         // search: 对唱 男女
         SwitchListTile(
           title: const Text('男女对唱歌词优化'),
           value: _useDuetLayout,
-          onChanged: _useAmStylePlayer
+          onChanged: supportsAdvancedLyrics
               ? (v) {
                   AppHaptics.lightImpact(HapticCategory.control);
                   setState(() => _useDuetLayout = v);
@@ -3433,12 +3469,12 @@ static const Set<String> _kAndroidOnlyAudioLabels = {
                 }
               : null,
         ),
-        // 歌词动态字体颜色：当前行按「85% 白 + 15% 封面提取色」混色（仅 AM 播放器）
+        // 歌词动态字体颜色：当前行按「85% 白 + 15% 封面提取色」混色（仅 AM / YT 播放器）
         // search: 动态颜色 混色
         SwitchListTile(
           title: const Text('歌词动态颜色'),
           value: _lyricDynamicColor,
-          onChanged: _useAmStylePlayer
+          onChanged: supportsAdvancedLyrics
               ? (v) {
                   AppHaptics.lightImpact(HapticCategory.control);
                   setState(() => _lyricDynamicColor = v);
@@ -3452,7 +3488,7 @@ static const Set<String> _kAndroidOnlyAudioLabels = {
           // 标题说明了是什么，副标题只留影响决策的功耗代价
           subtitle: const Text('高功耗'),
           value: _useGaussianBlur,
-          onChanged: _useAmStylePlayer
+          onChanged: supportsAdvancedLyrics
               ? (v) {
                   AppHaptics.lightImpact(HapticCategory.control);
                   setState(() => _useGaussianBlur = v);
@@ -3464,7 +3500,7 @@ static const Set<String> _kAndroidOnlyAudioLabels = {
         SwitchListTile(
           title: const Text('歌词辉光效果'),
           value: _useGlowEffect,
-          onChanged: _useAmStylePlayer
+          onChanged: supportsAdvancedLyrics
               ? (v) {
                   AppHaptics.lightImpact(HapticCategory.control);
                   setState(() => _useGlowEffect = v);
@@ -3480,7 +3516,7 @@ static const Set<String> _kAndroidOnlyAudioLabels = {
           title: const Text('平衡行换行（Apple 风格）'),
           subtitle: const Text('长歌词换行时让每行长度更均匀'),
           value: _lyricLineBalanceAm,
-          onChanged: _useAmStylePlayer
+          onChanged: supportsAdvancedLyrics
               ? (v) {
                   AppHaptics.lightImpact(HapticCategory.control);
                   setState(() => _lyricLineBalanceAm = v);
@@ -3493,7 +3529,7 @@ static const Set<String> _kAndroidOnlyAudioLabels = {
           title: const Text('平衡行换行（Material 风格）'),
           subtitle: const Text('长歌词换行时让每行长度更均匀'),
           value: _lyricLineBalanceMd3,
-          onChanged: _useAmStylePlayer
+          onChanged: supportsAdvancedLyrics
               ? null
               : (v) {
                   AppHaptics.lightImpact(HapticCategory.control);
@@ -3501,13 +3537,13 @@ static const Set<String> _kAndroidOnlyAudioLabels = {
                   Md3LyricPreferences.instance.setLineBalance(v);
                 },
         ),
-        // 歌词省电模式：AM 播放器歌词界面锁定 60fps，上下滑动歌词时临时解锁。
+        // 歌词省电模式：AM / YT 播放器歌词界面锁定 60fps，上下滑动歌词时临时解锁。
         // 排在特效末尾：它是上面几项高功耗特效的性能兜底。
         // search: 省电 限帧
         SwitchListTile(
           title: const Text('歌词省电模式'),
           value: _lyricEcoMode,
-          onChanged: _useAmStylePlayer
+          onChanged: supportsAdvancedLyrics
               ? (v) {
                   AppHaptics.lightImpact(HapticCategory.control);
                   setState(() => _lyricEcoMode = v);
