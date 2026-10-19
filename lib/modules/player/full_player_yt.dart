@@ -109,10 +109,12 @@ class _FullPlayerYtState extends State<FullPlayerYt>
       body: Stack(
         fit: StackFit.expand,
         children: [
-          YtBackground(
-            song: currentSong,
-            isPlaying: player.isPlaying,
-            useArtistPhoto: themeProvider.useArtistPhotoBackground,
+          Positioned.fill(
+            child: YtBackground(
+              song: currentSong,
+              isPlaying: player.isPlaying,
+              useArtistPhoto: themeProvider.useArtistPhotoBackground,
+            ),
           ),
           AnimatedBuilder(
             animation: _lyricsController,

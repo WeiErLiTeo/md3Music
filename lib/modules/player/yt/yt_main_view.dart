@@ -15,6 +15,8 @@ import '../../settings/equalizer_settings_page.dart';
 import 'yt_more_menu.dart';
 
 class YtMainView extends StatelessWidget {
+  static final PlaylistScrollAnchor _playlistScrollAnchor = PlaylistScrollAnchor();
+
   final Song song;
   final double largeCoverSize;
   final VoidCallback onCollapse;
@@ -510,9 +512,9 @@ class YtMainView extends StatelessWidget {
                 ),
               ),
               const Divider(height: 1, color: Colors.white12),
-              const Expanded(
+              Expanded(
                 child: PlayerPlaylistView(
-                  scrollAnchor: null,
+                  scrollAnchor: _playlistScrollAnchor,
                   useAmColors: true,
                   useDisplayName: true,
                 ),

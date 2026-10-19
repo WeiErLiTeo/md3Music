@@ -2,8 +2,9 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
-import 'package:oktoast/oktoast.dart';
 import 'package:provider/provider.dart';
+
+import '../../../core/utils/app_toast.dart';
 
 import '../../../core/utils/local_lyric_loader.dart';
 import '../../../data/models/song.dart';

@@ -27,11 +27,10 @@ class YtBackground extends StatelessWidget {
       builder: (context, _) {
         final useFlowing = LyricPreferences.instance.useFlowingBackground;
 
-        return Positioned.fill(
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              const ColoredBox(color: Colors.black),
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            const ColoredBox(color: Colors.black),
               if (useFlowing)
                 FlowingBackground(
                   artworkUrl: song.artworkUri,

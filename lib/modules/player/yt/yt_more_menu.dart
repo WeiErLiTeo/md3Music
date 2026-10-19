@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:oktoast/oktoast.dart';
 import 'package:provider/provider.dart';
 
+import '../../../core/utils/app_toast.dart';
 import '../../../data/models/album.dart';
 import '../../../data/models/song.dart';
 import '../../../data/repositories/song_match_repository.dart';
@@ -25,7 +25,7 @@ class YtMoreMenu {
     final match = SongMatchRepository().get(song.id);
     if (match == null || !match.isMatched) return song;
     return song.copyWith(
-      displayName: match.title,
+      title: match.title,
       artist: match.artist,
       album: match.album,
       albumId: match.albumId,
