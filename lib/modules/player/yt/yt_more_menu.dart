@@ -12,7 +12,6 @@ import '../../album/album_detail_page.dart';
 import '../../artist/artist_detail_page.dart';
 import '../../library/song_match_sheet.dart';
 import '../../settings/equalizer_settings_page.dart';
-import '../audio_quality_dialog.dart';
 import '../dlna_cast_sheet.dart';
 import '../mv_player_page.dart';
 import '../sleep_timer_sheet.dart';
@@ -37,6 +36,7 @@ class YtMoreMenu {
     BuildContext rootContext,
     Song song, {
     void Function(Route<dynamic>)? onPushPage,
+    void Function(Route<dynamic>)? onDismissAndPush,
   }) {
     final player = rootContext.read<PlayerProvider>();
     final resolvedSong = resolveMatchedSong(song);
@@ -48,11 +48,19 @@ class YtMoreMenu {
         ? '查看歌手'
         : '查看歌手：${resolvedSong.artist}';
 
-    void pushPage(Route<dynamic> route) {
+    void pushOverPlayer(Route<dynamic> route) {
       if (onPushPage != null) {
         onPushPage(route);
       } else {
         Navigator.of(rootContext).push(route);
+      }
+    }
+
+    void pushWithDismiss(Route<dynamic> route) {
+      if (onDismissAndPush != null) {
+        onDismissAndPush(route);
+      } else {
+        pushOverPlayer(route);
       }
     }
 
@@ -79,7 +87,7 @@ class YtMoreMenu {
                     onTap: () {
                       Navigator.pop(sheetContext);
                       if (rootContext.mounted) {
-                        pushPage(
+                        pushOverPlayer(
                           MaterialPageRoute(
                             builder: (_) => MvPlayerPage(song: song),
                           ),
@@ -98,7 +106,7 @@ class YtMoreMenu {
                   onTap: () {
                     Navigator.pop(sheetContext);
                     if (rootContext.mounted) {
-                      _navigateToAlbum(rootContext, resolvedSong, pushPage);
+                      navigateToAlbum(rootContext, resolvedSong, pushWithDismiss);
                     }
                   },
                 ),
@@ -113,7 +121,7 @@ class YtMoreMenu {
                   onTap: () {
                     Navigator.pop(sheetContext);
                     if (rootContext.mounted) {
-                      _navigateToArtist(rootContext, resolvedSong, pushPage);
+                      navigateToArtist(rootContext, resolvedSong, pushWithDismiss);
                     }
                   },
                 ),
@@ -162,7 +170,7 @@ class YtMoreMenu {
                   onTap: () {
                     Navigator.pop(sheetContext);
                     if (rootContext.mounted) {
-                      pushPage(
+                      pushOverPlayer(
                         MaterialPageRoute(
                           builder: (_) => const EqualizerSettingsPage(),
                         ),
@@ -203,7 +211,7 @@ class YtMoreMenu {
                   onTap: () {
                     Navigator.pop(sheetContext);
                     if (rootContext.mounted) {
-                      pushPage(
+                      pushOverPlayer(
                         MaterialPageRoute(builder: (_) => const SongInfoPage()),
                       );
                     }
@@ -217,7 +225,7 @@ class YtMoreMenu {
     );
   }
 
-  static void _navigateToAlbum(
+  static void navigateToAlbum(
     BuildContext context,
     Song resolved,
     void Function(Route<dynamic>) pushPage,
@@ -239,7 +247,7 @@ class YtMoreMenu {
     );
   }
 
-  static void _navigateToArtist(
+  static void navigateToArtist(
     BuildContext context,
     Song resolved,
     void Function(Route<dynamic>) pushPage,
@@ -250,13 +258,13 @@ class YtMoreMenu {
       return;
     }
     if (artists.length == 1) {
-      _pushArtistPage(context, resolved.artistId, artists.first, pushPage);
+      pushArtistPage(context, resolved.artistId, artists.first, pushPage);
       return;
     }
-    _showArtistSelector(context, resolved, artists, pushPage);
+    showArtistSelector(context, resolved, artists, pushPage);
   }
 
-  static void _showArtistSelector(
+  static void showArtistSelector(
     BuildContext context,
     Song song,
     List<String> artists,
@@ -293,9 +301,9 @@ class YtMoreMenu {
                     if (name == artists.first &&
                         song.artistId != null &&
                         song.artistId!.isNotEmpty) {
-                      _pushArtistPage(context, song.artistId, name, pushPage);
+                      pushArtistPage(context, song.artistId, name, pushPage);
                     } else {
-                      _pushArtistPageByName(context, name, pushPage);
+                      pushArtistPageByName(context, name, pushPage);
                     }
                   },
                 );
@@ -307,7 +315,7 @@ class YtMoreMenu {
     );
   }
 
-  static Future<void> _pushArtistPageByName(
+  static Future<void> pushArtistPageByName(
     BuildContext context,
     String name,
     void Function(Route<dynamic>) pushPage,
@@ -329,7 +337,7 @@ class YtMoreMenu {
         return;
       }
       final artist = result.first;
-      pendingPush = () => _pushArtistPage(context, artist.id, artist.name, pushPage);
+      pendingPush = () => pushArtistPage(context, artist.id, artist.name, pushPage);
     } catch (e) {
       showToast('搜索歌手失败：$e', long: true);
     } finally {
@@ -338,14 +346,14 @@ class YtMoreMenu {
     pendingPush?.call();
   }
 
-  static void _pushArtistPage(
+  static void pushArtistPage(
     BuildContext context,
     String? artistId,
     String artistName,
     void Function(Route<dynamic>) pushPage,
   ) {
     if (artistId == null || artistId.isEmpty) {
-      _pushArtistPageByName(context, artistName, pushPage);
+      pushArtistPageByName(context, artistName, pushPage);
       return;
     }
     pushPage(

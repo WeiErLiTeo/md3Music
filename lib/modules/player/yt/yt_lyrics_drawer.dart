@@ -1,10 +1,7 @@
-import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-
-import '../../../core/utils/app_toast.dart';
 
 import '../../../core/utils/local_lyric_loader.dart';
 import '../../../data/models/song.dart';
@@ -239,11 +236,18 @@ class _YtLyricsDrawerState extends State<YtLyricsDrawer> {
     return ClipRRect(
       borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
       child: BackdropFilter(
-        filter: ui.ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+        filter: ui.ImageFilter.blur(sigmaX: 25, sigmaY: 25),
         child: Container(
-          decoration: const BoxDecoration(
-            color: Color(0xEB161616),
-            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                Colors.black.withValues(alpha: 0.18),
+                Colors.black.withValues(alpha: 0.38),
+              ],
+            ),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
           ),
           child: Column(
             children: [

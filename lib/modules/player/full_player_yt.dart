@@ -4,7 +4,6 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../../data/models/song.dart';
 import '../../providers/player_provider.dart';
 import '../../providers/theme_provider.dart';
 import '../../widgets/smart_artwork_image.dart';
@@ -56,17 +55,27 @@ class _FullPlayerYtState extends State<FullPlayerYt>
     }
   }
 
+  void _pushOverPlayer(Route<dynamic> pageRoute) {
+    Navigator.of(context).push(pageRoute);
+  }
+
   void _dismissAndPush(Route<dynamic> pageRoute) {
     if (widget.dockMode) {
       Navigator.of(context).push(pageRoute);
       return;
     }
+    final navigator = Navigator.of(context, rootNavigator: true);
     final route = ModalRoute.of(context);
     if (route is DraggablePlayerRoute) {
+      _isDismissing = true;
       route.dismiss();
-      Navigator.of(context, rootNavigator: true).push(pageRoute);
+      Future.delayed(const Duration(milliseconds: 300), () {
+        if (navigator.mounted) {
+          navigator.push(pageRoute);
+        }
+      });
     } else {
-      Navigator.of(context).push(pageRoute);
+      navigator.push(pageRoute);
     }
   }
 
@@ -103,7 +112,7 @@ class _FullPlayerYtState extends State<FullPlayerYt>
 
     final drawerMaxHeight = screenHeight - (topInset + 56);
 
-    return Scaffold(
+    final page = Scaffold(
       backgroundColor: Colors.black,
       resizeToAvoidBottomInset: false,
       body: Stack(
@@ -123,7 +132,7 @@ class _FullPlayerYtState extends State<FullPlayerYt>
               final curSize = ui.lerpDouble(largeCoverSize, smallSize, t)!;
               final curLeft = ui.lerpDouble(largeLeft, smallLeft, t)!;
               final curTop = ui.lerpDouble(largeTop, smallTop, t)!;
-              final curRadius = ui.lerpDouble(16.0, 6.0, t)!;
+              final curRadius = ui.lerpDouble(14.0, 6.0, t)!;
               final drawerTop = topInset + 56 + drawerMaxHeight * (1.0 - t);
 
               return Stack(
@@ -143,7 +152,8 @@ class _FullPlayerYtState extends State<FullPlayerYt>
                             curve: Curves.easeOutCubic,
                           );
                         },
-                        onPushPage: _dismissAndPush,
+                        onPushPage: _pushOverPlayer,
+                        onDismissAndPush: _dismissAndPush,
                       ),
                     ),
                   ),
@@ -254,5 +264,22 @@ class _FullPlayerYtState extends State<FullPlayerYt>
         ],
       ),
     );
+
+    if (!widget.dockMode) {
+      return PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, _) {
+          if (didPop || _isDismissing) return;
+          if (_lyricsController.value > 0.05) {
+            _lyricsController.animateTo(0.0, curve: Curves.easeInCubic);
+            return;
+          }
+          _collapseByButton();
+        },
+        child: page,
+      );
+    }
+
+    return page;
   }
 }

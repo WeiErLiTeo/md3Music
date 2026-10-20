@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -22,6 +20,7 @@ class YtMainView extends StatelessWidget {
   final VoidCallback onCollapse;
   final VoidCallback onOpenLyrics;
   final void Function(Route<dynamic>)? onPushPage;
+  final void Function(Route<dynamic>)? onDismissAndPush;
 
   const YtMainView({
     super.key,
@@ -30,6 +29,7 @@ class YtMainView extends StatelessWidget {
     required this.onCollapse,
     required this.onOpenLyrics,
     this.onPushPage,
+    this.onDismissAndPush,
   });
 
   @override
@@ -54,16 +54,24 @@ class YtMainView extends StatelessWidget {
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 24),
               child: Column(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  SizedBox(
-                    width: largeCoverSize,
-                    height: largeCoverSize,
+                  const SizedBox(height: 12),
+                  Center(
+                    child: SizedBox(
+                      width: largeCoverSize,
+                      height: largeCoverSize,
+                    ),
                   ),
+                  const SizedBox(height: 18),
                   _buildTitleAndArtist(context, resolvedSong),
+                  const SizedBox(height: 16),
                   _buildCapsuleRow(context, resolvedSong, isFavorited, isOnline),
+                  const Spacer(),
                   _buildSeekBar(playerProvider, resolvedSong),
+                  const SizedBox(height: 14),
                   _buildTransportControls(context, playerProvider),
+                  const Spacer(),
                 ],
               ),
             ),
@@ -91,22 +99,47 @@ class YtMainView extends StatelessWidget {
             ),
             const Spacer(),
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+              height: 32,
+              padding: const EdgeInsets.all(2),
               decoration: BoxDecoration(
                 color: Colors.white.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(20),
+                borderRadius: BorderRadius.circular(16),
               ),
-              child: const Row(
+              child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.headphones, size: 16, color: Colors.white),
-                  SizedBox(width: 6),
-                  Text(
-                    '歌曲',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
+                  // 歌曲模式 (当前激活态)
+                  Container(
+                    height: 28,
+                    padding: const EdgeInsets.symmetric(horizontal: 14),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.22),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: const Center(
+                      child: Icon(
+                        Icons.headphones_rounded,
+                        size: 16,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                  // 视频/MV 模式 (目前仅做按钮，暂不加功能)
+                  InkWell(
+                    onTap: () {
+                      // 视频按钮视觉对齐，目前无功能
+                    },
+                    borderRadius: BorderRadius.circular(14),
+                    child: Container(
+                      height: 28,
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
+                      child: const Center(
+                        child: Icon(
+                          Icons.smart_display_outlined,
+                          size: 16,
+                          color: Colors.white54,
+                        ),
+                      ),
                     ),
                   ),
                 ],
@@ -123,6 +156,7 @@ class YtMainView extends StatelessWidget {
                 context,
                 resolvedSong,
                 onPushPage: onPushPage,
+                onDismissAndPush: onDismissAndPush,
               ),
             ),
           ],
@@ -141,7 +175,10 @@ class YtMainView extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           GestureDetector(
-            onTap: () => YtMoreMenu.show(context, song, onPushPage: onPushPage),
+            onTap: () {
+              final push = onDismissAndPush ?? onPushPage ?? Navigator.of(context).push;
+              YtMoreMenu.navigateToAlbum(context, song, push);
+            },
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -150,7 +187,7 @@ class YtMainView extends StatelessWidget {
                     title,
                     style: const TextStyle(
                       color: Colors.white,
-                      fontSize: 22,
+                      fontSize: 24,
                       fontWeight: FontWeight.bold,
                       letterSpacing: -0.3,
                     ),
@@ -160,14 +197,17 @@ class YtMainView extends StatelessWidget {
                 const Icon(
                   Icons.chevron_right,
                   color: Colors.white70,
-                  size: 20,
+                  size: 22,
                 ),
               ],
             ),
           ),
           const SizedBox(height: 4),
           GestureDetector(
-            onTap: () => YtMoreMenu.show(context, song, onPushPage: onPushPage),
+            onTap: () {
+              final push = onDismissAndPush ?? onPushPage ?? Navigator.of(context).push;
+              YtMoreMenu.navigateToArtist(context, song, push);
+            },
             child: Text(
               artist,
               maxLines: 1,
@@ -224,7 +264,8 @@ class YtMainView extends StatelessWidget {
             icon: Icons.graphic_eq,
             label: '音效',
             onTap: () {
-              Navigator.of(context).push(
+              final push = onPushPage ?? Navigator.of(context).push;
+              push(
                 MaterialPageRoute(
                   builder: (_) => const EqualizerSettingsPage(),
                 ),
@@ -246,7 +287,7 @@ class YtMainView extends StatelessWidget {
       onTap: onTap,
       borderRadius: BorderRadius.circular(20),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
         decoration: BoxDecoration(
           color: Colors.white.withValues(alpha: 0.12),
           borderRadius: BorderRadius.circular(20),
@@ -317,7 +358,6 @@ class YtMainView extends StatelessWidget {
         loopColor = Colors.white;
         break;
       case AppLoopMode.off:
-      default:
         loopIcon = Icons.repeat_outlined;
         loopColor = Colors.white38;
         break;
