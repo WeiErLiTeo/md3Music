@@ -21,15 +21,8 @@ import '../speed_picker_sheet.dart';
 class YtMoreMenu {
   static Song resolveMatchedSong(Song song) {
     if (song.isOnline) return song;
-    final match = SongMatchRepository().get(song.id);
-    if (match == null || !match.isMatched) return song;
-    return song.copyWith(
-      title: match.title,
-      artist: match.artist,
-      album: match.album,
-      albumId: match.albumId,
-      artistId: match.artistId,
-    );
+    final info = SongMatchRepository().get(song.id);
+    return (info != null && info.isMatched) ? info.toSong() : song;
   }
 
   static void show(
@@ -86,13 +79,15 @@ class YtMoreMenu {
                     title: const Text('查看 MV', style: TextStyle(color: Colors.white)),
                     onTap: () {
                       Navigator.pop(sheetContext);
-                      if (rootContext.mounted) {
-                        pushOverPlayer(
-                          MaterialPageRoute(
-                            builder: (_) => MvPlayerPage(song: song),
-                          ),
-                        );
-                      }
+                      Future.delayed(const Duration(milliseconds: 150), () {
+                        if (rootContext.mounted) {
+                          pushOverPlayer(
+                            MaterialPageRoute(
+                              builder: (_) => MvPlayerPage(song: song),
+                            ),
+                          );
+                        }
+                      });
                     },
                   ),
                 ListTile(
@@ -105,9 +100,11 @@ class YtMoreMenu {
                   ),
                   onTap: () {
                     Navigator.pop(sheetContext);
-                    if (rootContext.mounted) {
-                      navigateToAlbum(rootContext, resolvedSong, pushWithDismiss);
-                    }
+                    Future.delayed(const Duration(milliseconds: 150), () {
+                      if (rootContext.mounted) {
+                        navigateToAlbum(rootContext, resolvedSong, pushWithDismiss);
+                      }
+                    });
                   },
                 ),
                 ListTile(
@@ -120,9 +117,11 @@ class YtMoreMenu {
                   ),
                   onTap: () {
                     Navigator.pop(sheetContext);
-                    if (rootContext.mounted) {
-                      navigateToArtist(rootContext, resolvedSong, pushWithDismiss);
-                    }
+                    Future.delayed(const Duration(milliseconds: 150), () {
+                      if (rootContext.mounted) {
+                        navigateToArtist(rootContext, resolvedSong, pushWithDismiss);
+                      }
+                    });
                   },
                 ),
                 ListTile(
@@ -169,13 +168,15 @@ class YtMoreMenu {
                   title: const Text('均衡器与音效设置', style: TextStyle(color: Colors.white)),
                   onTap: () {
                     Navigator.pop(sheetContext);
-                    if (rootContext.mounted) {
-                      pushOverPlayer(
-                        MaterialPageRoute(
-                          builder: (_) => const EqualizerSettingsPage(),
-                        ),
-                      );
-                    }
+                    Future.delayed(const Duration(milliseconds: 150), () {
+                      if (rootContext.mounted) {
+                        pushOverPlayer(
+                          MaterialPageRoute(
+                            builder: (_) => const EqualizerSettingsPage(),
+                          ),
+                        );
+                      }
+                    });
                   },
                 ),
                 ListTile(
@@ -210,11 +211,13 @@ class YtMoreMenu {
                   title: const Text('歌曲信息', style: TextStyle(color: Colors.white)),
                   onTap: () {
                     Navigator.pop(sheetContext);
-                    if (rootContext.mounted) {
-                      pushOverPlayer(
-                        MaterialPageRoute(builder: (_) => const SongInfoPage()),
-                      );
-                    }
+                    Future.delayed(const Duration(milliseconds: 150), () {
+                      if (rootContext.mounted) {
+                        pushOverPlayer(
+                          MaterialPageRoute(builder: (_) => const SongInfoPage()),
+                        );
+                      }
+                    });
                   },
                 ),
               ],
@@ -237,7 +240,7 @@ class YtMoreMenu {
     }
     final album = Album(
       id: albumId,
-      name: resolved.album,
+      name: resolved.album.isNotEmpty ? resolved.album : resolved.displayName,
       artist: resolved.artist,
       artworkUri: resolved.artworkUri,
       songCount: 0,
@@ -298,13 +301,16 @@ class YtMoreMenu {
                   title: Text(name, style: const TextStyle(color: Colors.white)),
                   onTap: () {
                     Navigator.pop(sheetCtx);
-                    if (name == artists.first &&
-                        song.artistId != null &&
-                        song.artistId!.isNotEmpty) {
-                      pushArtistPage(context, song.artistId, name, pushPage);
-                    } else {
-                      pushArtistPageByName(context, name, pushPage);
-                    }
+                    Future.delayed(const Duration(milliseconds: 150), () {
+                      if (!context.mounted) return;
+                      if (name == artists.first &&
+                          song.artistId != null &&
+                          song.artistId!.isNotEmpty) {
+                        pushArtistPage(context, song.artistId, name, pushPage);
+                      } else {
+                        pushArtistPageByName(context, name, pushPage);
+                      }
+                    });
                   },
                 );
               }),

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../../core/utils/app_haptics.dart';
 import '../../../data/models/song.dart';
 import '../../../providers/favorites_provider.dart';
 import '../../../providers/local_favorites_provider.dart';
@@ -9,6 +10,7 @@ import '../../../widgets/add_to_playlist_dialog.dart';
 import '../../../widgets/marquee_text.dart';
 import '../../../widgets/player_playlist_view.dart';
 import '../../../widgets/player_seek_bar.dart';
+import '../../../widgets/smart_artwork_image.dart';
 import '../../settings/equalizer_settings_page.dart';
 import 'yt_more_menu.dart';
 
@@ -16,20 +18,26 @@ class YtMainView extends StatelessWidget {
   static final PlaylistScrollAnchor _playlistScrollAnchor = PlaylistScrollAnchor();
 
   final Song song;
-  final double largeCoverSize;
   final VoidCallback onCollapse;
   final VoidCallback onOpenLyrics;
   final void Function(Route<dynamic>)? onPushPage;
   final void Function(Route<dynamic>)? onDismissAndPush;
+  final GestureDragStartCallback? onDragStart;
+  final GestureDragUpdateCallback? onDragUpdate;
+  final GestureDragEndCallback? onDragEnd;
+  final GestureDragCancelCallback? onDragCancel;
 
   const YtMainView({
     super.key,
     required this.song,
-    required this.largeCoverSize,
     required this.onCollapse,
     required this.onOpenLyrics,
     this.onPushPage,
     this.onDismissAndPush,
+    this.onDragStart,
+    this.onDragUpdate,
+    this.onDragEnd,
+    this.onDragCancel,
   });
 
   @override
@@ -49,117 +57,186 @@ class YtMainView extends StatelessWidget {
       bottom: true,
       child: Column(
         children: [
+          // 顶部栏（支持下拉收起手势）
           _buildTopBar(context, resolvedSong),
+          // 核心封面区：通过 Expanded(Center) 天然居中在顶栏和歌名之间，自适应呼吸间距
           Expanded(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const SizedBox(height: 12),
-                  Center(
-                    child: SizedBox(
-                      width: largeCoverSize,
-                      height: largeCoverSize,
-                    ),
-                  ),
-                  const SizedBox(height: 18),
-                  _buildTitleAndArtist(context, resolvedSong),
-                  const SizedBox(height: 16),
-                  _buildCapsuleRow(context, resolvedSong, isFavorited, isOnline),
-                  const Spacer(),
-                  _buildSeekBar(playerProvider, resolvedSong),
-                  const SizedBox(height: 14),
-                  _buildTransportControls(context, playerProvider),
-                  const Spacer(),
-                ],
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24.0,
+                  vertical: 8.0,
+                ),
+                child: _buildCover(context, resolvedSong),
               ),
             ),
           ),
+          // 歌名与歌手
+          Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: 24.0,
+              vertical: 6.0,
+            ),
+            child: _buildTitleAndArtist(context, resolvedSong),
+          ),
+          const SizedBox(height: 10),
+          // 胶囊操作栏（收藏 / 歌词 / 保存 / 音效）
+          Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: 24.0,
+            ),
+            child: _buildCapsuleRow(
+              context,
+              resolvedSong,
+              isFavorited,
+              isOnline,
+            ),
+          ),
+          const SizedBox(height: 14),
+          // 播放进度条
+          Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: 20.0,
+            ),
+            child: _buildSeekBar(playerProvider, resolvedSong),
+          ),
+          const SizedBox(height: 10),
+          // 五键控制区（播放/暂停/上一曲/下一曲/循环/随机）
+          Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: 24.0,
+              vertical: 6.0,
+            ),
+            child: _buildTransportControls(context, playerProvider),
+          ),
+          const SizedBox(height: 6),
+          // 底部队列把手
           _buildQueueHandle(context),
         ],
       ),
     );
   }
 
+  /// 顶栏：保留折叠按钮、[🎵 歌曲] [🎬 视频/MV] 双模胶囊与更多选项
   Widget _buildTopBar(BuildContext context, Song resolvedSong) {
-    return SizedBox(
-      height: 56,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8),
-        child: Row(
-          children: [
-            IconButton(
-              icon: const Icon(
-                Icons.keyboard_arrow_down,
-                color: Colors.white,
-                size: 30,
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onVerticalDragStart: onDragStart,
+      onVerticalDragUpdate: onDragUpdate,
+      onVerticalDragEnd: onDragEnd,
+      onVerticalDragCancel: onDragCancel,
+      child: SizedBox(
+        height: 56,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Row(
+            children: [
+              IconButton(
+                icon: const Icon(
+                  Icons.keyboard_arrow_down,
+                  color: Colors.white,
+                  size: 30,
+                ),
+                onPressed: onCollapse,
               ),
-              onPressed: onCollapse,
-            ),
-            const Spacer(),
-            Container(
-              height: 32,
-              padding: const EdgeInsets.all(2),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // 歌曲模式 (当前激活态)
-                  Container(
-                    height: 28,
-                    padding: const EdgeInsets.symmetric(horizontal: 14),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.22),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: const Center(
-                      child: Icon(
-                        Icons.headphones_rounded,
-                        size: 16,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ),
-                  // 视频/MV 模式 (目前仅做按钮，暂不加功能)
-                  InkWell(
-                    onTap: () {
-                      // 视频按钮视觉对齐，目前无功能
-                    },
-                    borderRadius: BorderRadius.circular(14),
-                    child: Container(
+              const Spacer(),
+              // 双模胶囊切换器：1:1 原版 YouTube Music 样式
+              Container(
+                height: 32,
+                padding: const EdgeInsets.all(2),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // 歌曲模式 (当前激活态)
+                    Container(
                       height: 28,
                       padding: const EdgeInsets.symmetric(horizontal: 14),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.22),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
                       child: const Center(
                         child: Icon(
-                          Icons.smart_display_outlined,
+                          Icons.headphones_rounded,
                           size: 16,
-                          color: Colors.white54,
+                          color: Colors.white,
                         ),
                       ),
                     ),
-                  ),
-                ],
+                    // 视频/MV 模式 (目前仅做按钮，暂不加功能)
+                    InkWell(
+                      onTap: () {
+                        // 视频按钮视觉对齐，目前无功能
+                      },
+                      borderRadius: BorderRadius.circular(14),
+                      child: Container(
+                        height: 28,
+                        padding: const EdgeInsets.symmetric(horizontal: 14),
+                        child: const Center(
+                          child: Icon(
+                            Icons.smart_display_outlined,
+                            size: 16,
+                            color: Colors.white54,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
+              const Spacer(),
+              IconButton(
+                icon: const Icon(
+                  Icons.more_vert,
+                  color: Colors.white,
+                  size: 24,
+                ),
+                onPressed: () => YtMoreMenu.show(
+                  context,
+                  resolvedSong,
+                  onPushPage: onPushPage,
+                  onDismissAndPush: onDismissAndPush,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 封面部件：支持下拉收起手势与 1:1 正方形居中
+  Widget _buildCover(BuildContext context, Song song) {
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onVerticalDragStart: onDragStart,
+      onVerticalDragUpdate: onDragUpdate,
+      onVerticalDragEnd: onDragEnd,
+      onVerticalDragCancel: onDragCancel,
+      child: AspectRatio(
+        aspectRatio: 1.0,
+        child: Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.45),
+                blurRadius: 20,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(16),
+            child: SmartArtworkImage(
+              artworkUri: song.artworkUri,
+              size: 400,
             ),
-            const Spacer(),
-            IconButton(
-              icon: const Icon(
-                Icons.more_vert,
-                color: Colors.white,
-                size: 24,
-              ),
-              onPressed: () => YtMoreMenu.show(
-                context,
-                resolvedSong,
-                onPushPage: onPushPage,
-                onDismissAndPush: onDismissAndPush,
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );
@@ -287,7 +364,7 @@ class YtMainView extends StatelessWidget {
       onTap: onTap,
       borderRadius: BorderRadius.circular(20),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
         decoration: BoxDecoration(
           color: Colors.white.withValues(alpha: 0.12),
           borderRadius: BorderRadius.circular(20),
@@ -321,16 +398,27 @@ class YtMainView extends StatelessWidget {
             return PlayerSeekBar(
               position: position,
               duration: playerProvider.duration ?? Duration.zero,
-              activeColor: Colors.white,
-              inactiveColor: Colors.white24,
-              labelColor: Colors.white70,
               isPlaying: playerProvider.isPlaying,
               speed: playerProvider.speed,
               md3Style: true,
               waveEnabled: waveEnabled,
+              activeColor: Colors.white,
+              inactiveColor: Colors.white24,
+              labelColor: Colors.white70,
               climaxStart: song.climaxStart?.toDouble(),
               climaxEnd: song.climaxEnd?.toDouble(),
-              onSeekEnd: (newPos) => playerProvider.seek(newPos),
+              onSeekStart: () {
+                if (playerProvider.isPlaying) {
+                  playerProvider.pauseForSeek();
+                }
+              },
+              onSeekEnd: (pos) async {
+                AppHaptics.tick(HapticCategory.transport);
+                await playerProvider.seek(pos, forceNotify: true);
+                if (playerProvider.isPlaying) {
+                  playerProvider.resume();
+                }
+              },
             );
           },
         );
@@ -342,124 +430,113 @@ class YtMainView extends StatelessWidget {
     BuildContext context,
     PlayerProvider playerProvider,
   ) {
-    final isPlaying = playerProvider.isPlaying;
-    final isBuffering = playerProvider.isPlaybackNotReady;
     final loopMode = playerProvider.loopMode;
 
     IconData loopIcon;
-    Color loopColor = Colors.white70;
     switch (loopMode) {
       case AppLoopMode.one:
         loopIcon = Icons.repeat_one;
-        loopColor = Colors.white;
         break;
       case AppLoopMode.all:
+      default:
         loopIcon = Icons.repeat;
-        loopColor = Colors.white;
-        break;
-      case AppLoopMode.off:
-        loopIcon = Icons.repeat_outlined;
-        loopColor = Colors.white38;
         break;
     }
 
-    final isShuffle = playerProvider.shuffleEnabled;
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 4),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          IconButton(
-            icon: Icon(
-              Icons.shuffle,
-              color: isShuffle ? Colors.white : Colors.white38,
-              size: 26,
-            ),
-            onPressed: () => playerProvider.toggleShuffle(),
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      children: [
+        IconButton(
+          icon: const Icon(Icons.shuffle, size: 22),
+          color: playerProvider.shuffleEnabled ? Colors.white : Colors.white60,
+          onPressed: () {
+            AppHaptics.lightImpact(HapticCategory.transport);
+            playerProvider.toggleShuffle();
+          },
+        ),
+        IconButton(
+          icon: const Icon(
+            Icons.skip_previous,
+            size: 36,
+            color: Colors.white,
           ),
-          IconButton(
-            icon: const Icon(
-              Icons.skip_previous,
-              color: Colors.white,
-              size: 38,
-            ),
-            onPressed: () => playerProvider.previous(),
-          ),
-          Container(
-            width: 68,
-            height: 68,
+          onPressed: () {
+            AppHaptics.click(HapticCategory.transport);
+            playerProvider.previous();
+          },
+        ),
+        GestureDetector(
+          onTap: () {
+            AppHaptics.click(HapticCategory.transport);
+            if (playerProvider.isPlaying) {
+              playerProvider.pause();
+            } else {
+              playerProvider.resume();
+            }
+          },
+          child: Container(
+            width: 64,
+            height: 64,
             decoration: const BoxDecoration(
               color: Colors.white,
               shape: BoxShape.circle,
             ),
-            child: IconButton(
-              icon: isBuffering
-                  ? const SizedBox(
-                      width: 28,
-                      height: 28,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2.8,
-                        color: Colors.black,
-                      ),
-                    )
-                  : Icon(
-                      isPlaying ? Icons.pause : Icons.play_arrow,
-                      color: Colors.black,
-                      size: 38,
-                    ),
-              onPressed: () {
-                if (playerProvider.isPlaying) {
-                  playerProvider.pause();
-                } else {
-                  playerProvider.resume();
-                }
-              },
-            ),
-          ),
-          IconButton(
-            icon: const Icon(
-              Icons.skip_next,
-              color: Colors.white,
+            child: Icon(
+              playerProvider.isPlaying ? Icons.pause : Icons.play_arrow,
               size: 38,
+              color: Colors.black,
             ),
-            onPressed: () => playerProvider.next(),
           ),
-          IconButton(
-            icon: Icon(
-              loopIcon,
-              color: loopColor,
-              size: 26,
-            ),
-            onPressed: () => playerProvider.toggleLoopMode(),
+        ),
+        IconButton(
+          icon: const Icon(
+            Icons.skip_next,
+            size: 36,
+            color: Colors.white,
           ),
-        ],
-      ),
+          onPressed: () {
+            AppHaptics.click(HapticCategory.transport);
+            playerProvider.next();
+          },
+        ),
+        IconButton(
+          icon: Icon(
+            loopIcon,
+            size: 24,
+          ),
+          color: loopMode != AppLoopMode.off ? Colors.white : Colors.white60,
+          onPressed: () {
+            AppHaptics.lightImpact(HapticCategory.transport);
+            playerProvider.toggleLoopMode();
+          },
+        ),
+      ],
     );
   }
 
   Widget _buildQueueHandle(BuildContext context) {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTap: () => _showQueueDrawer(context),
-      child: Padding(
-        padding: const EdgeInsets.only(top: 8, bottom: 12),
+      onTap: () => _showQueueSheet(context),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 10),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              width: 38,
+              width: 32,
               height: 4,
               decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.38),
+                color: Colors.white30,
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
-            const SizedBox(height: 8),
-            Text(
-              '播放的音乐来自 / 播放队列',
+            const SizedBox(height: 6),
+            const Text(
+              '接下来播放',
               style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.72),
+                color: Colors.white70,
                 fontSize: 12,
                 fontWeight: FontWeight.w500,
               ),
@@ -470,103 +547,46 @@ class YtMainView extends StatelessWidget {
     );
   }
 
-  void _showQueueDrawer(BuildContext context) {
+  void _showQueueSheet(BuildContext context) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (sheetContext) {
-        final screenHeight = MediaQuery.sizeOf(sheetContext).height;
-        return Container(
-          height: screenHeight * 0.72,
-          decoration: const BoxDecoration(
-            color: Color(0xFF212121),
-            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-          ),
-          child: Column(
-            children: [
-              Center(
-                child: Container(
-                  margin: const EdgeInsets.only(top: 10, bottom: 6),
-                  width: 36,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: Colors.white24,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 8,
-                ),
-                child: Row(
-                  children: [
-                    const Expanded(
-                      child: Text(
-                        '播放的音乐来自 · 播放队列',
+      builder: (sheetCtx) {
+        return ClipRRect(
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+          child: Container(
+            color: const Color(0xFF1E1E1E),
+            height: MediaQuery.of(sheetCtx).size.height * 0.72,
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        '接下来播放',
                         style: TextStyle(
                           color: Colors.white,
-                          fontSize: 16,
+                          fontSize: 18,
                           fontWeight: FontWeight.bold,
                         ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
                       ),
-                    ),
-                    InkWell(
-                      onTap: () {
-                        final currentSong = sheetContext
-                            .read<PlayerProvider>()
-                            .currentSong;
-                        if (currentSong != null && sheetContext.mounted) {
-                          showAddToPlaylistDialog(sheetContext, currentSong);
-                        }
-                      },
-                      borderRadius: BorderRadius.circular(16),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 6,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        child: const Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              Icons.playlist_add,
-                              size: 16,
-                              color: Colors.white,
-                            ),
-                            SizedBox(width: 4),
-                            Text(
-                              '保存',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.white,
-                              ),
-                            ),
-                          ],
-                        ),
+                      IconButton(
+                        icon: const Icon(Icons.close, color: Colors.white70),
+                        onPressed: () => Navigator.pop(sheetCtx),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-              const Divider(height: 1, color: Colors.white12),
-              Expanded(
-                child: PlayerPlaylistView(
-                  scrollAnchor: _playlistScrollAnchor,
-                  useAmColors: true,
-                  useDisplayName: true,
+                Expanded(
+                  child: PlayerPlaylistView(
+                    scrollAnchor: _playlistScrollAnchor,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         );
       },

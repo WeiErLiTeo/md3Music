@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -12,8 +13,73 @@ import '../../../widgets/apple_lyrics/apple_lyrics_view.dart';
 import '../../../widgets/apple_lyrics/layout/lyric_preferences.dart';
 import '../../../widgets/apple_lyrics/models/lyric_line.dart';
 import '../../../widgets/apple_lyrics/parsers/lyric_parser_chain.dart';
+import '../../../widgets/smart_artwork_image.dart';
 import '../../library/song_match_sheet.dart';
 
+/// YouTube Music 风格的歌词 Sheet 容器
+class YtLyricsSheet extends StatelessWidget {
+  final Song song;
+
+  const YtLyricsSheet({
+    super.key,
+    required this.song,
+  });
+
+  /// 弹出 YT 风格歌词抽屉
+  static void show(BuildContext context, Song song) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      sheetAnimationStyle: const AnimationStyle(
+        duration: Duration(milliseconds: 320),
+        curve: Curves.easeOutCubic,
+        reverseDuration: Duration(milliseconds: 260),
+        reverseCurve: Curves.easeInCubic,
+      ),
+      builder: (sheetContext) => YtLyricsSheet(song: song),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final player = context.watch<PlayerProvider>();
+    final currentSong = player.currentSong ?? song;
+    final topInset = MediaQuery.viewPaddingOf(context).top;
+    final screenHeight = MediaQuery.sizeOf(context).height;
+
+    return SizedBox(
+      height: screenHeight,
+      child: SafeArea(
+        top: true,
+        bottom: false,
+        child: Column(
+          children: [
+            if (topInset > 0) SizedBox(height: math.max(topInset, 16.0)),
+            // 顶部常驻 Mini 控制条：40x40 圆角封面 + 左对齐纯净歌名/歌手 + 紧凑播放控件
+            SizedBox(
+              height: 56,
+              child: YtMiniBar(
+                song: currentSong,
+                onTap: () => Navigator.pop(context),
+              ),
+            ),
+            // 歌词抽屉主体：停在 MiniBar 下方，半透明透出背景
+            Expanded(
+              child: YtLyricsDrawerContent(
+                song: currentSong,
+                onClose: () => Navigator.pop(context),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 顶部常驻 Mini 控制条
 class YtMiniBar extends StatelessWidget {
   final Song song;
   final VoidCallback onTap;
@@ -35,7 +101,16 @@ class YtMiniBar extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 16),
         child: Row(
           children: [
-            const SizedBox(width: 42 + 12),
+            // 40x40 缩略封面
+            ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: SmartArtworkImage(
+                artworkUri: song.artworkUri,
+                size: 40,
+              ),
+            ),
+            const SizedBox(width: 12),
+            // 左对齐纯净歌名与歌手
             Expanded(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -65,6 +140,7 @@ class YtMiniBar extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 8),
+            // 紧凑控制器
             Row(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -107,25 +183,22 @@ class YtMiniBar extends StatelessWidget {
   }
 }
 
-class YtLyricsDrawer extends StatefulWidget {
+/// 歌词抽屉内容主体
+class YtLyricsDrawerContent extends StatefulWidget {
   final Song song;
   final VoidCallback onClose;
-  final GestureDragUpdateCallback onVerticalDragUpdate;
-  final GestureDragEndCallback onVerticalDragEnd;
 
-  const YtLyricsDrawer({
+  const YtLyricsDrawerContent({
     super.key,
     required this.song,
     required this.onClose,
-    required this.onVerticalDragUpdate,
-    required this.onVerticalDragEnd,
   });
 
   @override
-  State<YtLyricsDrawer> createState() => _YtLyricsDrawerState();
+  State<YtLyricsDrawerContent> createState() => _YtLyricsDrawerContentState();
 }
 
-class _YtLyricsDrawerState extends State<YtLyricsDrawer> {
+class _YtLyricsDrawerContentState extends State<YtLyricsDrawerContent> {
   bool _loading = true;
   List<LyricLine> _parsedLines = const [];
   String? _loadedSongId;
@@ -243,186 +316,28 @@ class _YtLyricsDrawerState extends State<YtLyricsDrawer> {
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
               colors: [
-                Colors.black.withValues(alpha: 0.18),
-                Colors.black.withValues(alpha: 0.38),
+                Colors.black.withValues(alpha: 0.22),
+                Colors.black.withValues(alpha: 0.45),
               ],
             ),
             borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
           ),
           child: Column(
             children: [
-              GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onVerticalDragUpdate: widget.onVerticalDragUpdate,
-                onVerticalDragEnd: widget.onVerticalDragEnd,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Center(
-                      child: Container(
-                        margin: const EdgeInsets.only(top: 10, bottom: 6),
-                        width: 36,
-                        height: 4,
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.24),
-                          borderRadius: BorderRadius.circular(2),
-                        ),
-                      ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(24, 4, 16, 4),
-                      child: Row(
-                        children: [
-                          const Text(
-                            '歌词',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 20,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          const Spacer(),
-                          IconButton(
-                            icon: const Icon(
-                              Icons.close,
-                              color: Colors.white,
-                              size: 22,
-                            ),
-                            splashRadius: 20,
-                            padding: EdgeInsets.zero,
-                            constraints: const BoxConstraints(
-                              minWidth: 36,
-                              minHeight: 36,
-                            ),
-                            onPressed: widget.onClose,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+              // 拖拽把手与工具栏
+              _buildHandleBar(context, currentSong),
+              // 歌词核心展示区
               Expanded(
-                child: Stack(
-                  children: [
-                    Positioned.fill(
-                      child: _loading
-                          ? const Center(
-                              child: CircularProgressIndicator(
-                                color: Colors.white70,
-                              ),
-                            )
-                          : _parsedLines.isEmpty
-                              ? _buildEmptyLyricsView(context, currentSong)
-                              : ShaderMask(
-                                  shaderCallback: (Rect bounds) {
-                                    final double h = bounds.height;
-                                    if (h <= 0) {
-                                      return const LinearGradient(
-                                        colors: [Colors.black, Colors.black],
-                                      ).createShader(bounds);
-                                    }
-                                    final double topStop =
-                                        (36.0 / h).clamp(0.0, 0.4);
-                                    return LinearGradient(
-                                      begin: Alignment.topCenter,
-                                      end: Alignment.bottomCenter,
-                                      colors: const [
-                                        Colors.transparent,
-                                        Colors.black,
-                                        Colors.black,
-                                      ],
-                                      stops: [0.0, topStop, 1.0],
-                                    ).createShader(bounds);
-                                  },
-                                  blendMode: BlendMode.dstIn,
-                                  child: Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 24,
-                                    ),
-                                    child: AppleLyricsView(
-                                      lines: _parsedLines,
-                                      currentTimeMs: 0,
-                                      positionListenable:
-                                          player.positionNotifier,
-                                      isPlaying: player.isPlaying,
-                                      playbackNotReady:
-                                          player.isPlaybackNotReady,
-                                      forceDarkBackground: true,
-                                      onSeek: (positionMs) {
-                                        player.seek(
-                                          Duration(milliseconds: positionMs),
-                                        );
-                                      },
-                                    ),
-                                  ),
-                                ),
-                    ),
-                    if (_hasTranslation)
-                      Positioned(
-                        right: 20,
-                        bottom: 24,
-                        child: ListenableBuilder(
-                          listenable: LyricPreferences.instance,
-                          builder: (context, _) {
-                            final showTrans =
-                                LyricPreferences.instance.showTranslation;
-                            return Material(
-                              color: Colors.transparent,
-                              child: InkWell(
-                                onTap: () {
-                                  LyricPreferences.instance
-                                      .setShowTranslation(!showTrans);
-                                },
-                                borderRadius: BorderRadius.circular(20),
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 14,
-                                    vertical: 8,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: showTrans
-                                        ? Colors.white.withValues(alpha: 0.22)
-                                        : Colors.white.withValues(alpha: 0.12),
-                                    borderRadius: BorderRadius.circular(20),
-                                    border: Border.all(
-                                      color: showTrans
-                                          ? Colors.white54
-                                          : Colors.white24,
-                                      width: 1,
-                                    ),
-                                  ),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Icon(
-                                        Icons.translate,
-                                        size: 16,
-                                        color: showTrans
-                                            ? Colors.white
-                                            : Colors.white70,
-                                      ),
-                                      const SizedBox(width: 6),
-                                      Text(
-                                        '文A 翻译',
-                                        style: TextStyle(
-                                          color: showTrans
-                                              ? Colors.white
-                                              : Colors.white70,
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            );
-                          },
+                child: _loading
+                    ? const Center(
+                        child: CircularProgressIndicator(
+                          color: Colors.white70,
+                          strokeWidth: 2,
                         ),
-                      ),
-                  ],
-                ),
+                      )
+                    : _parsedLines.isEmpty
+                        ? _buildEmptyState(context, currentSong)
+                        : _buildLyricsView(context, player),
               ),
             ],
           ),
@@ -431,38 +346,111 @@ class _YtLyricsDrawerState extends State<YtLyricsDrawer> {
     );
   }
 
-  Widget _buildEmptyLyricsView(BuildContext context, Song currentSong) {
+  Widget _buildHandleBar(BuildContext context, Song currentSong) {
+    final prefs = LyricPreferences.instance;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Row(
+        children: [
+          IconButton(
+            icon: const Icon(
+              Icons.keyboard_arrow_down,
+              color: Colors.white70,
+              size: 26,
+            ),
+            onPressed: widget.onClose,
+          ),
+          const Spacer(),
+          Container(
+            width: 36,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.3),
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const Spacer(),
+          if (_hasTranslation)
+            ListenableBuilder(
+              listenable: prefs,
+              builder: (context, _) {
+                final showTrans = prefs.showTranslation;
+                return IconButton(
+                  icon: Text(
+                    '译',
+                    style: TextStyle(
+                      color: showTrans ? Colors.white : Colors.white38,
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  onPressed: () {
+                    prefs.setShowTranslation(!showTrans);
+                  },
+                );
+              },
+            ),
+          IconButton(
+            icon: const Icon(Icons.refresh, color: Colors.white70, size: 20),
+            onPressed: () => _loadLyricsFor(currentSong, force: true),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLyricsView(BuildContext context, PlayerProvider player) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: AppleLyricsView(
+        lines: _parsedLines,
+        currentTimeMs: player.position.inMilliseconds,
+        positionListenable: player.positionNotifier,
+        isPlaying: player.isPlaying,
+        playbackNotReady: false,
+        onSeek: (timeMs) => player.seek(
+          Duration(milliseconds: timeMs),
+        ),
+        forceDarkBackground: true,
+      ),
+    );
+  }
+
+  Widget _buildEmptyState(BuildContext context, Song currentSong) {
     return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
-            Icons.lyrics_outlined,
+          const Icon(
+            Icons.music_off_outlined,
+            color: Colors.white38,
             size: 48,
-            color: Colors.white.withValues(alpha: 0.38),
           ),
           const SizedBox(height: 12),
-          Text(
+          const Text(
             '暂无歌词',
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.6),
-              fontSize: 16,
-            ),
+            style: TextStyle(color: Colors.white70, fontSize: 16),
           ),
           const SizedBox(height: 16),
-          OutlinedButton.icon(
-            icon: const Icon(Icons.search, size: 18),
-            label: const Text('搜索匹配歌词'),
+          OutlinedButton(
             style: OutlinedButton.styleFrom(
+              side: const BorderSide(color: Colors.white30),
               foregroundColor: Colors.white,
-              side: BorderSide(color: Colors.white.withValues(alpha: 0.3)),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(20),
               ),
             ),
-            onPressed: () {
-              showSongMatchSheet(context, currentSong);
+            onPressed: () async {
+              await showSongMatchSheet(
+                context,
+                currentSong,
+              );
+              if (mounted) {
+                _loadLyricsFor(currentSong, force: true);
+              }
             },
+            child: const Text('搜索匹配歌词'),
           ),
         ],
       ),
