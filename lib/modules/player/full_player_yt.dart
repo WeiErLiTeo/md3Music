@@ -221,8 +221,9 @@ class _FullPlayerYtState extends State<FullPlayerYt> {
     );
 
     if (!_isDragOverlay && !widget.dockMode) {
+      final currentRoute = ModalRoute.of(context);
       page = PopScope(
-        canPop: false,
+        canPop: currentRoute != null && !currentRoute.isCurrent,
         onPopInvokedWithResult: (didPop, _) {
           if (didPop || _isDismissing) return;
           _collapseByButton();
