@@ -11,6 +11,7 @@ import '../../providers/car_mode_provider.dart';
 import '../../utils/landscape_immersive.dart';
 import 'full_player.dart';
 import 'full_player_am.dart';
+import 'full_player_yt.dart';
 import 'player_cover_morph.dart';
 import 'player_morph_scene.dart';
 import 'player_panel_frame.dart';
@@ -390,6 +391,22 @@ void openFullPlayer(BuildContext context, {PlayerMorphScene? scene}) {
 /// [scene] 是点击 / 拖拽那一刻采集的**形态快照**（见 [PlayerMorphScene]）。
 /// 二级悬浮胶囊这类"自己不写全局锚点"的入口必须走它，否则起点几何只能落到
 /// 全局锚点或合成兜底上，与用户实际点的控件对不上。
+/// 根据 [PlayerStyle] 返回对应的全屏播放页实例（路由 / 拖拽覆盖层 / 车机面板共用）。
+Widget buildActiveFullPlayer(PlayerStyle style, {bool dockMode = false}) {
+  if (dockMode) {
+    return switch (style) {
+      PlayerStyle.ytMusic => const FullPlayerYt(dockMode: true),
+      PlayerStyle.appleMusic => const AmStyleFullPlayer(dockMode: true),
+      PlayerStyle.md3 => const FullPlayer(dockMode: true),
+    };
+  }
+  return switch (style) {
+    PlayerStyle.ytMusic => const FullPlayerYt(),
+    PlayerStyle.appleMusic => const AmStyleFullPlayer(),
+    PlayerStyle.md3 => const FullPlayer(),
+  };
+}
+
 DraggablePlayerRoute<void> fullPlayerRoute(
   BuildContext context, {
   PlayerMorphScene? scene,
@@ -399,9 +416,7 @@ DraggablePlayerRoute<void> fullPlayerRoute(
 }) {
   return DraggablePlayerRoute<void>(
     builder: (_) => Consumer<ThemeProvider>(
-      builder: (context, theme, _) => theme.useAmStylePlayer
-          ? const AmStyleFullPlayer()
-          : const FullPlayer(),
+      builder: (context, theme, _) => buildActiveFullPlayer(theme.playerStyle),
     ),
     scene: scene,
     dragOriginTop: dragOriginTop,

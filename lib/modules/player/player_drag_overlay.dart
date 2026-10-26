@@ -2,8 +2,6 @@ import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
 import '../../providers/theme_provider.dart';
-import 'full_player.dart';
-import 'full_player_am.dart';
 import 'full_player_route.dart';
 import 'player_panel_frame.dart';
 import 'player_page_role.dart';
@@ -80,13 +78,13 @@ class _DragPlayerContent extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final useAm = context.watch<ThemeProvider>().useAmStylePlayer;
+    final style = context.watch<ThemeProvider>().playerStyle;
     // 显式声明「这一份是拖拽覆盖层」：它用户可见但不负责真机副作用（频谱采集、
     // 麦克风权限由即将接管的路由持有）。原先靠 `ModalRoute == null && playerDragActive`
     // 反推，现在由挂载点自己写明，见 [PlayerPageRole]。
     return PlayerPageRoleScope(
       role: PlayerPageRole.dragOverlay,
-      child: useAm ? const AmStyleFullPlayer() : const FullPlayer(),
+      child: buildActiveFullPlayer(style),
     );
   }
 }

@@ -122,3 +122,45 @@
 #    这类「只在回调里出现」的内部类，历史上踩过 ClassNotFoundException。 ──
 -keep class com.md3music.md3music.spectrum.** { *; }
 -keep class com.md3music.md3music.SpectrumPlugin$* { *; }
+
+# ── 关闭 R8 激进字节码优化（防止 staticization 破坏 Kotlin 协程与 Pigeon 虚方法调用） ──
+-dontoptimize
+
+# ── Flutter Plugins, Embedding & Pigeon ──
+-keep class io.flutter.app.** { *; }
+-keep class io.flutter.plugin.** { *; }
+-keep class io.flutter.util.** { *; }
+-keep class io.flutter.view.** { *; }
+-keep class io.flutter.** { *; }
+-keep interface io.flutter.** { *; }
+-keep class io.flutter.plugins.** { *; }
+-keep interface io.flutter.plugins.** { *; }
+-keep class dev.flutter.pigeon.** { *; }
+-keep interface dev.flutter.pigeon.** { *; }
+-keepattributes *Annotation*,Signature,InnerClasses,EnclosingMethod
+-dontwarn io.flutter.embedding.android.FlutterPlayStoreSplitApplication
+-dontwarn com.google.android.play.core.**
+
+# ── shared_preferences (package:jni & Coroutines) ──
+-keep class io.flutter.plugins.sharedpreferences.** { *; }
+-keep interface io.flutter.plugins.sharedpreferences.** { *; }
+-keepclassmembers class io.flutter.plugins.sharedpreferences.** { *; }
+-keepclassmembers interface io.flutter.plugins.sharedpreferences.** { *; }
+-dontwarn io.flutter.plugins.sharedpreferences.**
+-keep class com.github.dart_lang.jni.** { *; }
+-keepclassmembers class com.github.dart_lang.jni.** { *; }
+-dontwarn com.github.dart_lang.jni.**
+-keep class kotlin.coroutines.** { *; }
+-keep interface kotlin.coroutines.** { *; }
+-keep class kotlinx.coroutines.** { *; }
+-keep interface kotlinx.coroutines.** { *; }
+
+# ── flutter_secure_storage & crypto ──
+-keep class com.it_nomads.fluttersecurestorage.** { *; }
+-dontwarn com.it_nomads.fluttersecurestorage.**
+-keep class androidx.security.crypto.** { *; }
+-dontwarn androidx.security.crypto.**
+-keep class com.google.crypto.tink.** { *; }
+-dontwarn com.google.crypto.tink.**
+
+

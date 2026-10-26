@@ -14,8 +14,6 @@ import '../../providers/theme_provider.dart';
 import '../../widgets/smart_artwork_image.dart';
 import 'car_mode_layout.dart';
 import 'car_mode_lyric_bar.dart';
-import 'full_player.dart';
-import 'full_player_am.dart';
 import 'full_player_route.dart';
 
 /// 车机模式外壳：开启时把 [child]（整棵根 Navigator）与常驻播放器面板并排。
@@ -478,10 +476,8 @@ class _CarModePlayerBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final useAm = context.watch<ThemeProvider>().useAmStylePlayer;
-    return useAm
-        ? const AmStyleFullPlayer(dockMode: true)
-        : const FullPlayer(dockMode: true);
+    final style = context.watch<ThemeProvider>().playerStyle;
+    return buildActiveFullPlayer(style, dockMode: true);
   }
 }
 

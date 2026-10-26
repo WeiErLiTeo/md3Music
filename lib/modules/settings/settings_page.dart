@@ -4085,8 +4085,16 @@ class _SettingsPageState extends State<SettingsPage>
     );
   }
 
-  /// 「歌词效果」三级子页：AM 歌词的对唱 / 取色 / 模糊 / 辉光 / 省电模式。
+  /// 「歌词效果」三级子页：AM / YT 歌词的对唱 / 取色 / 模糊 / 辉光 / 省电模式。
   Widget _buildLyricEffectSubpage(ColorScheme colorScheme) {
+    final playerStyle = context.watch<ThemeProvider>().playerStyle;
+    final isYtStyle = playerStyle == PlayerStyle.ytMusic;
+    final isAmStyle = playerStyle == PlayerStyle.appleMusic;
+    final supportsAdvancedLyrics = isAmStyle || isYtStyle;
+    final styleSubtitle = isYtStyle
+        ? '当前：YouTube Music 风格'
+        : (isAmStyle ? '当前：Apple Music 风格' : '当前：Material 风格');
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -4095,13 +4103,16 @@ class _SettingsPageState extends State<SettingsPage>
         // 「辉光」「模糊」「平衡换行」具体指什么。控件在下方实时驱动上方画面。
         // 真值源与播放页同一份（LyricPreferences / Md3LyricPreferences），
         // 不另存状态，故不会出现「演示一套、播放页另一套」。
-        LyricEffectPreview(isAmStyle: _useAmStylePlayer),
+        LyricEffectPreview(
+          isAmStyle: supportsAdvancedLyrics,
+          styleSubtitle: styleSubtitle,
+        ),
         const Gap(AppSpacing.sm),
         // search: 对唱 男女
         SwitchListTile(
           title: const Text('男女对唱歌词优化'),
           value: _useDuetLayout,
-          onChanged: _useAmStylePlayer
+          onChanged: supportsAdvancedLyrics
               ? (v) {
                   AppHaptics.lightImpact(HapticCategory.control);
                   setState(() => _useDuetLayout = v);
@@ -4114,7 +4125,7 @@ class _SettingsPageState extends State<SettingsPage>
         SwitchListTile(
           title: const Text('歌词动态颜色'),
           value: _lyricDynamicColor,
-          onChanged: _useAmStylePlayer
+          onChanged: supportsAdvancedLyrics
               ? (v) {
                   AppHaptics.lightImpact(HapticCategory.control);
                   setState(() => _lyricDynamicColor = v);
@@ -4128,7 +4139,7 @@ class _SettingsPageState extends State<SettingsPage>
           // 标题说明了是什么，副标题只留影响决策的功耗代价
           subtitle: const Text('高功耗'),
           value: _useGaussianBlur,
-          onChanged: _useAmStylePlayer
+          onChanged: supportsAdvancedLyrics
               ? (v) {
                   AppHaptics.lightImpact(HapticCategory.control);
                   setState(() => _useGaussianBlur = v);
@@ -4140,7 +4151,7 @@ class _SettingsPageState extends State<SettingsPage>
         SwitchListTile(
           title: const Text('歌词辉光效果'),
           value: _useGlowEffect,
-          onChanged: _useAmStylePlayer
+          onChanged: supportsAdvancedLyrics
               ? (v) {
                   AppHaptics.lightImpact(HapticCategory.control);
                   setState(() => _useGlowEffect = v);
@@ -4153,10 +4164,10 @@ class _SettingsPageState extends State<SettingsPage>
         // 两套播放器各一个开关：两套歌词的换行实现不同，问题不共用。
         // search: 平衡 平衡行 换行 断行 折行
         SwitchListTile(
-          title: const Text('平衡行换行（Apple 风格）'),
+          title: const Text('平衡行换行（Apple / YT 风格）'),
           subtitle: const Text('长歌词换行时让每行长度更均匀'),
           value: _lyricLineBalanceAm,
-          onChanged: _useAmStylePlayer
+          onChanged: supportsAdvancedLyrics
               ? (v) {
                   AppHaptics.lightImpact(HapticCategory.control);
                   setState(() => _lyricLineBalanceAm = v);
@@ -4169,7 +4180,7 @@ class _SettingsPageState extends State<SettingsPage>
           title: const Text('平衡行换行（Material 风格）'),
           subtitle: const Text('长歌词换行时让每行长度更均匀'),
           value: _lyricLineBalanceMd3,
-          onChanged: _useAmStylePlayer
+          onChanged: supportsAdvancedLyrics
               ? null
               : (v) {
                   AppHaptics.lightImpact(HapticCategory.control);
@@ -4177,13 +4188,13 @@ class _SettingsPageState extends State<SettingsPage>
                   Md3LyricPreferences.instance.setLineBalance(v);
                 },
         ),
-        // 歌词省电模式：AM 播放器歌词界面锁定 60fps，上下滑动歌词时临时解锁。
+        // 歌词省电模式：AM / YT 播放器歌词界面锁定 60fps，上下滑动歌词时临时解锁。
         // 排在特效末尾：它是上面几项高功耗特效的性能兜底。
         // search: 省电 限帧
         SwitchListTile(
           title: const Text('歌词省电模式'),
           value: _lyricEcoMode,
-          onChanged: _useAmStylePlayer
+          onChanged: supportsAdvancedLyrics
               ? (v) {
                   AppHaptics.lightImpact(HapticCategory.control);
                   setState(() => _lyricEcoMode = v);
@@ -4305,7 +4316,7 @@ class _SettingsPageState extends State<SettingsPage>
           title: const Text('背景动态流光'),
           subtitle: const Text('高功耗；随音乐频谱律动，与频谱背景同时开启会叠加开销'),
           value: _useFlowingBackground,
-          onChanged: _useAmStylePlayer
+          onChanged: context.watch<ThemeProvider>().playerStyle != PlayerStyle.md3
               ? (v) {
                   AppHaptics.lightImpact(HapticCategory.control);
                   setState(() => _useFlowingBackground = v);
@@ -4313,10 +4324,11 @@ class _SettingsPageState extends State<SettingsPage>
                 }
               : null,
         ),
-        // 播放页背景模糊：仅 AM 风格 + 动态流光关闭时渲染此模糊层，
+        // 播放页背景模糊：仅 AM / YT 风格 + 动态流光关闭时渲染此模糊层，
         // 两种条件任一不满足即隐藏（流光开启时滑块无意义）
         // search: 模糊 背景 播放器 毛玻璃 封面
-        if (_useAmStylePlayer && !_useFlowingBackground)
+        if (context.watch<ThemeProvider>().playerStyle != PlayerStyle.md3 &&
+            !_useFlowingBackground)
           ListTile(
             title: const Text('播放页背景模糊'),
             // tv: TV 构建换 RemoteSlider（P-C）
@@ -6757,6 +6769,7 @@ class _SettingsPageState extends State<SettingsPage>
   // ─────────────────────────────────────────────────────────────────────
 
   Widget _buildStyleCards(ColorScheme colorScheme) {
+    final currentStyle = context.watch<ThemeProvider>().playerStyle;
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
@@ -6764,11 +6777,11 @@ class _SettingsPageState extends State<SettingsPage>
           colorScheme: colorScheme,
           title: 'MD3Music',
           subtitle: 'Material 3 风格',
-          isSelected: !_useAmStylePlayer,
+          isSelected: currentStyle == PlayerStyle.md3,
           onTap: () {
             AppHaptics.lightImpact(HapticCategory.control);
             setState(() => _useAmStylePlayer = false);
-            context.read<ThemeProvider>().setUseAmStylePlayer(false);
+            context.read<ThemeProvider>().setPlayerStyle(PlayerStyle.md3);
           },
           preview: _SettingsMd3StylePreview(colorScheme: colorScheme),
         ),
@@ -6777,13 +6790,28 @@ class _SettingsPageState extends State<SettingsPage>
           colorScheme: colorScheme,
           title: 'Apple Music',
           subtitle: '模糊封面 + 逐字歌词',
-          isSelected: _useAmStylePlayer,
+          isSelected: currentStyle == PlayerStyle.appleMusic,
           onTap: () {
             AppHaptics.lightImpact(HapticCategory.control);
             setState(() => _useAmStylePlayer = true);
-            context.read<ThemeProvider>().setUseAmStylePlayer(true);
+            context.read<ThemeProvider>().setPlayerStyle(
+              PlayerStyle.appleMusic,
+            );
           },
           preview: _SettingsAmStylePreview(colorScheme: colorScheme),
+        ),
+        const Gap(AppSpacing.lg),
+        _buildStyleCard(
+          colorScheme: colorScheme,
+          title: 'YouTube Music',
+          subtitle: '五键操作栏 · 胶囊按钮 · 歌词抽屉',
+          isSelected: currentStyle == PlayerStyle.ytMusic,
+          onTap: () {
+            AppHaptics.lightImpact(HapticCategory.control);
+            setState(() => _useAmStylePlayer = false);
+            context.read<ThemeProvider>().setPlayerStyle(PlayerStyle.ytMusic);
+          },
+          preview: _SettingsYtStylePreview(colorScheme: colorScheme),
         ),
       ],
     );
@@ -7961,6 +7989,147 @@ class _FlymeLyricAdvanceTileState extends State<_FlymeLyricAdvanceTile> {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _SettingsYtStylePreview extends StatelessWidget {
+  const _SettingsYtStylePreview({required this.colorScheme});
+  final ColorScheme colorScheme;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        color: Color(0xFF0F0F0F),
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Color(0xFF262626),
+            Color(0xFF0F0F0F),
+          ],
+        ),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      child: Column(
+        children: [
+          Row(
+            children: const [
+              Icon(Icons.keyboard_arrow_down, size: 14, color: Colors.white70),
+              Spacer(),
+              Icon(Icons.more_vert, size: 12, color: Colors.white70),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: const Color(0xFF2A2A2A),
+              borderRadius: BorderRadius.circular(6),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.5),
+                  blurRadius: 6,
+                  offset: const Offset(0, 3),
+                ),
+              ],
+            ),
+            child: const Center(
+              child: Icon(
+                Icons.music_note,
+                color: Colors.white70,
+                size: 20,
+              ),
+            ),
+          ),
+          const SizedBox(height: 5),
+          Container(
+            height: 4,
+            width: 54,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(height: 3),
+          Container(
+            height: 3,
+            width: 36,
+            decoration: BoxDecoration(
+              color: Colors.white54,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(height: 5),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              _buildMiniChip(Icons.favorite_border),
+              const SizedBox(width: 4),
+              _buildMiniChip(Icons.subtitles_outlined),
+              const SizedBox(width: 4),
+              _buildMiniChip(Icons.playlist_add),
+            ],
+          ),
+          const SizedBox(height: 5),
+          Container(
+            height: 2,
+            margin: const EdgeInsets.symmetric(horizontal: 4),
+            decoration: BoxDecoration(
+              color: Colors.white24,
+              borderRadius: BorderRadius.circular(1),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 28,
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(1),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Spacer(),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              const Icon(Icons.shuffle, size: 10, color: Colors.white54),
+              const Icon(Icons.skip_previous, size: 13, color: Colors.white),
+              Container(
+                width: 18,
+                height: 18,
+                decoration: const BoxDecoration(
+                  color: Colors.white,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.play_arrow,
+                  size: 12,
+                  color: Colors.black,
+                ),
+              ),
+              const Icon(Icons.skip_next, size: 13, color: Colors.white),
+              const Icon(Icons.repeat, size: 10, color: Colors.white54),
+            ],
+          ),
+          const SizedBox(height: 2),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMiniChip(IconData icon) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Icon(icon, size: 8, color: Colors.white70),
     );
   }
 }
