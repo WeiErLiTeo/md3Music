@@ -24,12 +24,12 @@ import '../../../widgets/dynamic_cover_view.dart';
 import '../../../widgets/marquee_text.dart';
 import '../../../widgets/player_artwork_image.dart'
     show isPlayerArtworkReady, preloadPlayerArtwork;
-import '../../../widgets/player_playlist_view.dart';
 import '../../../widgets/player_seek_bar.dart';
 import '../../settings/equalizer_settings_page.dart';
 import '../../sheet/song_sheet_sheet.dart';
 import '../comments_view.dart';
 import '../cover_switch_physics.dart';
+import '../dlna_cast_sheet.dart';
 import '../mv_player_page.dart';
 import '../player_cover_morph_layer.dart';
 import '../player_cover_shadow.dart';
@@ -42,9 +42,6 @@ import '../widgets/title_switch_fade.dart';
 import 'yt_more_menu.dart';
 
 class YtMainView extends StatefulWidget {
-  static final PlaylistScrollAnchor playlistScrollAnchor =
-      PlaylistScrollAnchor();
-
   /// 缓存每首歌是否存在可用 MV（key = albumAudioId）
   static final Map<String, MvInfo?> _mvInfoCache = <String, MvInfo?>{};
 
@@ -120,6 +117,10 @@ class _YtMainViewState extends State<YtMainView>
   bool _enteredVideoActive = false;
   bool _mvControlsVisible = true;
   Timer? _mvControlsHideTimer;
+  bool _handlingMvCompletion = false;
+  bool _autoReenterVideoOnNextSong = false;
+  Timer? _songSwitchDeferTimer;
+  bool _dynamicCoverReady = true;
 
   // ============== 「默认收藏」歌单状态 ==============
   bool _defaultStarred = false;
@@ -156,12 +157,14 @@ class _YtMainViewState extends State<YtMainView>
     super.didUpdateWidget(oldWidget);
     if (widget.song.id != oldWidget.song.id ||
         widget.song.albumAudioId != oldWidget.song.albumAudioId) {
-      _syncSongCapabilities(widget.song);
+      final resolved = YtMoreMenu.resolveMatchedSong(widget.song);
+      _defaultStarred = _isSongInDefaultCollection(widget.song, resolved);
     }
   }
 
   @override
   void dispose() {
+    _songSwitchDeferTimer?.cancel();
     _disposeVideoController(resumeAudio: false);
     _internalQueueController?.dispose();
     _playerProvider?.removeListener(_onPlayerChanged);
@@ -175,16 +178,21 @@ class _YtMainViewState extends State<YtMainView>
         YtMainView._defaultCollectionHashes.contains(resolvedHash);
   }
 
-  void _syncSongCapabilities(Song rawSong) {
+  void _syncSongCapabilities(
+    Song rawSong, {
+    bool autoEnterVideoIfAvailable = false,
+  }) {
     final resolved = YtMoreMenu.resolveMatchedSong(rawSong);
     _defaultStarred = _isSongInDefaultCollection(rawSong, resolved);
     unawaited(_ensureDefaultCollectionSynced());
 
     final albumAudioId = resolved.albumAudioId;
-    if (albumAudioId == _probedAlbumAudioId) return;
+    if (albumAudioId == _probedAlbumAudioId && !autoEnterVideoIfAvailable) {
+      return;
+    }
     _probedAlbumAudioId = albumAudioId;
 
-    if (_isVideoMode) {
+    if (_isVideoMode && !autoEnterVideoIfAvailable) {
       _exitVideoMode(resumeAudio: false);
     }
 
@@ -196,8 +204,14 @@ class _YtMainViewState extends State<YtMainView>
     }
 
     if (YtMainView._mvInfoCache.containsKey(albumAudioId)) {
+      final cachedInfo = YtMainView._mvInfoCache[albumAudioId];
       if (mounted) {
-        setState(() => _currentMvInfo = YtMainView._mvInfoCache[albumAudioId]);
+        setState(() => _currentMvInfo = cachedInfo);
+        if (autoEnterVideoIfAvailable &&
+            cachedInfo != null &&
+            cachedInfo.hasMv) {
+          unawaited(_enterVideoMode(resolved));
+        }
       }
       return;
     }
@@ -206,13 +220,15 @@ class _YtMainViewState extends State<YtMainView>
     KugouApiClient()
         .getMvByAlbumAudioId(albumAudioId)
         .then((info) {
-          YtMainView._mvInfoCache[albumAudioId] = (info != null && info.hasMv)
-              ? info
-              : null;
+          final validInfo = (info != null && info.hasMv) ? info : null;
+          YtMainView._mvInfoCache[albumAudioId] = validInfo;
           if (!mounted || _probedAlbumAudioId != albumAudioId) return;
           setState(() {
-            _currentMvInfo = YtMainView._mvInfoCache[albumAudioId];
+            _currentMvInfo = validInfo;
           });
+          if (autoEnterVideoIfAvailable && validInfo != null) {
+            unawaited(_enterVideoMode(resolved));
+          }
         })
         .catchError((_) {});
   }
@@ -293,7 +309,11 @@ class _YtMainViewState extends State<YtMainView>
     unawaited(old?.dispose());
 
     _currentVideoUrl = url;
-    final ctrl = VideoPlayerController.networkUrl(Uri.parse(url));
+    _handlingMvCompletion = false;
+    final ctrl = VideoPlayerController.networkUrl(
+      Uri.parse(url),
+      videoPlayerOptions: VideoPlayerOptions(allowBackgroundPlayback: true),
+    );
     _videoController = ctrl;
     try {
       await ctrl.initialize();
@@ -372,7 +392,33 @@ class _YtMainViewState extends State<YtMainView>
     if (!mounted || !_isVideoMode) return;
     final ctrl = _videoController;
     if (ctrl != null) {
-      WakelockService.instance.setVideoPlaying(ctrl.value.isPlaying);
+      final val = ctrl.value;
+      WakelockService.instance.setVideoPlaying(val.isPlaying);
+      if (val.isInitialized &&
+          !_videoLoading &&
+          !_handlingMvCompletion &&
+          val.duration > const Duration(seconds: 1) &&
+          val.position >= val.duration - const Duration(milliseconds: 250) &&
+          !val.isPlaying) {
+        _handlingMvCompletion = true;
+        final player = _playerProvider;
+        if (player != null) {
+          if (player.loopMode == AppLoopMode.one) {
+            ctrl.seekTo(Duration.zero).then((_) => ctrl.play()).whenComplete(
+              () {
+                _handlingMvCompletion = false;
+              },
+            );
+          } else {
+            _autoReenterVideoOnNextSong = true;
+            player.next().whenComplete(() {
+              _handlingMvCompletion = false;
+            });
+          }
+        } else {
+          _handlingMvCompletion = false;
+        }
+      }
     }
     setState(() {});
   }
@@ -424,10 +470,21 @@ class _YtMainViewState extends State<YtMainView>
     _lastPagerIndex = player.currentIndex;
     if (song != null && song.id != _lastSongId) {
       _lastSongId = song.id;
+      final bool shouldAutoPlayMv = _isVideoMode || _autoReenterVideoOnNextSong;
+      _autoReenterVideoOnNextSong = false;
       if (_isVideoMode) {
         _exitVideoMode(resumeAudio: false);
       }
-      _syncSongCapabilities(song);
+      _dynamicCoverReady = false;
+      _songSwitchDeferTimer?.cancel();
+      _songSwitchDeferTimer = Timer(const Duration(milliseconds: 280), () {
+        if (!mounted) return;
+        setState(() => _dynamicCoverReady = true);
+        _syncSongCapabilities(
+          song,
+          autoEnterVideoIfAvailable: shouldAutoPlayMv,
+        );
+      });
       if (slideDirection != 0) {
         _coverFlipDirection = slideDirection;
       }
@@ -441,9 +498,13 @@ class _YtMainViewState extends State<YtMainView>
       }
       final playlist = player.playlist;
       final idx = player.currentIndex;
-      if (idx > 0) preloadPlayerArtwork(playlist[idx - 1].artworkUri);
+      if (idx > 0) {
+        final prevResolved = YtMoreMenu.resolveMatchedSong(playlist[idx - 1]);
+        preloadPlayerArtwork(prevResolved.artworkUri);
+      }
       if (idx < playlist.length - 1) {
-        preloadPlayerArtwork(playlist[idx + 1].artworkUri);
+        final nextResolved = YtMoreMenu.resolveMatchedSong(playlist[idx + 1]);
+        preloadPlayerArtwork(nextResolved.artworkUri);
       }
     } else if (_isVideoMode && player.isPlaying) {
       // 当处于 MV 视频模式时，若用户在播放列表中点击了当前同一首歌触发了音频播放，
@@ -787,28 +848,24 @@ class _YtMainViewState extends State<YtMainView>
           );
         }
 
-        // 2. 下半区四件套位置：1:1 对齐原版 YT Music（图 2），自底向上贴近底部「接下来播放」把手锚定，
-        // 将多余垂直呼吸空间留在「封面底边 → 歌名」之间，彻底消除播放键下方的空洞！
+        // 2. 下半区四件套位置：1:1 对齐原版 YT Music（图 1），
+        // 向上适度提拉歌名与胶囊栏，收窄「封面底边 → 歌名」的间距，并在五键控制栏与底部把手之间留出舒适呼吸感
         final double queueHandleTop = screenH - safeBottom - handleCollapsedH;
-        final double normalTransportTop = queueHandleTop - 18.0 - 64.0;
-        final double normalSeekTop = normalTransportTop - 52.0;
-        final double normalCapsuleTop = normalSeekTop - 54.0;
+        final double normalTransportTop = queueHandleTop - 30.0 - 74.0;
+        final double normalSeekTop = normalTransportTop - 54.0;
+        final double normalCapsuleTop = normalSeekTop - 58.0;
         final double normalTitleTop = math.max(
-          normalCoverTop + normalCoverSide + 16.0,
-          normalCapsuleTop - 68.0,
+          normalCoverTop + normalCoverSide + 14.0,
+          normalCapsuleTop - 72.0,
         );
 
         return Stack(
           fit: StackFit.expand,
           children: [
-            // 当处于 MV 视频模式时，同源动态高斯模糊光晕向上延伸入侵至顶栏、向下入侵至歌名与胶囊栏背后，
-            // 并通过长渐变羽化无缝融入播放器主背景，彻底消除图 3 的圆角方框割裂感
+            // 当处于 MV 视频模式时，同源动态高斯模糊光晕 100% 全屏延伸入侵（从顶栏直达最底部把手），
+            // 彻底消除下半屏断层与分界横线
             if (_isVideoMode)
-              Positioned(
-                left: 0,
-                right: 0,
-                top: 0,
-                height: math.min(screenH, normalCapsuleTop + 48.0),
+              Positioned.fill(
                 child: IgnorePointer(
                   child: _buildMvAmbientInvasionBackdrop(resolvedSong),
                 ),
@@ -847,10 +904,10 @@ class _YtMainViewState extends State<YtMainView>
               child: _buildTitleAndArtist(context, resolvedSong),
             ),
 
-            // 胶囊操作栏
+            // 胶囊操作栏（外层铺满全屏宽度，内部 SingleChildScrollView 设 24px 内边距，消除右侧硬截断）
             Positioned(
-              left: 20,
-              right: 20,
+              left: 0,
+              right: 0,
               top: normalCapsuleTop,
               child: _buildCapsuleRow(
                 context,
@@ -868,10 +925,10 @@ class _YtMainViewState extends State<YtMainView>
               child: _buildSeekBar(context, resolvedSong),
             ),
 
-            // 五键播放控制栏
+            // 五键播放控制栏（左右 24px 严格对齐进度条与歌名两端）
             Positioned(
-              left: 20,
-              right: 20,
+              left: 24,
+              right: 24,
               top: normalTransportTop,
               child: _buildTransportControls(context),
             ),
@@ -976,6 +1033,7 @@ class _YtMainViewState extends State<YtMainView>
                       resolvedSong,
                       isFavorited,
                       isOnline,
+                      horizontalPadding: 4,
                     ),
                     _buildSeekBar(context, resolvedSong),
                     _buildTransportControls(context),
@@ -990,7 +1048,7 @@ class _YtMainViewState extends State<YtMainView>
     );
   }
 
-  /// MV 视频模式下延伸入侵整个播放器上半屏的同源动态柔光高斯模糊层
+  /// MV 视频模式下 100% 全屏延伸入侵整个播放器的同源动态柔光高斯模糊层
   Widget _buildMvAmbientInvasionBackdrop(Song resolvedSong) {
     final ctrl = _videoController;
     final initialized = ctrl != null && ctrl.value.isInitialized;
@@ -998,23 +1056,11 @@ class _YtMainViewState extends State<YtMainView>
     final vW = vSize.width > 0 ? vSize.width : 160.0;
     final vH = vSize.height > 0 ? vSize.height : 90.0;
 
-    return ShaderMask(
-      shaderCallback: (rect) => const LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-        stops: [0.0, 0.14, 0.68, 1.0],
-        colors: [
-          Colors.transparent,
-          Colors.black,
-          Colors.black,
-          Colors.transparent,
-        ],
-      ).createShader(rect),
-      blendMode: BlendMode.dstIn,
+    return RepaintBoundary(
       child: ImageFiltered(
         imageFilter: ui.ImageFilter.blur(
-          sigmaX: 34,
-          sigmaY: 34,
+          sigmaX: 46,
+          sigmaY: 46,
           tileMode: TileMode.mirror,
         ),
         child: Stack(
@@ -1038,7 +1084,21 @@ class _YtMainViewState extends State<YtMainView>
                   child: VideoPlayer(ctrl),
                 ),
               ),
-            ColoredBox(color: Colors.black.withValues(alpha: 0.22)),
+            DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  stops: const [0.0, 0.25, 0.65, 1.0],
+                  colors: [
+                    Colors.black.withValues(alpha: 0.26),
+                    Colors.black.withValues(alpha: 0.14),
+                    Colors.black.withValues(alpha: 0.34),
+                    Colors.black.withValues(alpha: 0.56),
+                  ],
+                ),
+              ),
+            ),
           ],
         ),
       ),
@@ -1176,7 +1236,7 @@ class _YtMainViewState extends State<YtMainView>
     );
   }
 
-  /// 原地内嵌 MV 视频播放器（上下边缘 ShaderMask 柔化消除横线 + 控件 3 秒无操作自动隐去）
+  /// 原地内嵌 MV 视频播放器（上下边缘拓宽 ShaderMask 羽化消除横线，画面 100% 纯净无浮动按钮遮挡）
   Widget _buildInlineMvPlayer(
     BuildContext context,
     Song resolvedSong,
@@ -1196,14 +1256,14 @@ class _YtMainViewState extends State<YtMainView>
         child: Stack(
           fit: StackFit.expand,
           children: [
-            // 1. 中央 16:9 完整主视频画面：上下边缘使用 ShaderMask Alpha 羽化过渡，彻底消除两条硬横线
+            // 中央 16:9 完整主视频画面：上下边缘使用宽幅 ShaderMask Alpha 羽化过渡，彻底消除两条硬横线
             if (initialized)
               Center(
                 child: ShaderMask(
                   shaderCallback: (rect) => const LinearGradient(
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
-                    stops: [0.0, 0.055, 0.945, 1.0],
+                    stops: [0.0, 0.11, 0.89, 1.0],
                     colors: [
                       Colors.transparent,
                       Colors.black,
@@ -1257,108 +1317,6 @@ class _YtMainViewState extends State<YtMainView>
                   ],
                 ),
               ),
-            // 2. 右下角「清晰度」与「全屏」按钮：位于视频底边下方光晕带内零遮挡，且 3 秒自动淡出隐藏
-            if (initialized)
-              Positioned(
-                right: 16,
-                bottom: 10,
-                child: IgnorePointer(
-                  ignoring: !_mvControlsVisible,
-                  child: AnimatedOpacity(
-                    opacity: _mvControlsVisible ? 1.0 : 0.0,
-                    duration: const Duration(milliseconds: 260),
-                    curve: Curves.easeOutCubic,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (_mvQualities.length > 1)
-                          PopupMenuButton<int>(
-                            tooltip: '切换清晰度',
-                            color: const Color(0xFF222222),
-                            onOpened: () => _mvControlsHideTimer?.cancel(),
-                            onCanceled: _showMvControlsTemporarily,
-                            onSelected: (idx) {
-                              _showMvControlsTemporarily();
-                              _switchMvQuality(idx);
-                            },
-                            itemBuilder: (_) => [
-                              for (int i = 0; i < _mvQualities.length; i++)
-                                PopupMenuItem<int>(
-                                  value: i,
-                                  child: Text(
-                                    _mvQualities[i].quality,
-                                    style: TextStyle(
-                                      color: i == _mvQualityIndex
-                                          ? Colors.white
-                                          : Colors.white70,
-                                      fontWeight: i == _mvQualityIndex
-                                          ? FontWeight.bold
-                                          : FontWeight.normal,
-                                    ),
-                                  ),
-                                ),
-                            ],
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 10,
-                                vertical: 5,
-                              ),
-                              decoration: BoxDecoration(
-                                color: Colors.black.withValues(alpha: 0.45),
-                                borderRadius: BorderRadius.circular(14),
-                                border: Border.all(
-                                  color: Colors.white.withValues(alpha: 0.14),
-                                  width: 0.5,
-                                ),
-                              ),
-                              child: Text(
-                                _mvQualities[_mvQualityIndex].quality,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ),
-                          ),
-                        const SizedBox(width: 8),
-                        GestureDetector(
-                          onTap: () {
-                            final url = _currentVideoUrl;
-                            _exitVideoMode(resumeAudio: false);
-                            final push =
-                                widget.onPushPage ?? Navigator.of(context).push;
-                            push(
-                              MaterialPageRoute(
-                                builder: (_) => MvPlayerPage(
-                                  song: resolvedSong,
-                                  directVideoUrl: url,
-                                ),
-                              ),
-                            );
-                          },
-                          child: Container(
-                            padding: const EdgeInsets.all(6),
-                            decoration: BoxDecoration(
-                              color: Colors.black.withValues(alpha: 0.45),
-                              borderRadius: BorderRadius.circular(14),
-                              border: Border.all(
-                                color: Colors.white.withValues(alpha: 0.14),
-                                width: 0.5,
-                              ),
-                            ),
-                            child: const Icon(
-                              Icons.fullscreen_rounded,
-                              color: Colors.white,
-                              size: 18,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
           ],
         ),
       ),
@@ -1398,7 +1356,7 @@ class _YtMainViewState extends State<YtMainView>
         settledLogicalWidth: width,
         devicePixelRatio: dpr,
       ),
-      child: resolvedSong.isOnline
+      child: resolvedSong.isOnline && _dynamicCoverReady
           ? Stack(
               fit: StackFit.expand,
               children: [
@@ -1417,10 +1375,12 @@ class _YtMainViewState extends State<YtMainView>
     double borderRadius = 12.0,
     bool queueExpanded = false,
   }) {
-    final player = context.watch<PlayerProvider>();
     final colorScheme = Theme.of(context).colorScheme;
-    final prevSong = _pagerNeighborSong(player, -1);
-    final nextSong = _pagerNeighborSong(player, 1);
+    final neighbors = context.select<PlayerProvider, (Song?, Song?)>(
+      (p) => (_pagerNeighborSong(p, -1), _pagerNeighborSong(p, 1)),
+    );
+    final prevSong = neighbors.$1;
+    final nextSong = neighbors.$2;
 
     final coverContent = SizedBox(
       width: side,
@@ -1561,18 +1521,100 @@ class _YtMainViewState extends State<YtMainView>
     );
   }
 
-  /// 胶囊栏：第一枚为合体双联胶囊 `[ ♥ 喜欢 | ⭐ 收藏 ]`，后接 `[ 歌词 ]` `[ ➕ 保存 ]` `[ 评论 ]` `[ 曲谱 ]` `[ 音效 ]`
+  /// 弹出 MV 清晰度切换底部面板
+  void _showMvQualitySheet(BuildContext context) {
+    if (_mvQualities.isEmpty) {
+      showToast('当前 MV 仅提供默认清晰度');
+      return;
+    }
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF1E1E1E),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 36,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.white24,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  '选择视频清晰度',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                for (int i = 0; i < _mvQualities.length; i++)
+                  ListTile(
+                    leading: Icon(
+                      i == _mvQualityIndex
+                          ? Icons.radio_button_checked_rounded
+                          : Icons.radio_button_off_rounded,
+                      color: i == _mvQualityIndex
+                          ? Colors.white
+                          : Colors.white54,
+                      size: 20,
+                    ),
+                    title: Text(
+                      _mvQualities[i].quality,
+                      style: TextStyle(
+                        color: i == _mvQualityIndex
+                            ? Colors.white
+                            : Colors.white70,
+                        fontWeight: i == _mvQualityIndex
+                            ? FontWeight.w700
+                            : FontWeight.w400,
+                      ),
+                    ),
+                    onTap: () {
+                      Navigator.of(ctx).pop();
+                      _switchMvQuality(i);
+                    },
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// 胶囊栏：
+  /// - 音频模式：`[ ♥ 喜欢 | ⭐ 收藏 ]`、`[ 歌词 ]`、`[ 保存 ]`、`[ 评论 ]`、`[ 曲谱 ]`、`[ 音效 ]`
+  /// - MV 视频模式：`[ ♥ 喜欢 | ⭐ 收藏 ]`、`[ 投屏 ]`、`[ 清晰度 ]`、`[ 全屏 ]`、`[ 保存 ]`、`[ 评论 ]`
   Widget _buildCapsuleRow(
     BuildContext context,
     Song song,
     bool isFavorited,
-    bool isOnline,
-  ) {
+    bool isOnline, {
+    double horizontalPadding = 24.0,
+  }) {
     final hasSheet = song.albumAudioId != null && song.albumAudioId!.isNotEmpty;
+    final currentQualityLabel =
+        (_mvQualities.isNotEmpty &&
+            _mvQualityIndex >= 0 &&
+            _mvQualityIndex < _mvQualities.length)
+        ? '清晰度 · ${_mvQualities[_mvQualityIndex].quality}'
+        : '清晰度';
 
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       physics: const BouncingScrollPhysics(),
+      padding: EdgeInsets.symmetric(horizontal: horizontalPadding),
       child: Row(
         children: [
           // 原版 YT 双联胶囊：[ ♥ 喜欢 | ⭐ 收藏(默认收藏歌单) ]
@@ -1582,45 +1624,93 @@ class _YtMainViewState extends State<YtMainView>
             isFavorited: isFavorited,
             isOnline: isOnline,
           ),
-          const SizedBox(width: 10),
-          _buildCapsuleButton(
-            icon: Icons.subtitles_outlined,
-            label: '歌词',
-            onTap: widget.onOpenLyrics,
-          ),
-          const SizedBox(width: 10),
-          _buildCapsuleButton(
-            icon: Icons.playlist_add,
-            label: '保存',
-            onTap: () => showAddToPlaylistDialog(context, song),
-          ),
-          const SizedBox(width: 10),
-          _buildCapsuleButton(
-            icon: Icons.comment_outlined,
-            label: '评论',
-            onTap: () => showSongCommentsSheet(context, song),
-          ),
-          if (hasSheet) ...[
+          if (_isVideoMode) ...[
             const SizedBox(width: 10),
             _buildCapsuleButton(
-              icon: Icons.library_music_outlined,
-              label: '曲谱',
-              onTap: () => showSongSheetSheet(context, song),
+              icon: Icons.cast_rounded,
+              label: '投屏',
+              onTap: () => showDlnaCastSheet(
+                context,
+                song,
+                videoUrl: _currentVideoUrl,
+                videoTitle: '${song.displayName} - ${song.artist} (MV)',
+              ),
+            ),
+            const SizedBox(width: 10),
+            _buildCapsuleButton(
+              icon: Icons.hd_outlined,
+              label: currentQualityLabel,
+              onTap: () => _showMvQualitySheet(context),
+            ),
+            const SizedBox(width: 10),
+            _buildCapsuleButton(
+              icon: Icons.fullscreen_rounded,
+              label: '全屏',
+              onTap: () {
+                final url = _currentVideoUrl;
+                _exitVideoMode(resumeAudio: false);
+                final push = widget.onPushPage ?? Navigator.of(context).push;
+                push(
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        MvPlayerPage(song: song, directVideoUrl: url),
+                  ),
+                );
+              },
+            ),
+            const SizedBox(width: 10),
+            _buildCapsuleButton(
+              icon: Icons.playlist_add,
+              label: '保存',
+              onTap: () => showAddToPlaylistDialog(context, song),
+            ),
+            const SizedBox(width: 10),
+            _buildCapsuleButton(
+              icon: Icons.comment_outlined,
+              label: '评论',
+              onTap: () => showSongCommentsSheet(context, song),
+            ),
+          ] else ...[
+            const SizedBox(width: 10),
+            _buildCapsuleButton(
+              icon: Icons.subtitles_outlined,
+              label: '歌词',
+              onTap: widget.onOpenLyrics,
+            ),
+            const SizedBox(width: 10),
+            _buildCapsuleButton(
+              icon: Icons.playlist_add,
+              label: '保存',
+              onTap: () => showAddToPlaylistDialog(context, song),
+            ),
+            const SizedBox(width: 10),
+            _buildCapsuleButton(
+              icon: Icons.comment_outlined,
+              label: '评论',
+              onTap: () => showSongCommentsSheet(context, song),
+            ),
+            if (hasSheet) ...[
+              const SizedBox(width: 10),
+              _buildCapsuleButton(
+                icon: Icons.library_music_outlined,
+                label: '曲谱',
+                onTap: () => showSongSheetSheet(context, song),
+              ),
+            ],
+            const SizedBox(width: 10),
+            _buildCapsuleButton(
+              icon: Icons.graphic_eq,
+              label: '音效',
+              onTap: () {
+                final push = widget.onPushPage ?? Navigator.of(context).push;
+                push(
+                  MaterialPageRoute(
+                    builder: (_) => const EqualizerSettingsPage(),
+                  ),
+                );
+              },
             ),
           ],
-          const SizedBox(width: 10),
-          _buildCapsuleButton(
-            icon: Icons.graphic_eq,
-            label: '音效',
-            onTap: () {
-              final push = widget.onPushPage ?? Navigator.of(context).push;
-              push(
-                MaterialPageRoute(
-                  builder: (_) => const EqualizerSettingsPage(),
-                ),
-              );
-            },
-          ),
         ],
       ),
     );
@@ -1853,15 +1943,18 @@ class _YtMainViewState extends State<YtMainView>
             : state.isPlaying;
 
         final IconData loopIcon = switch (loopMode) {
-          AppLoopMode.one => Icons.repeat_one,
-          AppLoopMode.all || AppLoopMode.off => Icons.repeat,
+          AppLoopMode.one => Icons.repeat_one_rounded,
+          AppLoopMode.all || AppLoopMode.off => Icons.repeat_rounded,
         };
 
         return Row(
-          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             IconButton(
-              icon: const Icon(Icons.shuffle, size: 22),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+              icon: const Icon(Icons.shuffle_rounded, size: 28),
               color: state.shuffleEnabled ? Colors.white : Colors.white60,
               onPressed: () {
                 AppHaptics.lightImpact(HapticCategory.transport);
@@ -1869,9 +1962,11 @@ class _YtMainViewState extends State<YtMainView>
               },
             ),
             IconButton(
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
               icon: const Icon(
-                Icons.skip_previous,
-                size: 36,
+                Icons.skip_previous_rounded,
+                size: 40,
                 color: Colors.white,
               ),
               onPressed: () {
@@ -1899,8 +1994,8 @@ class _YtMainViewState extends State<YtMainView>
                 }
               },
               child: Container(
-                width: 64,
-                height: 64,
+                width: 74,
+                height: 74,
                 decoration: const BoxDecoration(
                   color: Colors.white,
                   shape: BoxShape.circle,
@@ -1908,20 +2003,28 @@ class _YtMainViewState extends State<YtMainView>
                 alignment: Alignment.center,
                 child: PlayPauseMorphIcon(
                   isPlaying: effectivePlaying,
-                  size: 34,
+                  size: 36,
                   color: Colors.black,
                 ),
               ),
             ),
             IconButton(
-              icon: const Icon(Icons.skip_next, size: 36, color: Colors.white),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+              icon: const Icon(
+                Icons.skip_next_rounded,
+                size: 40,
+                color: Colors.white,
+              ),
               onPressed: () {
                 AppHaptics.click(HapticCategory.transport);
                 playerProvider.next();
               },
             ),
             IconButton(
-              icon: Icon(loopIcon, size: 24),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+              icon: Icon(loopIcon, size: 28),
               color: loopMode != AppLoopMode.off
                   ? Colors.white
                   : Colors.white60,

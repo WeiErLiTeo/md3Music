@@ -22,7 +22,7 @@ import '../../library/song_match_sheet.dart';
 import '../widgets/play_pause_morph_icon.dart';
 
 /// YouTube Music 风格的内联歌词抽屉（配合悬浮封面缩放与跟手滑动）
-class YtLyricsDrawer extends StatelessWidget {
+class YtLyricsDrawer extends StatefulWidget {
   final Animation<double> expansion;
   final Song song;
   final VoidCallback onClose;
@@ -39,6 +39,14 @@ class YtLyricsDrawer extends StatelessWidget {
   });
 
   @override
+  State<YtLyricsDrawer> createState() => _YtLyricsDrawerState();
+}
+
+class _YtLyricsDrawerState extends State<YtLyricsDrawer> {
+  Widget? _cachedContent;
+  String? _cachedSongId;
+
+  @override
   Widget build(BuildContext context) {
     final safeTop = MediaQuery.paddingOf(context).top;
     final screenHeight = MediaQuery.sizeOf(context).height;
@@ -48,56 +56,59 @@ class YtLyricsDrawer extends StatelessWidget {
     );
 
     return AnimatedBuilder(
-      animation: expansion,
-      child: RepaintBoundary(
-        child: YtLyricsDrawerContent(
-          song: song,
-          onClose: onClose,
-          onVerticalDragUpdate: onVerticalDragUpdate,
-          onVerticalDragEnd: onVerticalDragEnd,
-        ),
-      ),
-      builder: (context, drawerContent) {
-        final t = expansion.value.clamp(0.0, 1.0);
+      animation: widget.expansion,
+      builder: (context, _) {
+        final t = widget.expansion.value.clamp(0.0, 1.0);
+        if (t <= 0.001) {
+          return const SizedBox.shrink();
+        }
+        if (_cachedContent == null || _cachedSongId != widget.song.id) {
+          _cachedSongId = widget.song.id;
+          _cachedContent = RepaintBoundary(
+            child: YtLyricsDrawerContent(
+              song: widget.song,
+              onClose: widget.onClose,
+              onVerticalDragUpdate: widget.onVerticalDragUpdate,
+              onVerticalDragEnd: widget.onVerticalDragEnd,
+            ),
+          );
+        }
         final miniBarOpacity = ((t - 0.25) / 0.75).clamp(0.0, 1.0);
         final sheetOpacity = (t * 1.4).clamp(0.0, 1.0);
 
-        return Offstage(
-          offstage: t <= 0.001,
-          child: IgnorePointer(
-            ignoring: t < 0.05,
-            child: SafeArea(
-              top: true,
-              bottom: false,
-              child: Column(
-                children: [
-                  SizedBox(
-                    height: 56,
-                    child: Opacity(
-                      opacity: miniBarOpacity,
-                      child: Transform.translate(
-                        offset: Offset(0, -10.0 * (1.0 - t)),
-                        child: YtMiniBar(
-                          song: song,
-                          onTap: onClose,
-                          showCover: false,
-                          onVerticalDragUpdate: onVerticalDragUpdate,
-                          onVerticalDragEnd: onVerticalDragEnd,
-                        ),
+        return IgnorePointer(
+          ignoring: t < 0.05,
+          child: SafeArea(
+            top: true,
+            bottom: false,
+            child: Column(
+              children: [
+                SizedBox(
+                  height: 56,
+                  child: Opacity(
+                    opacity: miniBarOpacity,
+                    child: Transform.translate(
+                      offset: Offset(0, -10.0 * (1.0 - t)),
+                      child: YtMiniBar(
+                        song: widget.song,
+                        onTap: widget.onClose,
+                        showCover: false,
+                        onVerticalDragUpdate: widget.onVerticalDragUpdate,
+                        onVerticalDragEnd: widget.onVerticalDragEnd,
                       ),
                     ),
                   ),
-                  Expanded(
-                    child: Opacity(
-                      opacity: sheetOpacity,
-                      child: Transform.translate(
-                        offset: Offset(0, (1.0 - t) * drawerSlideDistance),
-                        child: drawerContent,
-                      ),
+                ),
+                Expanded(
+                  child: Opacity(
+                    opacity: sheetOpacity,
+                    child: Transform.translate(
+                      offset: Offset(0, (1.0 - t) * drawerSlideDistance),
+                      child: _cachedContent,
                     ),
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         );
@@ -652,6 +663,7 @@ class YtQueueDrawer extends StatefulWidget {
   final Animation<double> expansion;
   final Song song;
   final PlaylistScrollAnchor scrollAnchor;
+  final GlobalKey<PlayerPlaylistViewState>? playlistKey;
   final VoidCallback onClose;
   final GestureDragUpdateCallback? onVerticalDragUpdate;
   final GestureDragEndCallback? onVerticalDragEnd;
@@ -661,6 +673,7 @@ class YtQueueDrawer extends StatefulWidget {
     required this.expansion,
     required this.song,
     required this.scrollAnchor,
+    this.playlistKey,
     required this.onClose,
     this.onVerticalDragUpdate,
     this.onVerticalDragEnd,
@@ -687,48 +700,49 @@ class _YtQueueDrawerState extends State<YtQueueDrawer> {
 
     return AnimatedBuilder(
       animation: widget.expansion,
-      child: RepaintBoundary(child: _buildSheetContent(context, safeBottom)),
-      builder: (context, sheetChild) {
+      builder: (context, _) {
         final t = widget.expansion.value.clamp(0.0, 1.0);
+        if (t <= 0.001) {
+          return const SizedBox.shrink();
+        }
         final miniBarOpacity = ((t - 0.25) / 0.75).clamp(0.0, 1.0);
         final sheetOpacity = (t * 1.4).clamp(0.0, 1.0);
 
-        return Offstage(
-          offstage: t <= 0.001,
-          child: IgnorePointer(
-            ignoring: t < 0.05,
-            child: SafeArea(
-              top: true,
-              bottom: false,
-              child: Column(
-                children: [
-                  SizedBox(
-                    height: 56,
-                    child: Opacity(
-                      opacity: miniBarOpacity,
-                      child: Transform.translate(
-                        offset: Offset(0, -10.0 * (1.0 - t)),
-                        child: YtMiniBar(
-                          song: widget.song,
-                          onTap: widget.onClose,
-                          showCover: false,
-                          onVerticalDragUpdate: widget.onVerticalDragUpdate,
-                          onVerticalDragEnd: widget.onVerticalDragEnd,
-                        ),
+        return IgnorePointer(
+          ignoring: t < 0.05,
+          child: SafeArea(
+            top: true,
+            bottom: false,
+            child: Column(
+              children: [
+                SizedBox(
+                  height: 56,
+                  child: Opacity(
+                    opacity: miniBarOpacity,
+                    child: Transform.translate(
+                      offset: Offset(0, -10.0 * (1.0 - t)),
+                      child: YtMiniBar(
+                        song: widget.song,
+                        onTap: widget.onClose,
+                        showCover: false,
+                        onVerticalDragUpdate: widget.onVerticalDragUpdate,
+                        onVerticalDragEnd: widget.onVerticalDragEnd,
                       ),
                     ),
                   ),
-                  Expanded(
-                    child: Opacity(
-                      opacity: sheetOpacity,
-                      child: Transform.translate(
-                        offset: Offset(0, (1.0 - t) * drawerSlideDistance),
-                        child: sheetChild,
+                ),
+                Expanded(
+                  child: Opacity(
+                    opacity: sheetOpacity,
+                    child: Transform.translate(
+                      offset: Offset(0, (1.0 - t) * drawerSlideDistance),
+                      child: RepaintBoundary(
+                        child: _buildSheetContent(context, safeBottom),
                       ),
                     ),
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         );
@@ -922,7 +936,10 @@ class _YtQueueDrawerState extends State<YtQueueDrawer> {
                 },
                 child: Padding(
                   padding: EdgeInsets.only(bottom: safeBottom),
-                  child: PlayerPlaylistView(scrollAnchor: widget.scrollAnchor),
+                  child: PlayerPlaylistView(
+                    key: widget.playlistKey,
+                    scrollAnchor: widget.scrollAnchor,
+                  ),
                 ),
               ),
             ),

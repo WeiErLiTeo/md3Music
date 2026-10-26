@@ -12,6 +12,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
+
 import '../../core/services/usb_audio_service.dart';
 
 import '../../core/build_flags.dart';
@@ -863,8 +864,7 @@ class _SettingsPageState extends State<SettingsPage>
         .getLandscapeImmersiveEnabled();
     final landscapeDetachedControls = await _settingsRepository
         .getLandscapeDetachedControls();
-    final symmetricWidePane = await _settingsRepository
-        .getSymmetricWidePane();
+    final symmetricWidePane = await _settingsRepository.getSymmetricWidePane();
     final widePaneMargin = await _settingsRepository.getWidePaneMargin();
     final widePaneIgnoreCutout = await _settingsRepository
         .getWidePaneIgnoreCutout();
@@ -1739,14 +1739,21 @@ class _SettingsPageState extends State<SettingsPage>
     ColorScheme colorScheme, {
     required bool first,
   }) {
+    final playerStyle = context.select<ThemeProvider, PlayerStyle>(
+      (p) => p.playerStyle,
+    );
+    final isDisabledInYt =
+        playerStyle == PlayerStyle.ytMusic &&
+        (subpage.title == '顶栏与横屏布局' || subpage.title == '音乐频谱');
     return Padding(
       padding: EdgeInsets.only(top: first ? AppSpacing.sm : 0),
       child: _buildNavEntryTile(
         icon: subpage.icon,
         title: subpage.title,
-        subtitle: subpage.description,
+        subtitle: isDisabledInYt ? 'YouTube 样式下暂不支持' : subpage.description,
         colorScheme: colorScheme,
-        onTap: () => _openSubpage(subpage.title),
+        enabled: !isDisabledInYt,
+        onTap: isDisabledInYt ? null : () => _openSubpage(subpage.title),
       ),
     );
   }
@@ -1758,32 +1765,36 @@ class _SettingsPageState extends State<SettingsPage>
     required String title,
     required String? subtitle,
     required ColorScheme colorScheme,
-    required VoidCallback onTap,
+    required VoidCallback? onTap,
+    bool enabled = true,
   }) {
+    final disabledColor = colorScheme.onSurface.withValues(alpha: 0.38);
     return ListTile(
+      enabled: enabled,
       contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
       minVerticalPadding: AppSpacing.md,
-      leading: Icon(icon, color: colorScheme.primary),
+      leading: Icon(icon, color: enabled ? colorScheme.primary : disabledColor),
       title: Text(
         title,
-        style: Theme.of(
-          context,
-        ).textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w600),
+        style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+          fontWeight: FontWeight.w600,
+          color: enabled ? null : disabledColor,
+        ),
       ),
       subtitle: subtitle == null
           ? null
           : Text(
               subtitle,
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: colorScheme.onSurfaceVariant,
+                color: enabled ? colorScheme.onSurfaceVariant : disabledColor,
               ),
             ),
       trailing: Icon(
         Icons.chevron_right,
         size: 20,
-        color: colorScheme.onSurfaceVariant,
+        color: enabled ? colorScheme.onSurfaceVariant : disabledColor,
       ),
-      onTap: onTap,
+      onTap: enabled ? onTap : null,
     );
   }
 
@@ -1927,9 +1938,8 @@ class _SettingsPageState extends State<SettingsPage>
           child: Center(
             child: Text(
               '未找到「${_searchQuery.trim()}」相关设置',
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: colorScheme.onSurfaceVariant,
-              ),
+              style: Theme.of(context).textTheme.bodyMedium
+                  ?.copyWith(color: colorScheme.onSurfaceVariant),
             ),
           ),
         ),
@@ -2190,9 +2200,8 @@ class _SettingsPageState extends State<SettingsPage>
               alignment: Alignment.centerLeft,
               child: Text(
                 _getLyriconStateText(),
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: colorScheme.onSurfaceVariant,
-                ),
+                style: Theme.of(context).textTheme.bodySmall
+                    ?.copyWith(color: colorScheme.onSurfaceVariant),
               ),
             ),
           ),
@@ -2670,9 +2679,8 @@ class _SettingsPageState extends State<SettingsPage>
               children: [
                 Text(
                   '底部面板与屏幕下缘留出的空隙，用于避开车联 dock 栏；0 为不避让',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: colorScheme.onSurfaceVariant,
-                  ),
+                  style: Theme.of(context).textTheme.bodySmall
+                      ?.copyWith(color: colorScheme.onSurfaceVariant),
                 ),
                 const SizedBox(height: 4),
                 Row(
@@ -2766,9 +2774,8 @@ class _SettingsPageState extends State<SettingsPage>
             ),
             child: Text(
               '开启车机模式或检测到车机屏幕后生效',
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: colorScheme.onSurfaceVariant,
-              ),
+              style: Theme.of(context).textTheme.bodySmall
+                  ?.copyWith(color: colorScheme.onSurfaceVariant),
             ),
           )
         else
@@ -3675,7 +3682,9 @@ class _SettingsPageState extends State<SettingsPage>
         // search: 边距 宽屏 内衬 横屏 播放页 无边距
         SwitchListTile(
           title: const Text('自定义宽屏边距'),
-          subtitle: const Text('关闭时按屏宽自动适配；开启后用固定边距，0 为最小边距（挖孔机型仍保留挖孔避让），此时可再设置忽略挖孔避让'),
+          subtitle: const Text(
+            '关闭时按屏宽自动适配；开启后用固定边距，0 为最小边距（挖孔机型仍保留挖孔避让），此时可再设置忽略挖孔避让',
+          ),
           value: _customWidePaneMargin,
           onChanged: (value) {
             AppHaptics.lightImpact(HapticCategory.control);
@@ -3712,16 +3721,14 @@ class _SettingsPageState extends State<SettingsPage>
               children: [
                 Text(
                   '宽屏左栏与屏幕边缘的固定距离，支持 0.5dp 这类半 dp 微调；0 为最小边距（挖孔机型会在此外再让出挖孔宽度）',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: colorScheme.onSurfaceVariant,
-                  ),
+                  style: Theme.of(context).textTheme.bodySmall
+                      ?.copyWith(color: colorScheme.onSurfaceVariant),
                 ),
                 // 生效口径回显：滑条只在开关开启时出现，故此处恒为「固定」口径
                 Text(
                   '当前生效：固定 ${_formatWidePaneMargin(_widePaneMargin)}',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: colorScheme.onSurfaceVariant,
-                  ),
+                  style: Theme.of(context).textTheme.bodySmall
+                      ?.copyWith(color: colorScheme.onSurfaceVariant),
                 ),
                 const SizedBox(height: 4),
                 Row(
@@ -3743,8 +3750,7 @@ class _SettingsPageState extends State<SettingsPage>
                                   ? '最小'
                                   : _formatWidePaneMargin(_widePaneMargin),
                               onChanged: _onWidePaneMarginDrag,
-                              onChangeEnd: (value) =>
-                                  _persistWidePaneMargin(),
+                              onChangeEnd: (value) => _persistWidePaneMargin(),
                             )
                           : M3ESlider(
                               decoration: const M3ESliderDecoration(
@@ -3784,9 +3790,10 @@ class _SettingsPageState extends State<SettingsPage>
                               controller: _widePaneMarginController,
                               autofocus: true,
                               // 数字键盘 + 小数点，匹配 0–48、最多 1 位小数的口径
-                              keyboardType: const TextInputType.numberWithOptions(
-                                decimal: true,
-                              ),
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(
+                                    decimal: true,
+                                  ),
                               inputFormatters: [
                                 // 只放行数字与至多一位小数（两位整数已覆盖 0–48）
                                 FilteringTextInputFormatter.allow(
@@ -3824,11 +3831,13 @@ class _SettingsPageState extends State<SettingsPage>
                                   child: Text(
                                     _widePaneMargin <= 0
                                         ? '最小'
-                                        : _formatWidePaneMargin(_widePaneMargin),
+                                        : _formatWidePaneMargin(
+                                            _widePaneMargin,
+                                          ),
                                     textAlign: TextAlign.end,
-                                    style: Theme.of(
-                                      context,
-                                    ).textTheme.bodyMedium,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodyMedium,
                                   ),
                                 ),
                               ),
@@ -3848,9 +3857,7 @@ class _SettingsPageState extends State<SettingsPage>
         if (_customWidePaneMargin)
           SwitchListTile(
             title: const Text('忽略挖孔避让'),
-            subtitle: const Text(
-              '宽屏内容真贴边，歌词、返回键等可能被挖孔/刘海或状态栏遮挡；关闭即恢复避让',
-            ),
+            subtitle: const Text('宽屏内容真贴边，歌词、返回键等可能被挖孔/刘海或状态栏遮挡；关闭即恢复避让'),
             value: _widePaneIgnoreCutout,
             onChanged: (value) {
               AppHaptics.lightImpact(HapticCategory.control);
@@ -4316,7 +4323,8 @@ class _SettingsPageState extends State<SettingsPage>
           title: const Text('背景动态流光'),
           subtitle: const Text('高功耗；随音乐频谱律动，与频谱背景同时开启会叠加开销'),
           value: _useFlowingBackground,
-          onChanged: context.watch<ThemeProvider>().playerStyle != PlayerStyle.md3
+          onChanged:
+              context.watch<ThemeProvider>().playerStyle != PlayerStyle.md3
               ? (v) {
                   AppHaptics.lightImpact(HapticCategory.control);
                   setState(() => _useFlowingBackground = v);
@@ -4647,7 +4655,9 @@ class _SettingsPageState extends State<SettingsPage>
               ),
             ),
         // 背景层参数：仅 style=2 时显示
-        if (_spectrumEnabled && _spectrumStyle == 2 && supportsMusicSpectrum) ...[
+        if (_spectrumEnabled &&
+            _spectrumStyle == 2 &&
+            supportsMusicSpectrum) ...[
           // search: 频谱 透明度
           ListTile(
             title: const Text('频谱背景透明度'),
@@ -4941,9 +4951,8 @@ class _SettingsPageState extends State<SettingsPage>
               const Gap(AppSpacing.xs),
               Text(
                 '分别设置 WiFi 与移动网络下的播放音质，随当前网络自动生效',
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: colorScheme.onSurfaceVariant,
-                ),
+                style: Theme.of(context).textTheme.bodySmall
+                    ?.copyWith(color: colorScheme.onSurfaceVariant),
               ),
               const Gap(AppSpacing.lg),
               Text('WiFi 网络下', style: Theme.of(context).textTheme.bodyMedium),
@@ -5037,9 +5046,8 @@ class _SettingsPageState extends State<SettingsPage>
                 leading: Icon(
                   Icons.graphic_eq,
                   color: effectsDisabled
-                      ? Theme.of(
-                          context,
-                        ).colorScheme.onSurface.withValues(alpha: 0.38)
+                      ? Theme.of(context).colorScheme.onSurface
+                            .withValues(alpha: 0.38)
                       : (eq.enabled
                             ? Theme.of(context).colorScheme.primary
                             : null),
@@ -5080,9 +5088,8 @@ class _SettingsPageState extends State<SettingsPage>
             leading: Icon(
               Icons.spatial_audio_off,
               color: _disableSystemAudioEffects
-                  ? Theme.of(
-                      context,
-                    ).colorScheme.onSurface.withValues(alpha: 0.38)
+                  ? Theme.of(context).colorScheme.onSurface
+                        .withValues(alpha: 0.38)
                   : null,
             ),
             title: const Text('音效库'),
@@ -5455,9 +5462,8 @@ class _SettingsPageState extends State<SettingsPage>
               const Gap(AppSpacing.sm),
               Text(
                 _audioFocusModeDescription(_audioFocusInterruptionMode),
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: colorScheme.onSurfaceVariant,
-                ),
+                style: Theme.of(context).textTheme.bodySmall
+                    ?.copyWith(color: colorScheme.onSurfaceVariant),
               ),
             ],
           ),
@@ -6342,9 +6348,8 @@ class _SettingsPageState extends State<SettingsPage>
                   ),
                   child: Text(
                     '运行中',
-                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: colorScheme.onPrimaryContainer,
-                    ),
+                    style: Theme.of(context).textTheme.labelSmall
+                        ?.copyWith(color: colorScheme.onPrimaryContainer),
                   ),
                 ),
           onTap: _isRestarting ? null : _confirmRestartServer,
@@ -6854,9 +6859,8 @@ class _SettingsPageState extends State<SettingsPage>
                   // 字一放大就撑破。这里豁免系统字号，让预览恒按真实比例呈现。
                   // 「显示大小」不在此列 —— 它整页等比变化，预览随之整体缩放。
                   child: MediaQuery(
-                    data: MediaQuery.of(
-                      context,
-                    ).copyWith(textScaler: TextScaler.noScaling),
+                    data: MediaQuery.of(context)
+                        .copyWith(textScaler: TextScaler.noScaling),
                     child: preview,
                   ),
                 ),
@@ -6935,9 +6939,8 @@ Widget _settingsDescription(
     maxLines: singleLine ? 1 : null,
     softWrap: !singleLine,
     textAlign: TextAlign.start,
-    style: Theme.of(
-      context,
-    ).textTheme.bodySmall?.copyWith(color: colorScheme.onSurfaceVariant),
+    style: Theme.of(context).textTheme.bodySmall
+        ?.copyWith(color: colorScheme.onSurfaceVariant),
   );
   return SizedBox(
     width: double.infinity,
@@ -7775,9 +7778,8 @@ class _DisplayScaleTileState extends State<_DisplayScaleTile> {
           ),
           child: Text(
             '显示大小：与系统同名设置一致，整体等比放大或缩小界面，一屏能显示的内容随之增减',
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: colorScheme.onSurfaceVariant,
-            ),
+            style: Theme.of(context).textTheme.bodySmall
+                ?.copyWith(color: colorScheme.onSurfaceVariant),
           ),
         ),
       ],
@@ -7999,26 +8001,46 @@ class _SettingsYtStylePreview extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final topGlow = Color.alphaBlend(
+      colorScheme.primary.withValues(alpha: 0.34),
+      colorScheme.surfaceContainerHighest,
+    );
+    final bottomBase = Color.alphaBlend(
+      colorScheme.primary.withValues(alpha: 0.12),
+      colorScheme.surface,
+    );
+    final fg = colorScheme.onSurface;
+    final fgMuted = colorScheme.onSurfaceVariant;
+
     return Container(
-      decoration: const BoxDecoration(
-        color: Color(0xFF0F0F0F),
+      decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [
-            Color(0xFF262626),
-            Color(0xFF0F0F0F),
-          ],
+          colors: [topGlow, bottomBase],
         ),
       ),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       child: Column(
         children: [
           Row(
-            children: const [
-              Icon(Icons.keyboard_arrow_down, size: 14, color: Colors.white70),
-              Spacer(),
-              Icon(Icons.more_vert, size: 12, color: Colors.white70),
+            children: [
+              Icon(Icons.keyboard_arrow_down, size: 14, color: fgMuted),
+              const Spacer(),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                decoration: BoxDecoration(
+                  color: colorScheme.primary.withValues(alpha: 0.20),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(
+                  Icons.headphones_outlined,
+                  size: 8,
+                  color: colorScheme.primary,
+                ),
+              ),
+              const Spacer(),
+              Icon(Icons.more_vert, size: 12, color: fgMuted),
             ],
           ),
           const SizedBox(height: 4),
@@ -8026,45 +8048,51 @@ class _SettingsYtStylePreview extends StatelessWidget {
             width: 44,
             height: 44,
             decoration: BoxDecoration(
-              color: const Color(0xFF2A2A2A),
+              color: colorScheme.primaryContainer,
               borderRadius: BorderRadius.circular(6),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.5),
+                  color: colorScheme.shadow.withValues(alpha: 0.22),
                   blurRadius: 6,
                   offset: const Offset(0, 3),
                 ),
               ],
             ),
-            child: const Center(
+            child: Center(
               child: Icon(
                 Icons.music_note,
-                color: Colors.white70,
+                color: colorScheme.onPrimaryContainer,
                 size: 20,
               ),
             ),
           ),
           const SizedBox(height: 5),
-          Container(
-            height: 4,
-            width: 54,
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(2),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Container(
+              height: 4,
+              width: 54,
+              decoration: BoxDecoration(
+                color: fg,
+                borderRadius: BorderRadius.circular(2),
+              ),
             ),
           ),
           const SizedBox(height: 3),
-          Container(
-            height: 3,
-            width: 36,
-            decoration: BoxDecoration(
-              color: Colors.white54,
-              borderRadius: BorderRadius.circular(2),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Container(
+              height: 3,
+              width: 36,
+              decoration: BoxDecoration(
+                color: fgMuted,
+                borderRadius: BorderRadius.circular(2),
+              ),
             ),
           ),
           const SizedBox(height: 5),
           Row(
-            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisAlignment: MainAxisAlignment.start,
             children: [
               _buildMiniChip(Icons.favorite_border),
               const SizedBox(width: 4),
@@ -8076,17 +8104,16 @@ class _SettingsYtStylePreview extends StatelessWidget {
           const SizedBox(height: 5),
           Container(
             height: 2,
-            margin: const EdgeInsets.symmetric(horizontal: 4),
             decoration: BoxDecoration(
-              color: Colors.white24,
+              color: colorScheme.outlineVariant,
               borderRadius: BorderRadius.circular(1),
             ),
             child: Row(
               children: [
                 Container(
-                  width: 28,
+                  width: 32,
                   decoration: BoxDecoration(
-                    color: Colors.white,
+                    color: colorScheme.primary,
                     borderRadius: BorderRadius.circular(1),
                   ),
                 ),
@@ -8095,25 +8122,25 @@ class _SettingsYtStylePreview extends StatelessWidget {
           ),
           const Spacer(),
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Icon(Icons.shuffle, size: 10, color: Colors.white54),
-              const Icon(Icons.skip_previous, size: 13, color: Colors.white),
+              Icon(Icons.shuffle_rounded, size: 10, color: fgMuted),
+              Icon(Icons.skip_previous_rounded, size: 13, color: fg),
               Container(
                 width: 18,
                 height: 18,
-                decoration: const BoxDecoration(
-                  color: Colors.white,
+                decoration: BoxDecoration(
+                  color: colorScheme.primary,
                   shape: BoxShape.circle,
                 ),
-                child: const Icon(
-                  Icons.play_arrow,
+                child: Icon(
+                  Icons.play_arrow_rounded,
                   size: 12,
-                  color: Colors.black,
+                  color: colorScheme.onPrimary,
                 ),
               ),
-              const Icon(Icons.skip_next, size: 13, color: Colors.white),
-              const Icon(Icons.repeat, size: 10, color: Colors.white54),
+              Icon(Icons.skip_next_rounded, size: 13, color: fg),
+              Icon(Icons.repeat_rounded, size: 10, color: fgMuted),
             ],
           ),
           const SizedBox(height: 2),
@@ -8126,10 +8153,10 @@ class _SettingsYtStylePreview extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.12),
+        color: colorScheme.secondaryContainer.withValues(alpha: 0.75),
         borderRadius: BorderRadius.circular(8),
       ),
-      child: Icon(icon, size: 8, color: Colors.white70),
+      child: Icon(icon, size: 8, color: colorScheme.onSecondaryContainer),
     );
   }
 }

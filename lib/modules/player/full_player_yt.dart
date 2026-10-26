@@ -15,6 +15,7 @@ import '../../providers/theme_provider.dart';
 import '../../widgets/smart_artwork_image.dart';
 import 'full_player_route.dart';
 import 'player_page_role.dart';
+import 'player_playlist_view.dart';
 import 'yt/yt_background.dart';
 import 'yt/yt_lyrics_drawer.dart';
 import 'yt/yt_main_view.dart';
@@ -36,6 +37,9 @@ class _FullPlayerYtState extends State<FullPlayerYt>
 
   late final AnimationController _lyricsController;
   late final AnimationController _queueController;
+  final PlaylistScrollAnchor _playlistScrollAnchor = PlaylistScrollAnchor();
+  final GlobalKey<PlayerPlaylistViewState> _playlistKey =
+      GlobalKey<PlayerPlaylistViewState>();
   Rect? _measuredCoverRect;
 
   DraggablePlayerRoute? _topBarDragRoute;
@@ -65,6 +69,7 @@ class _FullPlayerYtState extends State<FullPlayerYt>
   void dispose() {
     _lyricsController.dispose();
     _queueController.dispose();
+    _playlistScrollAnchor.dispose();
     MusicHapticsService.instance.setPlayerPageActive(false);
     super.dispose();
   }
@@ -177,6 +182,7 @@ class _FullPlayerYtState extends State<FullPlayerYt>
   }
 
   void _onTopBarDragStart(DragStartDetails details) {
+    _isDismissing = false;
     final route = ModalRoute.of(context);
     if (route is! DraggablePlayerRoute) return;
     _topBarDragRoute = route;
@@ -231,14 +237,15 @@ class _FullPlayerYtState extends State<FullPlayerYt>
             downVelocity > kPlayerFlingVelocityThreshold);
     if (collapse) {
       AppHaptics.lightImpact(HapticCategory.gesture);
-      _isDismissing = true;
       route.dismiss();
     } else {
+      _isDismissing = false;
       route.settleToFull();
     }
   }
 
   void _onTopBarDragCancel() {
+    _isDismissing = false;
     final route = _topBarDragRoute;
     _topBarDragRoute = null;
     if (route == null) return;
@@ -263,6 +270,28 @@ class _FullPlayerYtState extends State<FullPlayerYt>
     } else {
       Navigator.of(context).maybePop();
     }
+  }
+
+  bool _handleSystemBack() {
+    if (_isDragOverlay) return false;
+    final playlistState = _playlistKey.currentState;
+    if (playlistState != null && playlistState.isEditMode) {
+      playlistState.exitEditMode();
+      return true;
+    }
+    if (_lyricsController.value > 0.01 || _lyricsController.isAnimating) {
+      _closeLyrics();
+      return true;
+    }
+    if (_queueController.value > 0.01 || _queueController.isAnimating) {
+      _closeQueue();
+      return true;
+    }
+    if (widget.dockMode) return false;
+    if (!_isDismissing) {
+      _collapseByButton();
+    }
+    return true;
   }
 
   NavigatorState? _pageNavigator(BuildContext context) {
@@ -394,27 +423,30 @@ class _FullPlayerYtState extends State<FullPlayerYt>
               );
             },
           ),
-          // 歌词抽屉层：支持点击展开与跟手上下拖拽
-          Positioned.fill(
-            child: YtLyricsDrawer(
-              expansion: _lyricsController,
-              song: resolvedSong,
-              onClose: _closeLyrics,
-              onVerticalDragUpdate: _onLyricsDragUpdate,
-              onVerticalDragEnd: _onLyricsDragEnd,
+          if (!_isDragOverlay) ...[
+            // 歌词抽屉层：支持点击展开与跟手上下拖拽
+            Positioned.fill(
+              child: YtLyricsDrawer(
+                expansion: _lyricsController,
+                song: resolvedSong,
+                onClose: _closeLyrics,
+                onVerticalDragUpdate: _onLyricsDragUpdate,
+                onVerticalDragEnd: _onLyricsDragEnd,
+              ),
             ),
-          ),
-          // 播放列表抽屉层（1:1 复刻歌词抽屉展开动画：共用顶部 MiniBar 与悬浮封面飞行缩放）
-          Positioned.fill(
-            child: YtQueueDrawer(
-              expansion: _queueController,
-              song: resolvedSong,
-              scrollAnchor: YtMainView.playlistScrollAnchor,
-              onClose: _closeQueue,
-              onVerticalDragUpdate: _onQueueDragUpdate,
-              onVerticalDragEnd: _onQueueDragEnd,
+            // 播放列表抽屉层（1:1 复刻歌词抽屉展开动画：共用顶部 MiniBar 与悬浮封面飞行缩放）
+            Positioned.fill(
+              child: YtQueueDrawer(
+                expansion: _queueController,
+                song: resolvedSong,
+                scrollAnchor: _playlistScrollAnchor,
+                playlistKey: _playlistKey,
+                onClose: _closeQueue,
+                onVerticalDragUpdate: _onQueueDragUpdate,
+                onVerticalDragEnd: _onQueueDragEnd,
+              ),
             ),
-          ),
+          ],
           // 悬浮封面层：当歌词抽屉或播放列表抽屉拉开（t > 0.001）时接管，
           // 在居中大封面与左上角 40x40 缩略图之间沿对角线平滑插值飞行。
           LayoutBuilder(
@@ -500,23 +532,17 @@ class _FullPlayerYtState extends State<FullPlayerYt>
       ),
     );
 
-    if (!_isDragOverlay && !widget.dockMode) {
-      page = PopScope(
-        canPop: false,
-        onPopInvokedWithResult: (didPop, _) {
-          if (didPop || _isDismissing) return;
-          if (widget.dockMode) return;
-          if (_lyricsController.value > 0.05) {
-            _closeLyrics();
-            return;
-          }
-          if (_queueController.value > 0.05) {
-            _closeQueue();
-            return;
-          }
-          _collapseByButton();
-        },
-        child: page,
+    if (!_isDragOverlay) {
+      page = BackButtonListener(
+        onBackButtonPressed: () async => _handleSystemBack(),
+        child: PopScope(
+          canPop: false,
+          onPopInvokedWithResult: (didPop, _) {
+            if (didPop) return;
+            _handleSystemBack();
+          },
+          child: page,
+        ),
       );
     }
 
