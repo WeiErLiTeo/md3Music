@@ -1629,11 +1629,16 @@ class _YtMainViewState extends State<YtMainView>
             _buildCapsuleButton(
               icon: Icons.cast_rounded,
               label: '投屏',
-              onTap: () => showDlnaCastSheet(
-                context,
-                song,
-                videoUrl: _currentVideoUrl,
-                videoTitle: '${song.displayName} - ${song.artist} (MV)',
+              onTap: () => showM3EModalBottomSheet(
+                context: context,
+                isScrollControlled: true,
+                backgroundColor: Theme.of(context)
+                    .colorScheme
+                    .surfaceContainerLow,
+                builder: (_) => DlnaCastSheet(
+                  mvUrl: _currentVideoUrl,
+                  mvTitle: '${song.displayName} - ${song.artist} (MV)',
+                ),
               ),
             ),
             const SizedBox(width: 10),
