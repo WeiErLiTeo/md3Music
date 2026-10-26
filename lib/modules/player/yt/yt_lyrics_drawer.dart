@@ -751,9 +751,7 @@ class _YtQueueDrawerState extends State<YtQueueDrawer> {
   }
 
   Widget _buildSheetContent(BuildContext context, double safeBottom) {
-    final currentSong =
-        context.select<PlayerProvider, Song?>((p) => p.currentSong) ??
-        widget.song;
+    final currentSong = widget.song;
     final sourceTitle =
         currentSong.album.isNotEmpty && currentSong.album != '未知专辑'
         ? currentSong.album

@@ -1376,47 +1376,50 @@ class _YtMainViewState extends State<YtMainView>
     bool queueExpanded = false,
   }) {
     final colorScheme = Theme.of(context).colorScheme;
-    final neighbors = context.select<PlayerProvider, (Song?, Song?)>(
-      (p) => (_pagerNeighborSong(p, -1), _pagerNeighborSong(p, 1)),
-    );
-    final prevSong = neighbors.$1;
-    final nextSong = neighbors.$2;
 
     final coverContent = SizedBox(
       width: side,
       height: side,
-      child: PlayerCoverSlot(
-        songId: resolvedSong.id,
-        artworkUri: resolvedSong.artworkUri,
-        fallbackFilePath: resolvedSong.localPath,
-        iconSize: 48,
-        placeholderColor: Colors.white12,
-        shadowColor: colorScheme.shadow,
-        eligible: () =>
-            !widget.dockMode &&
-            !_isVideoMode &&
-            widget.lyricsExpansion.value <= 0.001 &&
-            _queueCtrl.value <= 0.001,
-        settledScale: 1.0,
-        settledAnchor: Alignment.center,
-        child: SongDanmakuHost(
-          cover: PlayerCoverShadow.wrap(
+      child: Selector<PlayerProvider, (Song?, Song?)>(
+        selector: (_, p) =>
+            (_pagerNeighborSong(p, -1), _pagerNeighborSong(p, 1)),
+        builder: (context, neighbors, _) {
+          final prevSong = neighbors.$1;
+          final nextSong = neighbors.$2;
+          return PlayerCoverSlot(
+            songId: resolvedSong.id,
+            artworkUri: resolvedSong.artworkUri,
+            fallbackFilePath: resolvedSong.localPath,
+            iconSize: 48,
+            placeholderColor: Colors.white12,
             shadowColor: colorScheme.shadow,
-            child: CoverSwitchPager(
-              key: _coverPagerKey,
-              side: side,
-              radius: borderRadius,
-              pages: [
-                _buildPagerPage(prevSong),
-                _buildCurrentCoverPage(resolvedSong, borderRadius),
-                _buildPagerPage(nextSong),
-              ],
-              canGoPrevious: prevSong != null && !queueExpanded,
-              canGoNext: nextSong != null && !queueExpanded,
-              onCommit: _onCoverPagerCommit,
+            eligible: () =>
+                !widget.dockMode &&
+                !_isVideoMode &&
+                widget.lyricsExpansion.value <= 0.001 &&
+                _queueCtrl.value <= 0.001,
+            settledScale: 1.0,
+            settledAnchor: Alignment.center,
+            child: SongDanmakuHost(
+              cover: PlayerCoverShadow.wrap(
+                shadowColor: colorScheme.shadow,
+                child: CoverSwitchPager(
+                  key: _coverPagerKey,
+                  side: side,
+                  radius: borderRadius,
+                  pages: [
+                    _buildPagerPage(prevSong),
+                    _buildCurrentCoverPage(resolvedSong, borderRadius),
+                    _buildPagerPage(nextSong),
+                  ],
+                  canGoPrevious: prevSong != null && !queueExpanded,
+                  canGoNext: nextSong != null && !queueExpanded,
+                  onCommit: _onCoverPagerCommit,
+                ),
+              ),
             ),
-          ),
-        ),
+          );
+        },
       ),
     );
 

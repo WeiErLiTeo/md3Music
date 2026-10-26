@@ -531,16 +531,13 @@ class _FullPlayerYtState extends State<FullPlayerYt>
     );
 
     if (!_isDragOverlay) {
-      page = BackButtonListener(
-        onBackButtonPressed: () async => _handleSystemBack(),
-        child: PopScope(
-          canPop: false,
-          onPopInvokedWithResult: (didPop, _) {
-            if (didPop) return;
-            _handleSystemBack();
-          },
-          child: page,
-        ),
+      page = PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, _) {
+          if (didPop) return;
+          _handleSystemBack();
+        },
+        child: page,
       );
     }
 
