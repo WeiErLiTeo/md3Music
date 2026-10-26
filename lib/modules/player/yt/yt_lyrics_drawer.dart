@@ -337,7 +337,7 @@ class _YtLyricsDrawerContentState extends State<YtLyricsDrawerContent> {
 
   bool get _hasRomanization {
     return _parsedLines.any(
-      (line) => line.romanization != null && line.romanization!.isNotEmpty,
+      (line) => line.roma != null && line.roma!.isNotEmpty,
     );
   }
 
@@ -429,7 +429,9 @@ class _YtLyricsDrawerContentState extends State<YtLyricsDrawerContent> {
               ListenableBuilder(
                 listenable: prefs,
                 builder: (context, _) {
-                  final showTrans = prefs.showTranslation;
+                  final showTrans =
+                      prefs.showTranslation &&
+                      prefs.displayMode == LyricDisplayMode.translation;
                   return IconButton(
                     icon: Text(
                       '译',
@@ -440,7 +442,12 @@ class _YtLyricsDrawerContentState extends State<YtLyricsDrawerContent> {
                       ),
                     ),
                     onPressed: () {
-                      prefs.setShowTranslation(!showTrans);
+                      if (showTrans) {
+                        prefs.setShowTranslation(false);
+                      } else {
+                        prefs.setDisplayMode(LyricDisplayMode.translation);
+                        prefs.setShowTranslation(true);
+                      }
                     },
                   );
                 },
@@ -449,7 +456,9 @@ class _YtLyricsDrawerContentState extends State<YtLyricsDrawerContent> {
               ListenableBuilder(
                 listenable: prefs,
                 builder: (context, _) {
-                  final showRoma = prefs.showRomanization;
+                  final showRoma =
+                      prefs.showTranslation &&
+                      prefs.displayMode == LyricDisplayMode.roma;
                   return IconButton(
                     icon: Text(
                       '音',
@@ -460,7 +469,12 @@ class _YtLyricsDrawerContentState extends State<YtLyricsDrawerContent> {
                       ),
                     ),
                     onPressed: () {
-                      prefs.setShowRomanization(!showRoma);
+                      if (showRoma) {
+                        prefs.setShowTranslation(false);
+                      } else {
+                        prefs.setDisplayMode(LyricDisplayMode.roma);
+                        prefs.setShowTranslation(true);
+                      }
                     },
                   );
                 },
