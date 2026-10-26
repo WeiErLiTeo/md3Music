@@ -274,9 +274,7 @@ class _FullPlayerYtState extends State<FullPlayerYt>
 
   bool _handleSystemBack() {
     if (_isDragOverlay) return false;
-    final playlistState = _playlistKey.currentState;
-    if (playlistState != null && playlistState.isEditMode) {
-      playlistState.exitEditMode();
+    if (_playlistKey.currentState?.exitEditModeIfActive() ?? false) {
       return true;
     }
     if (_lyricsController.value > 0.01 || _lyricsController.isAnimating) {
