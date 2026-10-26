@@ -48,9 +48,12 @@ class YtMainView extends StatefulWidget {
   /// 缓存每首歌是否存在可用 MV（key = albumAudioId）
   static final Map<String, MvInfo?> _mvInfoCache = <String, MvInfo?>{};
 
-  /// 缓存已加入「默认收藏」歌单的歌曲 hash（小写）
+  /// 缓存已加入「默认收藏」歌单的歌曲 hash（小写）与记录 fileId
   static final Set<String> _defaultCollectionHashes = <String>{};
+  static final Map<String, int> _defaultCollectionFileIds = <String, int>{};
   static Map<String, dynamic>? _cachedDefaultCollectionPlaylist;
+  static bool _defaultCollectionSynced = false;
+  static bool _syncingDefaultCollection = false;
 
   final Song song;
   final bool dockMode;
@@ -163,10 +166,17 @@ class _YtMainViewState extends State<YtMainView>
     super.dispose();
   }
 
+  bool _isSongInDefaultCollection(Song rawSong, Song resolvedSong) {
+    final rawHash = rawSong.id.toLowerCase();
+    final resolvedHash = resolvedSong.id.toLowerCase();
+    return YtMainView._defaultCollectionHashes.contains(rawHash) ||
+        YtMainView._defaultCollectionHashes.contains(resolvedHash);
+  }
+
   void _syncSongCapabilities(Song rawSong) {
     final resolved = YtMoreMenu.resolveMatchedSong(rawSong);
-    final hash = resolved.id.toLowerCase();
-    _defaultStarred = YtMainView._defaultCollectionHashes.contains(hash);
+    _defaultStarred = _isSongInDefaultCollection(rawSong, resolved);
+    unawaited(_ensureDefaultCollectionSynced());
 
     final albumAudioId = resolved.albumAudioId;
     if (albumAudioId == _probedAlbumAudioId) return;
@@ -409,6 +419,10 @@ class _YtMainViewState extends State<YtMainView>
       if (idx < playlist.length - 1) {
         preloadPlayerArtwork(playlist[idx + 1].artworkUri);
       }
+    } else if (_isVideoMode && player.isPlaying) {
+      // 当处于 MV 视频模式时，若用户在播放列表中点击了当前同一首歌触发了音频播放，
+      // 立即退出 MV 模式停止视频，避免音频与 MV 双声道同时发声
+      _exitVideoMode(resumeAudio: false);
     }
   }
 
@@ -436,7 +450,7 @@ class _YtMainViewState extends State<YtMainView>
     }
   }
 
-  // ============== 「默认收藏」歌单一键收藏逻辑 ==============
+  // ============== 「默认收藏」歌单云端同步与一键收藏/取消逻辑 ==============
   Future<Map<String, dynamic>?> _findDefaultCollectionPlaylist(
     KugouApiClient api,
   ) async {
@@ -469,6 +483,121 @@ class _YtMainViewState extends State<YtMainView>
     return null;
   }
 
+  Future<void> _ensureDefaultCollectionSynced() async {
+    if (YtMainView._defaultCollectionSynced ||
+        YtMainView._syncingDefaultCollection) {
+      return;
+    }
+    final api = KugouApiClient();
+    if (!api.isLoggedIn) return;
+    YtMainView._syncingDefaultCollection = true;
+    try {
+      final defaultPlaylist = await _findDefaultCollectionPlaylist(api);
+      if (defaultPlaylist == null) return;
+      final listid = defaultPlaylist['listid']?.toString() ?? '';
+      if (listid.isNotEmpty) {
+        const int pageSize = 200;
+        for (int page = 1; page <= 25; page++) {
+          final r = await api.getPlaylistSongsByListid(
+            listid: listid,
+            page: page,
+            pagesize: pageSize,
+          );
+          if (r == null) break;
+          for (final s in r.songs) {
+            final h = s.hash.toLowerCase();
+            if (h.isNotEmpty) {
+              YtMainView._defaultCollectionHashes.add(h);
+              if (s.fileId != null && s.fileId! > 0) {
+                YtMainView._defaultCollectionFileIds[h] = s.fileId!;
+              }
+            }
+          }
+          if (r.songs.length < pageSize) break;
+        }
+      } else {
+        final gid = defaultPlaylist['global_collection_id']?.toString() ?? '';
+        if (gid.isNotEmpty) {
+          final r = await api.getPlaylistSongs(gid, pagesize: 500);
+          if (r != null) {
+            for (final s in r.songs) {
+              final h = s.hash.toLowerCase();
+              if (h.isNotEmpty) {
+                YtMainView._defaultCollectionHashes.add(h);
+                if (s.fileId != null && s.fileId! > 0) {
+                  YtMainView._defaultCollectionFileIds[h] = s.fileId!;
+                }
+              }
+            }
+          }
+        }
+      }
+      YtMainView._defaultCollectionSynced = true;
+      if (mounted) {
+        final resolved = YtMoreMenu.resolveMatchedSong(widget.song);
+        final starred = _isSongInDefaultCollection(widget.song, resolved);
+        if (starred != _defaultStarred) {
+          setState(() => _defaultStarred = starred);
+        }
+      }
+    } catch (_) {
+    } finally {
+      YtMainView._syncingDefaultCollection = false;
+    }
+  }
+
+  Future<String> _resolveDefaultCollectionFileId(
+    KugouApiClient api,
+    String listid,
+    Song resolvedSong,
+  ) async {
+    final hash = resolvedSong.id.toLowerCase();
+    final rawHash = widget.song.id.toLowerCase();
+    final cached =
+        YtMainView._defaultCollectionFileIds[hash] ??
+        YtMainView._defaultCollectionFileIds[rawHash];
+    if (cached != null && cached > 0) return cached.toString();
+
+    const int pageSize = 200;
+    final first = await api.getPlaylistSongsByListid(
+      listid: listid,
+      page: 1,
+      pagesize: pageSize,
+      noCache: true,
+    );
+    if (first != null) {
+      for (final s in first.songs) {
+        final h = s.hash.toLowerCase();
+        if ((h == hash || h == rawHash) && s.fileId != null && s.fileId! > 0) {
+          return s.fileId.toString();
+        }
+      }
+      final lastPage = (first.total + pageSize - 1) ~/ pageSize;
+      if (lastPage > 1) {
+        final last = await api.getPlaylistSongsByListid(
+          listid: listid,
+          page: lastPage,
+          pagesize: pageSize,
+          noCache: true,
+        );
+        if (last != null) {
+          for (final s in last.songs) {
+            final h = s.hash.toLowerCase();
+            if ((h == hash || h == rawHash) &&
+                s.fileId != null &&
+                s.fileId! > 0) {
+              return s.fileId.toString();
+            }
+          }
+        }
+      }
+    }
+    if (resolvedSong.fileId != null && resolvedSong.fileId! > 0) {
+      return resolvedSong.fileId.toString();
+    }
+    return resolvedSong.id;
+  }
+
   Future<void> _toggleDefaultCollection(Song resolvedSong) async {
     if (_togglingDefaultStar) return;
     AppHaptics.lightImpact(HapticCategory.control);
@@ -486,11 +615,35 @@ class _YtMainViewState extends State<YtMainView>
         return;
       }
       final hash = resolvedSong.id.toLowerCase();
-      setState(() {
-        _defaultStarred = true;
-        YtMainView._defaultCollectionHashes.add(hash);
-      });
-      await addSongToPlaylist(resolvedSong, defaultPlaylist);
+      final rawHash = widget.song.id.toLowerCase();
+      final listid = defaultPlaylist['listid']?.toString() ?? '';
+
+      if (_defaultStarred) {
+        if (listid.isNotEmpty) {
+          final fileId = await _resolveDefaultCollectionFileId(
+            api,
+            listid,
+            resolvedSong,
+          );
+          await api.deletePlaylistTracks(listid, fileId);
+        }
+        if (!mounted) return;
+        setState(() {
+          _defaultStarred = false;
+          YtMainView._defaultCollectionHashes.remove(hash);
+          YtMainView._defaultCollectionHashes.remove(rawHash);
+          YtMainView._defaultCollectionFileIds.remove(hash);
+          YtMainView._defaultCollectionFileIds.remove(rawHash);
+        });
+        showToast('已从「默认收藏」移除');
+      } else {
+        setState(() {
+          _defaultStarred = true;
+          YtMainView._defaultCollectionHashes.add(hash);
+          YtMainView._defaultCollectionHashes.add(rawHash);
+        });
+        await addSongToPlaylist(resolvedSong, defaultPlaylist);
+      }
     } finally {
       if (mounted) {
         setState(() => _togglingDefaultStar = false);
@@ -498,28 +651,32 @@ class _YtMainViewState extends State<YtMainView>
     }
   }
 
-  // ============== 「接下来播放」队列抽屉手势与动画控制 ==============
-  void _openQueue() {
-    AppHaptics.lightImpact(HapticCategory.control);
+  // ============== 「接下来播放」队列抽屉三态（0.0 收起 ↔ 0.5 半屏 ↔ 1.0 全屏）控制 ==============
+  static const double _kQueueHalfSnap = 0.5;
+  double? _listPointerStartY;
+  double _listDragStartQueueVal = 0.0;
+  bool _listCapturingQueueDrag = false;
+  double _listLastDy = 0.0;
+
+  void _snapQueueTo(double target) {
+    final clamped = target.clamp(0.0, 1.0);
+    if ((_queueCtrl.value - clamped).abs() > 0.02) {
+      AppHaptics.lightImpact(HapticCategory.control);
+    }
     _queueCtrl.animateTo(
-      1.0,
-      duration: const Duration(milliseconds: 340),
+      clamped,
+      duration: const Duration(milliseconds: 300),
       curve: Curves.easeOutCubic,
     );
   }
 
-  void _closeQueue() {
-    AppHaptics.lightImpact(HapticCategory.control);
-    _queueCtrl.animateBack(
-      0.0,
-      duration: const Duration(milliseconds: 280),
-      curve: Curves.easeInCubic,
-    );
-  }
+  void _openQueue() => _snapQueueTo(_kQueueHalfSnap);
+
+  void _closeQueue() => _snapQueueTo(0.0);
 
   void _onQueueDragUpdate(DragUpdateDetails details) {
     final screenH = MediaQuery.sizeOf(context).height;
-    final range = (screenH * 0.58).clamp(200.0, 720.0);
+    final range = (screenH * 0.68).clamp(240.0, 820.0);
     final dy = toDisplaySpaceDelta(context, details.delta).dy;
     _queueCtrl.stop();
     _queueCtrl.value = (_queueCtrl.value - dy / range).clamp(0.0, 1.0);
@@ -527,14 +684,34 @@ class _YtMainViewState extends State<YtMainView>
 
   void _onQueueDragEnd(DragEndDetails details) {
     final v = details.primaryVelocity ?? 0.0;
-    if (v < -380.0) {
-      _openQueue();
-    } else if (v > 380.0) {
-      _closeQueue();
-    } else if (_queueCtrl.value >= 0.45) {
-      _openQueue();
+    _settleQueueWithVelocity(v);
+  }
+
+  void _settleQueueWithVelocity(double v) {
+    final q = _queueCtrl.value;
+    if (v < -360.0) {
+      // 向上快速滑动：从收起态推到半屏(0.5)，从半屏以上推到全屏(1.0)
+      if (q < 0.52 && v > -1350.0) {
+        _snapQueueTo(_kQueueHalfSnap);
+      } else {
+        _snapQueueTo(1.0);
+      }
+    } else if (v > 360.0) {
+      // 向下快速滑动：从全屏态退回半屏(0.5)或直接收起(0.0)
+      if (q > 0.62 && v < 1200.0) {
+        _snapQueueTo(_kQueueHalfSnap);
+      } else {
+        _snapQueueTo(0.0);
+      }
     } else {
-      _closeQueue();
+      // 慢速松手：按最近的三档吸附点（0.0 / 0.5 / 1.0）停靠
+      if (q < 0.25) {
+        _snapQueueTo(0.0);
+      } else if (q < 0.76) {
+        _snapQueueTo(_kQueueHalfSnap);
+      } else {
+        _snapQueueTo(1.0);
+      }
     }
   }
 
@@ -557,25 +734,31 @@ class _YtMainViewState extends State<YtMainView>
         final screenW = outerConstraints.maxWidth;
         final screenH = outerConstraints.maxHeight;
 
-        // 正常态（q == 0）下的各区域几何计算：对齐正版 YT Music 偏上布局
+        // 1. 正常态（q == 0）几何计算：1:1 对齐原版 YT Music（图 1）的均衡舒展分布
         const double topBarH = 52.0;
-        const double coverSideMargin = 20.0;
-        const double coverTopGap = 10.0;
-        // 下半区固定所需高度（歌名 ~54 + 间距 14 + 胶囊 36 + 间距 14 + 进度条 44 + 间距 6 + 五键 64 + 底部留白 + 队列把手 44）
-        const double bottomControlsMinH = 296.0;
-        final double maxCoverH = math.max(
-          160.0,
+        const double coverSideMargin = 24.0;
+        const double handleCollapsedH = 54.0;
+        // 下半区固定高度：封面->标题(26) + 标题块+间距(68) + 胶囊+间距(56) + 进度条+间距(54) + 五键(64) = 268
+        const double fixedBelowCoverH = 268.0;
+        final double availForCoverAndVSpace = math.max(
+          200.0,
           screenH -
               safeTop -
               safeBottom -
               topBarH -
-              coverTopGap -
-              bottomControlsMinH,
+              handleCollapsedH -
+              fixedBelowCoverH,
         );
         final double normalCoverSide = math.min(
           math.max(0.0, screenW - coverSideMargin * 2),
-          maxCoverH,
+          math.max(160.0, availForCoverAndVSpace - 52.0),
         );
+        final double extraVertical = math.max(
+          24.0,
+          availForCoverAndVSpace - normalCoverSide,
+        );
+        // 顶栏与封面之间留出原版 YT 的呼吸留白（约 24~32px），不再紧贴顶栏
+        final double coverTopGap = (extraVertical * 0.45).clamp(20.0, 34.0);
         final double normalCoverLeft = (screenW - normalCoverSide) / 2.0;
         final double normalCoverTop = safeTop + topBarH + coverTopGap;
 
@@ -590,203 +773,274 @@ class _YtMainViewState extends State<YtMainView>
           );
         }
 
-        // 展开队列态（q == 1）下的几何：封面放大铺满上半屏宽度（高约 38% 屏幕高）
-        final double expandedCoverH = (screenH * 0.39).clamp(240.0, 420.0);
-        final double normalTitleTop = normalCoverTop + normalCoverSide + 18.0;
-        final double expandedTitleTop = expandedCoverH - 68.0;
+        // 正常态下各控件的纵向起点（拉开封面与标题、胶囊与进度条、进度条与播放键的呼吸感）
+        final double normalTitleTop = normalCoverTop + normalCoverSide + 26.0;
+        final double normalCapsuleTop = normalTitleTop + 68.0;
+        final double normalSeekTop = normalCapsuleTop + 56.0;
+        final double normalTransportTop = normalSeekTop + 54.0;
 
-        // 正常态下胶囊、进度条、五键控制栏的纵向起点
-        final double normalCapsuleTop = normalTitleTop + 60.0;
-        final double normalSeekTop = normalCapsuleTop + 48.0;
-        final double normalTransportTop = normalSeekTop + 50.0;
-
-        // 队列抽屉面板在 q == 0 与 q == 1 时的顶部 Y 坐标
-        const double handleCollapsedH = 54.0;
+        // 2. 半屏态（q == 0.5，对应录屏）与全屏态（q == 1.0，对应图 5）几何锚点
+        final double halfCoverH = (screenH * 0.41).clamp(240.0, 410.0);
+        final double halfTitleTop = halfCoverH - 68.0;
+        const double fullMiniBarH = 68.0;
         final double queueTopCollapsed =
             screenH - safeBottom - handleCollapsedH;
-        final double queueTopExpanded = expandedCoverH;
+        final double queueTopHalf = halfCoverH;
+        final double queueTopFull = safeTop + fullMiniBarH;
+
+        // 3. 预构建重型子树并放入 RepaintBoundary，手势拖拽过程中 0 次列表与控件 Rebuild！
+        final Widget cachedCapsuleRow = RepaintBoundary(
+          child: _buildCapsuleRow(context, resolvedSong, isFavorited, isOnline),
+        );
+        final Widget cachedSeekBar = RepaintBoundary(
+          child: _buildSeekBar(context, resolvedSong),
+        );
+        final Widget cachedTransport = RepaintBoundary(
+          child: _buildTransportControls(context),
+        );
+        final Widget cachedPlaylistArea = RepaintBoundary(
+          child: _buildInteractivePlaylistArea(safeBottom),
+        );
 
         return AnimatedBuilder(
           animation: _queueCtrl,
           builder: (context, _) {
             final q = _queueCtrl.value.clamp(0.0, 1.0);
-
-            // 1. 封面插值：从居中圆角正方形平滑过渡到上半屏全宽背景封面
-            final curCoverLeft = ui.lerpDouble(normalCoverLeft, 0.0, q)!;
-            final curCoverTop = ui.lerpDouble(normalCoverTop, 0.0, q)!;
-            final curCoverW = ui.lerpDouble(normalCoverSide, screenW, q)!;
-            final curCoverH = ui.lerpDouble(
-              normalCoverSide,
-              expandedCoverH,
-              q,
-            )!;
-            final curCoverRadius = ui.lerpDouble(12.0, 0.0, q)!;
-
-            // 2. 歌名与歌手名位置插值：上移并悬浮到放大封面的左下角边缘
-            final curTitleTop = ui.lerpDouble(
-              normalTitleTop,
-              expandedTitleTop,
-              q,
-            )!;
-
-            // 3. 胶囊栏在 q: 0 → 0.35 率先淡出
-            final capsuleOpacity = (1.0 - q * 2.8).clamp(0.0, 1.0);
-            final curCapsuleTop = normalCapsuleTop - 28.0 * q;
-
-            // 4. 进度条与五键控制栏跟随歌单向上推（frame-2），在 q: 0.25 → 0.85 淡出（frame-1）
-            final transportOpacity = (1.0 - ((q - 0.20) / 0.65)).clamp(
+            // t1: 收起态(0.0) -> 半屏态(0.5) 的归一化进度 (0.0 ~ 1.0)
+            final t1 = (q / _kQueueHalfSnap).clamp(0.0, 1.0);
+            // t2: 半屏态(0.5) -> 全屏态(1.0) 的归一化进度 (0.0 ~ 1.0)
+            final t2 = ((q - _kQueueHalfSnap) / (1.0 - _kQueueHalfSnap)).clamp(
               0.0,
               1.0,
             );
-            final transportSlideUp = 48.0 * q;
+
+            // 封面区域插值：0 -> 0.5 放大铺满上半屏宽度；0.5 -> 1.0 向上收拢并淡出为顶部 Mini Bar
+            final halfL = ui.lerpDouble(normalCoverLeft, 0.0, t1)!;
+            final halfT = ui.lerpDouble(normalCoverTop, 0.0, t1)!;
+            final halfW = ui.lerpDouble(normalCoverSide, screenW, t1)!;
+            final halfH = ui.lerpDouble(normalCoverSide, halfCoverH, t1)!;
+            final curCoverLeft = halfL;
+            final curCoverTop = ui.lerpDouble(halfT, -40.0, t2)!;
+            final curCoverW = halfW;
+            final curCoverH = ui.lerpDouble(halfH, queueTopFull, t2)!;
+            final curCoverRadius = ui.lerpDouble(12.0, 0.0, t1)!;
+            final coverLayerOpacity = (1.0 - t2 * 1.25).clamp(0.0, 1.0);
+
+            // 歌名与歌手名位置插值：0 -> 0.5 移至放大封面左下角；0.5 -> 1.0 渐隐交接给顶部 Mini Bar
+            final curTitleTop =
+                ui.lerpDouble(normalTitleTop, halfTitleTop, t1)! - 36.0 * t2;
+            final titleLayerOpacity = (1.0 - t2 * 1.6).clamp(0.0, 1.0);
+
+            // 胶囊栏在 t1: 0 -> 0.55 率先淡出
+            final capsuleOpacity = (1.0 - t1 * 1.85).clamp(0.0, 1.0);
+            final curCapsuleTop = normalCapsuleTop - 28.0 * t1;
+
+            // 进度条与五键控制栏跟随歌单向上推并在半屏前淡出
+            final transportOpacity = (1.0 - ((t1 - 0.15) / 0.75)).clamp(
+              0.0,
+              1.0,
+            );
+            final transportSlideUp = 46.0 * t1;
             final curSeekTop = normalSeekTop - transportSlideUp;
             final curTransportTop = normalTransportTop - transportSlideUp;
 
-            // 5. 队列面板顶部 Y 坐标
-            final curQueueTop = ui.lerpDouble(
-              queueTopCollapsed,
-              queueTopExpanded,
-              q,
-            )!;
+            // 队列面板顶部 Y 坐标：三段插值（收起 -> 半屏 -> 全屏）
+            final curQueueTop = q <= _kQueueHalfSnap
+                ? ui.lerpDouble(queueTopCollapsed, queueTopHalf, t1)!
+                : ui.lerpDouble(queueTopHalf, queueTopFull, t2)!;
+            final curQueueHeight = (screenH - curQueueTop).clamp(
+              handleCollapsedH,
+              screenH - queueTopFull,
+            );
+
+            // 原顶栏在进入全屏态（t2: 0 -> 0.7）时淡出，全屏 Mini Bar（图 5）在 t2: 0.25 -> 1.0 显现
+            final topBarOpacity = (1.0 - t2 * 1.5).clamp(0.0, 1.0);
+            final miniHeaderOpacity = ((t2 - 0.20) / 0.80).clamp(0.0, 1.0);
 
             return Stack(
               fit: StackFit.expand,
               children: [
-                // 封面 / MV 视频层
-                Positioned(
-                  left: curCoverLeft,
-                  top: curCoverTop,
-                  width: curCoverW,
-                  height: curCoverH,
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      _isVideoMode
-                          ? _buildInlineMvPlayer(
-                              context,
-                              resolvedSong,
-                              curCoverRadius,
-                            )
-                          : _buildCover(
-                              context,
-                              resolvedSong,
-                              curCoverW,
-                              borderRadius: curCoverRadius,
-                              queueExpanded: q > 0.01,
-                            ),
-                      // 当歌单展开时，封面底部叠加渐变暗角，保证悬浮歌名与顶栏清晰可读
-                      if (q > 0.01)
-                        IgnorePointer(
-                          child: Opacity(
-                            opacity: q,
-                            child: DecoratedBox(
-                              decoration: BoxDecoration(
-                                gradient: LinearGradient(
-                                  begin: Alignment.topCenter,
-                                  end: Alignment.bottomCenter,
-                                  stops: const [0.0, 0.28, 0.62, 1.0],
-                                  colors: [
-                                    Colors.black.withValues(alpha: 0.45),
-                                    Colors.transparent,
-                                    Colors.black.withValues(alpha: 0.25),
-                                    const Color(0xFF0D0D0D),
-                                  ],
+                // 1. 封面 / MV 视频层（固定内部 CoverSwitchPager 逻辑尺寸为 normalCoverSide，避免逐帧重排卡顿）
+                if (coverLayerOpacity > 0.01)
+                  Positioned(
+                    left: curCoverLeft,
+                    top: curCoverTop,
+                    width: curCoverW,
+                    height: curCoverH,
+                    child: Opacity(
+                      opacity: coverLayerOpacity,
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          _isVideoMode
+                              ? _buildInlineMvPlayer(
+                                  context,
+                                  resolvedSong,
+                                  curCoverRadius,
+                                )
+                              : ClipRRect(
+                                  borderRadius: BorderRadius.circular(
+                                    curCoverRadius,
+                                  ),
+                                  child: FittedBox(
+                                    fit: BoxFit.cover,
+                                    clipBehavior: Clip.hardEdge,
+                                    child: SizedBox(
+                                      width: normalCoverSide,
+                                      height: normalCoverSide,
+                                      child: _buildCover(
+                                        context,
+                                        resolvedSong,
+                                        normalCoverSide,
+                                        borderRadius: curCoverRadius,
+                                        queueExpanded: q > 0.02,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                          if (t1 > 0.01)
+                            IgnorePointer(
+                              child: Opacity(
+                                opacity: t1,
+                                child: DecoratedBox(
+                                  decoration: BoxDecoration(
+                                    gradient: LinearGradient(
+                                      begin: Alignment.topCenter,
+                                      end: Alignment.bottomCenter,
+                                      stops: const [0.0, 0.28, 0.62, 1.0],
+                                      colors: [
+                                        Colors.black.withValues(alpha: 0.45),
+                                        Colors.transparent,
+                                        Colors.black.withValues(alpha: 0.25),
+                                        const Color(0xFF0D0D0D),
+                                      ],
+                                    ),
+                                  ),
                                 ),
                               ),
                             ),
-                          ),
-                        ),
-                      if (q > 0.5 && !_isVideoMode)
-                        Positioned.fill(
-                          child: GestureDetector(
-                            behavior: HitTestBehavior.translucent,
-                            onTap: _closeQueue,
-                            onVerticalDragUpdate: _onQueueDragUpdate,
-                            onVerticalDragEnd: _onQueueDragEnd,
-                          ),
-                        ),
-                    ],
+                          if (q > 0.25 && !_isVideoMode)
+                            Positioned.fill(
+                              child: GestureDetector(
+                                behavior: HitTestBehavior.translucent,
+                                onTap: _closeQueue,
+                                onVerticalDragUpdate: _onQueueDragUpdate,
+                                onVerticalDragEnd: _onQueueDragEnd,
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
                   ),
-                ),
 
-                // 顶部栏（浮动在最上方）
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  top: safeTop,
-                  height: topBarH,
-                  child: _buildTopBar(context, resolvedSong),
-                ),
+                // 2. 正常态/半屏态顶部栏
+                if (topBarOpacity > 0.01)
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    top: safeTop,
+                    height: topBarH,
+                    child: IgnorePointer(
+                      ignoring: topBarOpacity < 0.3,
+                      child: Opacity(
+                        opacity: topBarOpacity,
+                        child: _buildTopBar(context, resolvedSong),
+                      ),
+                    ),
+                  ),
 
-                // 歌名与歌手名（随歌单上拉悬浮至放大封面底部）
-                Positioned(
-                  left: 20,
-                  right: 20,
-                  top: curTitleTop,
-                  child: _buildTitleAndArtist(context, resolvedSong),
-                ),
+                // 3. 全屏队列态顶部 Mini Player 栏（1:1 还原图 5：小封面 + 歌名/歌手 + 上一首/播放/下一首）
+                if (miniHeaderOpacity > 0.01)
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    top: 0,
+                    height: safeTop + fullMiniBarH,
+                    child: IgnorePointer(
+                      ignoring: miniHeaderOpacity < 0.4,
+                      child: Opacity(
+                        opacity: miniHeaderOpacity,
+                        child: _buildFullQueueMiniHeader(
+                          context,
+                          resolvedSong,
+                          safeTop,
+                          fullMiniBarH,
+                        ),
+                      ),
+                    ),
+                  ),
 
-                // 胶囊操作栏（[ ♥ 喜欢 | ⭐ 收藏 ] + 歌词 + 保存 + 评论 + 曲谱 + 音效）
+                // 4. 歌名与歌手名（正常态与半屏态）
+                if (titleLayerOpacity > 0.01)
+                  Positioned(
+                    left: 24,
+                    right: 24,
+                    top: curTitleTop,
+                    child: IgnorePointer(
+                      ignoring: t2 > 0.3,
+                      child: Opacity(
+                        opacity: titleLayerOpacity,
+                        child: _buildTitleAndArtist(context, resolvedSong),
+                      ),
+                    ),
+                  ),
+
+                // 5. 胶囊操作栏
                 if (capsuleOpacity > 0.01)
                   Positioned(
                     left: 20,
                     right: 20,
                     top: curCapsuleTop,
                     child: IgnorePointer(
-                      ignoring: q > 0.2,
+                      ignoring: q > 0.15,
                       child: Opacity(
                         opacity: capsuleOpacity,
-                        child: _buildCapsuleRow(
-                          context,
-                          resolvedSong,
-                          isFavorited,
-                          isOnline,
-                        ),
+                        child: cachedCapsuleRow,
                       ),
                     ),
                   ),
 
-                // 播放进度条
+                // 6. 播放进度条
                 if (transportOpacity > 0.01)
                   Positioned(
-                    left: 16,
-                    right: 16,
+                    left: 18,
+                    right: 18,
                     top: curSeekTop,
                     child: IgnorePointer(
-                      ignoring: q > 0.4,
+                      ignoring: q > 0.25,
                       child: Opacity(
                         opacity: transportOpacity,
-                        child: _buildSeekBar(context, resolvedSong),
+                        child: cachedSeekBar,
                       ),
                     ),
                   ),
 
-                // 五键播放控制栏
+                // 7. 五键播放控制栏
                 if (transportOpacity > 0.01)
                   Positioned(
                     left: 20,
                     right: 20,
                     top: curTransportTop,
                     child: IgnorePointer(
-                      ignoring: q > 0.4,
+                      ignoring: q > 0.25,
                       child: Opacity(
                         opacity: transportOpacity,
-                        child: _buildTransportControls(context),
+                        child: cachedTransport,
                       ),
                     ),
                   ),
 
-                // 底部「接下来播放」联动歌单抽屉（还原原版 YT Music 00:00 → 00:03 动画）
+                // 8. 底部「接下来播放」三态联动歌单抽屉（0.0 收起 ↔ 0.5 半屏 ↔ 1.0 全屏）
                 Positioned(
                   left: 0,
                   right: 0,
                   top: curQueueTop,
-                  height: screenH - queueTopExpanded,
+                  height: curQueueHeight,
                   child: _buildQueueDrawer(
                     context,
                     resolvedSong,
                     q,
-                    safeBottom,
+                    cachedPlaylistArea,
                   ),
                 ),
               ],
@@ -928,7 +1182,7 @@ class _YtMainViewState extends State<YtMainView>
     );
   }
 
-  /// 原地内嵌 MV 视频播放器（不跳转新页面，直接复用 MV 加载链与控制器）
+  /// 原地内嵌 MV 视频播放器（复刻图 3 微信视频样式：同源动态柔光高斯模糊消除上下死黑边，且控件零遮挡主视频）
   Widget _buildInlineMvPlayer(
     BuildContext context,
     Song resolvedSong,
@@ -936,21 +1190,88 @@ class _YtMainViewState extends State<YtMainView>
   ) {
     final ctrl = _videoController;
     final initialized = ctrl != null && ctrl.value.isInitialized;
+    final aspect = initialized && ctrl.value.aspectRatio > 0
+        ? ctrl.value.aspectRatio
+        : 16 / 9;
+    final vSize = initialized ? ctrl.value.size : Size.zero;
+    final vW = vSize.width > 0 ? vSize.width : 160.0;
+    final vH = vSize.height > 0 ? vSize.height : 90.0;
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(borderRadius),
       child: Container(
-        color: Colors.black,
+        color: const Color(0xFF101012),
         child: Stack(
           fit: StackFit.expand,
           children: [
+            // 1. 底层：微信同款同源动态高斯模糊环境光填充（彻底消除 1:1 容器上下死黑边）
+            Positioned.fill(
+              child: ImageFiltered(
+                imageFilter: ui.ImageFilter.blur(
+                  sigmaX: 28,
+                  sigmaY: 28,
+                  tileMode: TileMode.mirror,
+                ),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    DepthCoverHost(
+                      artworkUri: resolvedSong.artworkUri,
+                      fallbackFilePath: resolvedSong.localPath,
+                      fit: BoxFit.cover,
+                      iconSize: 48,
+                      backgroundColor: Colors.white12,
+                      iconColor: Colors.white54,
+                    ),
+                    if (initialized)
+                      FittedBox(
+                        fit: BoxFit.cover,
+                        clipBehavior: Clip.hardEdge,
+                        child: SizedBox(
+                          width: vW,
+                          height: vH,
+                          child: VideoPlayer(ctrl),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+            // 柔和暗角渐变遮罩，让上下模糊带与主视频画面自然晕染衔接
+            Positioned.fill(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    stops: const [0.0, 0.22, 0.78, 1.0],
+                    colors: [
+                      Colors.black.withValues(alpha: 0.36),
+                      Colors.black.withValues(alpha: 0.14),
+                      Colors.black.withValues(alpha: 0.14),
+                      Colors.black.withValues(alpha: 0.42),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            // 2. 中层：16:9 完整主视频画面（0 裁剪、0 遮挡）
             if (initialized)
               Center(
-                child: AspectRatio(
-                  aspectRatio: ctrl.value.aspectRatio > 0
-                      ? ctrl.value.aspectRatio
-                      : 16 / 9,
-                  child: VideoPlayer(ctrl),
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.32),
+                        blurRadius: 16,
+                        spreadRadius: 1,
+                      ),
+                    ],
+                  ),
+                  child: AspectRatio(
+                    aspectRatio: aspect,
+                    child: VideoPlayer(ctrl),
+                  ),
                 ),
               ),
             if (_videoLoading)
@@ -992,10 +1313,10 @@ class _YtMainViewState extends State<YtMainView>
                   ],
                 ),
               ),
-            // 右下角：清晰度选择胶囊 + 全屏进入完整 MV 页按钮
+            // 3. 顶层控件：置于右下角模糊氛围带内（位于 16:9 视频底边之下，100% 不遮挡视频内容）
             if (initialized)
               Positioned(
-                right: 10,
+                right: 12,
                 bottom: 10,
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -1028,8 +1349,12 @@ class _YtMainViewState extends State<YtMainView>
                             vertical: 5,
                           ),
                           decoration: BoxDecoration(
-                            color: Colors.black.withValues(alpha: 0.6),
+                            color: Colors.black.withValues(alpha: 0.48),
                             borderRadius: BorderRadius.circular(14),
+                            border: Border.all(
+                              color: Colors.white.withValues(alpha: 0.14),
+                              width: 0.5,
+                            ),
                           ),
                           child: Text(
                             _mvQualities[_mvQualityIndex].quality,
@@ -1060,8 +1385,12 @@ class _YtMainViewState extends State<YtMainView>
                       child: Container(
                         padding: const EdgeInsets.all(6),
                         decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.6),
+                          color: Colors.black.withValues(alpha: 0.48),
                           borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.14),
+                            width: 0.5,
+                          ),
                         ),
                         child: const Icon(
                           Icons.fullscreen_rounded,
@@ -1649,23 +1978,226 @@ class _YtMainViewState extends State<YtMainView>
     );
   }
 
-  /// 原版 YT Music 风格「接下来播放」联动歌单抽屉（支持点击或拖拽展开）
+  /// 全屏队列态顶部 Mini Player 顶栏（1:1 还原图 5：小封面 + 歌名/歌手 + 上一首/播放暂停/下一首）
+  Widget _buildFullQueueMiniHeader(
+    BuildContext context,
+    Song resolvedSong,
+    double safeTop,
+    double barH,
+  ) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => _snapQueueTo(_kQueueHalfSnap),
+      onVerticalDragUpdate: _onQueueDragUpdate,
+      onVerticalDragEnd: _onQueueDragEnd,
+      child: Container(
+        color: const Color(0xFF141110),
+        padding: EdgeInsets.only(top: safeTop, left: 16, right: 8),
+        height: safeTop + barH,
+        child: Row(
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: SizedBox(
+                width: 44,
+                height: 44,
+                child: DepthCoverHost(
+                  artworkUri: resolvedSong.artworkUri,
+                  fallbackFilePath: resolvedSong.localPath,
+                  fit: BoxFit.cover,
+                  iconSize: 22,
+                  backgroundColor: Colors.white12,
+                  iconColor: Colors.white54,
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    resolvedSong.displayName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    resolvedSong.artist,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w400,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Selector<PlayerProvider, bool>(
+              selector: (_, p) => p.isPlaying,
+              builder: (context, isPlaying, _) {
+                final playerProvider = context.read<PlayerProvider>();
+                final vCtrl = _videoController;
+                final effectivePlaying =
+                    (_isVideoMode && vCtrl != null && vCtrl.value.isInitialized)
+                    ? vCtrl.value.isPlaying
+                    : isPlaying;
+                return Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      icon: const Icon(
+                        Icons.skip_previous,
+                        color: Colors.white,
+                        size: 28,
+                      ),
+                      onPressed: () {
+                        AppHaptics.click(HapticCategory.transport);
+                        playerProvider.previous();
+                      },
+                    ),
+                    IconButton(
+                      icon: PlayPauseMorphIcon(
+                        isPlaying: effectivePlaying,
+                        size: 28,
+                        color: Colors.white,
+                      ),
+                      onPressed: () {
+                        AppHaptics.click(HapticCategory.transport);
+                        if (_isVideoMode &&
+                            vCtrl != null &&
+                            vCtrl.value.isInitialized) {
+                          if (vCtrl.value.isPlaying) {
+                            vCtrl.pause();
+                          } else {
+                            vCtrl.play();
+                          }
+                          return;
+                        }
+                        if (isPlaying) {
+                          playerProvider.pause();
+                        } else {
+                          playerProvider.resume();
+                        }
+                      },
+                    ),
+                    IconButton(
+                      icon: const Icon(
+                        Icons.skip_next,
+                        color: Colors.white,
+                        size: 28,
+                      ),
+                      onPressed: () {
+                        AppHaptics.click(HapticCategory.transport);
+                        playerProvider.next();
+                      },
+                    ),
+                  ],
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 预构建的可交互播放列表区域：支持在半屏态上推至全屏、以及列表到顶时任意位置顺滑下拉收起
+  Widget _buildInteractivePlaylistArea(double safeBottom) {
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: (event) {
+        _listPointerStartY = event.position.dy;
+        _listDragStartQueueVal = _queueCtrl.value;
+        _listCapturingQueueDrag = false;
+        _listLastDy = 0.0;
+      },
+      onPointerMove: (event) {
+        final startY = _listPointerStartY;
+        if (startY == null) return;
+        final totalDy = event.position.dy - startY;
+        final stepDy = toDisplaySpaceDelta(context, event.delta).dy;
+        final sc = YtMainView._playlistScrollAnchor.controller;
+        final atTop = !sc.hasClients || sc.offset <= 1.0;
+
+        if (!_listCapturingQueueDrag && totalDy.abs() > 6.0) {
+          // 1) 在半屏态向上推 -> 优先将抽屉推向全屏(1.0)
+          if (totalDy < -6.0 && _listDragStartQueueVal < 0.98) {
+            _listCapturingQueueDrag = true;
+          }
+          // 2) 列表已处于顶部且向下拉 -> 无缝接管下拉抽屉（全屏 -> 半屏 -> 收起）
+          else if (totalDy > 6.0 && atTop && _queueCtrl.value > 0.01) {
+            _listCapturingQueueDrag = true;
+          }
+        }
+
+        if (_listCapturingQueueDrag) {
+          if (sc.hasClients && sc.offset > 0 && _queueCtrl.value < 0.99) {
+            sc.jumpTo(0);
+          }
+          final screenH = MediaQuery.sizeOf(context).height;
+          final range = (screenH * 0.68).clamp(240.0, 820.0);
+          _queueCtrl.stop();
+          _queueCtrl.value = (_queueCtrl.value - stepDy / range).clamp(
+            0.0,
+            1.0,
+          );
+          _listLastDy = stepDy;
+        }
+      },
+      onPointerUp: (_) {
+        if (_listCapturingQueueDrag) {
+          _listCapturingQueueDrag = false;
+          _settleQueueWithVelocity(_listLastDy * 55.0);
+        }
+        _listPointerStartY = null;
+      },
+      onPointerCancel: (_) {
+        if (_listCapturingQueueDrag) {
+          _listCapturingQueueDrag = false;
+          _settleQueueWithVelocity(0.0);
+        }
+        _listPointerStartY = null;
+      },
+      child: Padding(
+        padding: EdgeInsets.only(bottom: safeBottom),
+        child: PlayerPlaylistView(
+          scrollAnchor: YtMainView._playlistScrollAnchor,
+        ),
+      ),
+    );
+  }
+
+  /// 原版 YT Music 风格「接下来播放」三态联动歌单抽屉（0.0 收起 ↔ 0.5 半屏 ↔ 1.0 全屏）
   Widget _buildQueueDrawer(
     BuildContext context,
     Song currentSong,
     double q,
-    double safeBottom,
+    Widget cachedPlaylistArea,
   ) {
     final playerProvider = context.read<PlayerProvider>();
     final nextSong = _pagerNeighborSong(playerProvider, 1) ?? currentSong;
-    final bgAlpha = (q * 1.15).clamp(0.0, 1.0);
+    final bgAlpha = (q * 1.6).clamp(0.0, 1.0);
+    final topRadius = q <= _kQueueHalfSnap
+        ? 18.0
+        : ui.lerpDouble(
+            18.0,
+            12.0,
+            (q - _kQueueHalfSnap) / (1.0 - _kQueueHalfSnap),
+          )!;
 
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: const Color(0xFF0D0D0D).withValues(alpha: bgAlpha),
-        borderRadius: BorderRadius.vertical(
-          top: Radius.circular(ui.lerpDouble(18.0, 0.0, q)!),
-        ),
+        color: const Color(0xFF141110).withValues(alpha: bgAlpha),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(topRadius)),
       ),
       child: Column(
         children: [
@@ -1673,10 +2205,12 @@ class _YtMainViewState extends State<YtMainView>
           GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTap: () {
-              if (q < 0.5) {
-                _openQueue();
+              if (q < 0.25) {
+                _snapQueueTo(_kQueueHalfSnap);
+              } else if (q < 0.8) {
+                _snapQueueTo(1.0);
               } else {
-                _closeQueue();
+                _snapQueueTo(_kQueueHalfSnap);
               }
             },
             onVerticalDragUpdate: _onQueueDragUpdate,
@@ -1688,7 +2222,7 @@ class _YtMainViewState extends State<YtMainView>
                 children: [
                   const SizedBox(height: 8),
                   Container(
-                    width: 34,
+                    width: 36,
                     height: 4,
                     decoration: BoxDecoration(
                       color: Colors.white30,
@@ -1696,9 +2230,9 @@ class _YtMainViewState extends State<YtMainView>
                     ),
                   ),
                   const SizedBox(height: 8),
-                  if (q < 0.25)
+                  if (q < 0.18)
                     Opacity(
-                      opacity: (1.0 - q * 4.0).clamp(0.0, 1.0),
+                      opacity: (1.0 - q * 5.5).clamp(0.0, 1.0),
                       child: SizedBox(
                         height: 24,
                         child: Center(
@@ -1717,7 +2251,7 @@ class _YtMainViewState extends State<YtMainView>
                     )
                   else
                     Opacity(
-                      opacity: ((q - 0.25) / 0.75).clamp(0.0, 1.0),
+                      opacity: ((q - 0.18) / 0.32).clamp(0.0, 1.0),
                       child: Padding(
                         padding: const EdgeInsets.only(top: 4, bottom: 10),
                         child: Row(
@@ -1766,22 +2300,19 @@ class _YtMainViewState extends State<YtMainView>
               ),
             ),
           ),
-          // 展开态下的播放队列列表
-          if (q > 0.05)
-            Expanded(
+          // 展开态下的播放队列列表（复用预缓存的 cachedPlaylistArea，拖拽 0 次 Rebuild）
+          Expanded(
+            child: Offstage(
+              offstage: q <= 0.03,
               child: Opacity(
-                opacity: ((q - 0.1) / 0.9).clamp(0.0, 1.0),
+                opacity: ((q - 0.05) / 0.35).clamp(0.0, 1.0),
                 child: IgnorePointer(
-                  ignoring: q < 0.5,
-                  child: Padding(
-                    padding: EdgeInsets.only(bottom: safeBottom),
-                    child: PlayerPlaylistView(
-                      scrollAnchor: YtMainView._playlistScrollAnchor,
-                    ),
-                  ),
+                  ignoring: q < 0.25,
+                  child: cachedPlaylistArea,
                 ),
               ),
             ),
+          ),
         ],
       ),
     );
