@@ -31,7 +31,6 @@ import '../../sheet/song_sheet_sheet.dart';
 import '../comments_view.dart';
 import '../cover_switch_physics.dart';
 import '../mv_player_page.dart';
-import '../player_cover_morph.dart';
 import '../player_cover_morph_layer.dart';
 import '../player_cover_shadow.dart';
 import '../player_video_active.dart';
@@ -914,15 +913,12 @@ class _YtMainViewState extends State<YtMainView>
                     color: Colors.white,
                     size: 24,
                   ),
-                  onPressed: () {
-                    YtMoreMenu.show(
-                      context: context,
-                      song: widget.song,
-                      onOpenLyrics: widget.onOpenLyrics,
-                      onPushPage: widget.onPushPage,
-                      onDismissAndPush: widget.onDismissAndPush,
-                    );
-                  },
+                  onPressed: () => YtMoreMenu.show(
+                    context,
+                    resolvedSong,
+                    onPushPage: widget.onPushPage,
+                    onDismissAndPush: widget.onDismissAndPush,
+                  ),
                 ),
               ),
             ],
@@ -1014,7 +1010,7 @@ class _YtMainViewState extends State<YtMainView>
                             PopupMenuItem<int>(
                               value: i,
                               child: Text(
-                                _mvQualities[i].label,
+                                _mvQualities[i].quality,
                                 style: TextStyle(
                                   color: i == _mvQualityIndex
                                       ? Colors.white
@@ -1036,7 +1032,7 @@ class _YtMainViewState extends State<YtMainView>
                             borderRadius: BorderRadius.circular(14),
                           ),
                           child: Text(
-                            _mvQualities[_mvQualityIndex].label,
+                            _mvQualities[_mvQualityIndex].quality,
                             style: const TextStyle(
                               color: Colors.white,
                               fontSize: 11,
@@ -1083,103 +1079,115 @@ class _YtMainViewState extends State<YtMainView>
     );
   }
 
+  Widget _buildPagerPage(Song? neighborSong) {
+    if (neighborSong == null) return const SizedBox.shrink();
+    final resolved = YtMoreMenu.resolveMatchedSong(neighborSong);
+    return DepthCoverHost(
+      artworkUri: resolved.artworkUri,
+      fallbackFilePath: resolved.localPath,
+      fit: BoxFit.cover,
+      iconSize: 48,
+      backgroundColor: Colors.white12,
+      iconColor: Colors.white54,
+    );
+  }
+
+  Widget _buildCurrentCoverPage(Song resolvedSong, double borderRadius) {
+    final artwork = DepthCoverHost(
+      artworkUri: resolvedSong.artworkUri,
+      fallbackFilePath: resolvedSong.localPath,
+      fit: BoxFit.cover,
+      iconSize: 48,
+      backgroundColor: Colors.white12,
+      iconColor: Colors.white54,
+    );
+    return CoverFlipCrossfade(
+      version: resolvedSong.artworkUri,
+      fallbackFilePath: resolvedSong.localPath,
+      iconSize: 48,
+      radius: borderRadius,
+      direction: _coverFlipDirection,
+      readinessProbe: (uri, width, dpr) => isPlayerArtworkReady(
+        artworkUri: uri,
+        settledLogicalWidth: width,
+        devicePixelRatio: dpr,
+      ),
+      child: resolvedSong.isOnline
+          ? Stack(
+              fit: StackFit.expand,
+              children: [
+                artwork,
+                DynamicCoverView(song: resolvedSong, enabled: true),
+              ],
+            )
+          : artwork,
+    );
+  }
+
   Widget _buildCover(
     BuildContext context,
-    Song song,
-    double coverSize, {
+    Song resolvedSong,
+    double side, {
     double borderRadius = 12.0,
     bool queueExpanded = false,
   }) {
-    final playerProvider = context.read<PlayerProvider>();
-    final prevSong = _pagerNeighborSong(playerProvider, -1);
-    final nextSong = _pagerNeighborSong(playerProvider, 1);
+    final player = context.watch<PlayerProvider>();
+    final colorScheme = Theme.of(context).colorScheme;
+    final prevSong = _pagerNeighborSong(player, -1);
+    final nextSong = _pagerNeighborSong(player, 1);
 
-    Widget buildStaticArt(Song target) {
-      return PlayerArtworkImage(
-        artworkUri: target.artworkUri,
-        fallbackFilePath: target.localPath,
-        songId: target.id,
-        size: 800,
-        borderRadius: 0,
-      );
-    }
-
-    final Widget activeArt = DynamicCoverView(
-      song: song,
-      staticChild: DepthCoverHost(
-        imageKey: '${song.id}|${song.artworkUri ?? ''}',
-        enabled: true,
-        borderRadius: 0,
-        child: buildStaticArt(song),
+    final coverContent = SizedBox(
+      width: side,
+      height: side,
+      child: PlayerCoverSlot(
+        songId: resolvedSong.id,
+        artworkUri: resolvedSong.artworkUri,
+        fallbackFilePath: resolvedSong.localPath,
+        iconSize: 48,
+        placeholderColor: Colors.white12,
+        shadowColor: colorScheme.shadow,
+        eligible: () =>
+            !widget.dockMode &&
+            !_isVideoMode &&
+            widget.lyricsExpansion.value <= 0.001 &&
+            _queueCtrl.value <= 0.001,
+        settledScale: 1.0,
+        settledAnchor: Alignment.center,
+        child: SongDanmakuHost(
+          cover: PlayerCoverShadow.wrap(
+            shadowColor: colorScheme.shadow,
+            child: CoverSwitchPager(
+              key: _coverPagerKey,
+              side: side,
+              radius: borderRadius,
+              pages: [
+                _buildPagerPage(prevSong),
+                _buildCurrentCoverPage(resolvedSong, borderRadius),
+                _buildPagerPage(nextSong),
+              ],
+              canGoPrevious: prevSong != null && !queueExpanded,
+              canGoNext: nextSong != null && !queueExpanded,
+              onCommit: _onCoverPagerCommit,
+            ),
+          ),
+        ),
       ),
     );
 
-    Widget buildCard(Widget art) {
-      return PlayerCoverShadow(
-        borderRadius: borderRadius,
-        playing: true,
-        restingScale: 1.0,
-        clipContent: true,
-        child: art,
-      );
-    }
-
-    final prevCard = prevSong != null
-        ? buildCard(buildStaticArt(prevSong))
-        : null;
-    final nextCard = nextSong != null
-        ? buildCard(buildStaticArt(nextSong))
-        : null;
-
-    final flipActiveCard = ValueListenableBuilder<CoverSwitchAnimationMode>(
-      valueListenable: kCoverSwitchAnimationMode,
-      builder: (context, mode, _) {
-        final bool flipEnabled =
-            mode == CoverSwitchAnimationMode.flipCrossfade &&
-            isPlayerArtworkReady(song.artworkUri, 800);
-        return CoverFlipCrossfade(
-          version: song.id,
-          direction: _coverFlipDirection,
-          enabled: flipEnabled,
-          child: buildCard(activeArt),
-        );
-      },
-    );
-
-    final coverContent = SongDanmakuHost(
-      borderRadius: borderRadius,
-      child: CoverSwitchPager(
-        key: _coverPagerKey,
-        previousChild: prevCard,
-        currentChild: flipActiveCard,
-        nextChild: nextCard,
-        canSwipePrevious: prevCard != null && !queueExpanded,
-        canSwipeNext: nextCard != null && !queueExpanded,
-        onCommit: _onCoverPagerCommit,
-      ),
-    );
-
-    return PlayerCoverSlot(
-      borderRadius: borderRadius,
-      artworkUri: song.artworkUri,
-      fallbackFilePath: song.localPath,
-      songId: song.id,
-      eligible: () =>
-          !widget.dockMode &&
-          !_isVideoMode &&
-          widget.lyricsExpansion.value <= 0.001 &&
-          _queueCtrl.value <= 0.001,
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onVerticalDragStart: widget.onDragStart,
+      onVerticalDragUpdate: widget.onDragUpdate,
+      onVerticalDragEnd: widget.onDragEnd,
+      onVerticalDragCancel: widget.onDragCancel,
       child: AnimatedBuilder(
         animation: widget.lyricsExpansion,
         child: coverContent,
         builder: (context, child) {
-          final hideInMain = widget.lyricsExpansion.value > 0.001;
-          return Visibility(
-            visible: !hideInMain,
-            maintainSize: true,
-            maintainAnimation: true,
-            maintainState: true,
-            child: child!,
+          final drawerActive = widget.lyricsExpansion.value > 0.001;
+          return Opacity(
+            opacity: drawerActive ? 0.0 : 1.0,
+            child: IgnorePointer(ignoring: drawerActive, child: child),
           );
         },
       ),
