@@ -42,7 +42,7 @@ import '../widgets/title_switch_fade.dart';
 import 'yt_more_menu.dart';
 
 class YtMainView extends StatefulWidget {
-  static final PlaylistScrollAnchor _playlistScrollAnchor =
+  static final PlaylistScrollAnchor playlistScrollAnchor =
       PlaylistScrollAnchor();
 
   /// 缓存每首歌是否存在可用 MV（key = albumAudioId）
@@ -118,6 +118,8 @@ class _YtMainViewState extends State<YtMainView>
   int _mvQualityIndex = 0;
   String? _currentVideoUrl;
   bool _enteredVideoActive = false;
+  bool _mvControlsVisible = true;
+  Timer? _mvControlsHideTimer;
 
   // ============== 「默认收藏」歌单状态 ==============
   bool _defaultStarred = false;
@@ -310,6 +312,7 @@ class _YtMainViewState extends State<YtMainView>
           _videoLoading = false;
           _videoError = null;
         });
+        _showMvControlsTemporarily();
       }
     } catch (_) {
       if (mounted && _videoController == ctrl) {
@@ -318,6 +321,27 @@ class _YtMainViewState extends State<YtMainView>
           _videoError = '视频解码初始化失败';
         });
       }
+    }
+  }
+
+  void _showMvControlsTemporarily() {
+    _mvControlsHideTimer?.cancel();
+    if (mounted) {
+      setState(() => _mvControlsVisible = true);
+    }
+    _mvControlsHideTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted && _isVideoMode) {
+        setState(() => _mvControlsVisible = false);
+      }
+    });
+  }
+
+  void _onTapMvArea() {
+    if (_mvControlsVisible) {
+      _mvControlsHideTimer?.cancel();
+      setState(() => _mvControlsVisible = false);
+    } else {
+      _showMvControlsTemporarily();
     }
   }
 
@@ -367,6 +391,8 @@ class _YtMainViewState extends State<YtMainView>
   }
 
   void _disposeVideoController({required bool resumeAudio}) {
+    _mvControlsHideTimer?.cancel();
+    _mvControlsHideTimer = null;
     final ctrl = _videoController;
     _videoController = null;
     ctrl?.removeListener(_onInlineVideoTick);
@@ -651,32 +677,28 @@ class _YtMainViewState extends State<YtMainView>
     }
   }
 
-  // ============== 「接下来播放」队列抽屉三态（0.0 收起 ↔ 0.5 半屏 ↔ 1.0 全屏）控制 ==============
-  static const double _kQueueHalfSnap = 0.5;
-  double? _listPointerStartY;
-  double _listDragStartQueueVal = 0.0;
-  bool _listCapturingQueueDrag = false;
-  double _listLastDy = 0.0;
-
-  void _snapQueueTo(double target) {
-    final clamped = target.clamp(0.0, 1.0);
-    if ((_queueCtrl.value - clamped).abs() > 0.02) {
-      AppHaptics.lightImpact(HapticCategory.control);
-    }
+  // ============== 「接下来播放」队列抽屉全屏展开控制（1:1 复刻歌词展开动画） ==============
+  void _openQueue() {
+    AppHaptics.lightImpact(HapticCategory.control);
     _queueCtrl.animateTo(
-      clamped,
-      duration: const Duration(milliseconds: 300),
+      1.0,
+      duration: const Duration(milliseconds: 340),
       curve: Curves.easeOutCubic,
     );
   }
 
-  void _openQueue() => _snapQueueTo(_kQueueHalfSnap);
-
-  void _closeQueue() => _snapQueueTo(0.0);
+  void _closeQueue() {
+    AppHaptics.lightImpact(HapticCategory.control);
+    _queueCtrl.animateBack(
+      0.0,
+      duration: const Duration(milliseconds: 280),
+      curve: Curves.easeInCubic,
+    );
+  }
 
   void _onQueueDragUpdate(DragUpdateDetails details) {
     final screenH = MediaQuery.sizeOf(context).height;
-    final range = (screenH * 0.68).clamp(240.0, 820.0);
+    final range = (screenH * 0.72).clamp(200.0, 900.0);
     final dy = toDisplaySpaceDelta(context, details.delta).dy;
     _queueCtrl.stop();
     _queueCtrl.value = (_queueCtrl.value - dy / range).clamp(0.0, 1.0);
@@ -684,34 +706,14 @@ class _YtMainViewState extends State<YtMainView>
 
   void _onQueueDragEnd(DragEndDetails details) {
     final v = details.primaryVelocity ?? 0.0;
-    _settleQueueWithVelocity(v);
-  }
-
-  void _settleQueueWithVelocity(double v) {
-    final q = _queueCtrl.value;
-    if (v < -360.0) {
-      // 向上快速滑动：从收起态推到半屏(0.5)，从半屏以上推到全屏(1.0)
-      if (q < 0.52 && v > -1350.0) {
-        _snapQueueTo(_kQueueHalfSnap);
-      } else {
-        _snapQueueTo(1.0);
-      }
-    } else if (v > 360.0) {
-      // 向下快速滑动：从全屏态退回半屏(0.5)或直接收起(0.0)
-      if (q > 0.62 && v < 1200.0) {
-        _snapQueueTo(_kQueueHalfSnap);
-      } else {
-        _snapQueueTo(0.0);
-      }
+    if (v < -400.0) {
+      _openQueue();
+    } else if (v > 400.0) {
+      _closeQueue();
+    } else if (_queueCtrl.value >= 0.5) {
+      _openQueue();
     } else {
-      // 慢速松手：按最近的三档吸附点（0.0 / 0.5 / 1.0）停靠
-      if (q < 0.25) {
-        _snapQueueTo(0.0);
-      } else if (q < 0.76) {
-        _snapQueueTo(_kQueueHalfSnap);
-      } else {
-        _snapQueueTo(1.0);
-      }
+      _closeQueue();
     }
   }
 
@@ -734,11 +736,24 @@ class _YtMainViewState extends State<YtMainView>
         final screenW = outerConstraints.maxWidth;
         final screenH = outerConstraints.maxHeight;
 
-        // 1. 正常态（q == 0）几何计算：1:1 对齐原版 YT Music（图 1）的均衡舒展分布
+        // 横屏模式：自动切换为「左封面/MV + 右控制区」双栏分屏布局
+        if (screenW > screenH * 1.1) {
+          return _buildLandscapeLayout(
+            context: context,
+            resolvedSong: resolvedSong,
+            isFavorited: isFavorited,
+            isOnline: isOnline,
+            screenW: screenW,
+            screenH: screenH,
+            safeTop: safeTop,
+            safeBottom: safeBottom,
+          );
+        }
+
+        // 1. 封面几何计算（保持与原版 YT Music 完全一致的黄金位置与尺寸）
         const double topBarH = 52.0;
         const double coverSideMargin = 24.0;
-        const double handleCollapsedH = 54.0;
-        // 下半区固定高度：封面->标题(26) + 标题块+间距(68) + 胶囊+间距(56) + 进度条+间距(54) + 五键(64) = 268
+        const double handleCollapsedH = 52.0;
         const double fixedBelowCoverH = 268.0;
         final double availForCoverAndVSpace = math.max(
           200.0,
@@ -757,7 +772,6 @@ class _YtMainViewState extends State<YtMainView>
           24.0,
           availForCoverAndVSpace - normalCoverSide,
         );
-        // 顶栏与封面之间留出原版 YT 的呼吸留白（约 24~32px），不再紧贴顶栏
         final double coverTopGap = (extraVertical * 0.45).clamp(20.0, 34.0);
         final double normalCoverLeft = (screenW - normalCoverSide) / 2.0;
         final double normalCoverTop = safeTop + topBarH + coverTopGap;
@@ -773,281 +787,261 @@ class _YtMainViewState extends State<YtMainView>
           );
         }
 
-        // 正常态下各控件的纵向起点（拉开封面与标题、胶囊与进度条、进度条与播放键的呼吸感）
-        final double normalTitleTop = normalCoverTop + normalCoverSide + 26.0;
-        final double normalCapsuleTop = normalTitleTop + 68.0;
-        final double normalSeekTop = normalCapsuleTop + 56.0;
-        final double normalTransportTop = normalSeekTop + 54.0;
-
-        // 2. 半屏态（q == 0.5，对应录屏）与全屏态（q == 1.0，对应图 5）几何锚点
-        final double halfCoverH = (screenH * 0.41).clamp(240.0, 410.0);
-        final double halfTitleTop = halfCoverH - 68.0;
-        const double fullMiniBarH = 68.0;
-        final double queueTopCollapsed =
-            screenH - safeBottom - handleCollapsedH;
-        final double queueTopHalf = halfCoverH;
-        final double queueTopFull = safeTop + fullMiniBarH;
-
-        // 3. 预构建重型子树并放入 RepaintBoundary，手势拖拽过程中 0 次列表与控件 Rebuild！
-        final Widget cachedCapsuleRow = RepaintBoundary(
-          child: _buildCapsuleRow(context, resolvedSong, isFavorited, isOnline),
-        );
-        final Widget cachedSeekBar = RepaintBoundary(
-          child: _buildSeekBar(context, resolvedSong),
-        );
-        final Widget cachedTransport = RepaintBoundary(
-          child: _buildTransportControls(context),
-        );
-        final Widget cachedPlaylistArea = RepaintBoundary(
-          child: _buildInteractivePlaylistArea(safeBottom),
+        // 2. 下半区四件套位置：1:1 对齐原版 YT Music（图 2），自底向上贴近底部「接下来播放」把手锚定，
+        // 将多余垂直呼吸空间留在「封面底边 → 歌名」之间，彻底消除播放键下方的空洞！
+        final double queueHandleTop = screenH - safeBottom - handleCollapsedH;
+        final double normalTransportTop = queueHandleTop - 18.0 - 64.0;
+        final double normalSeekTop = normalTransportTop - 52.0;
+        final double normalCapsuleTop = normalSeekTop - 54.0;
+        final double normalTitleTop = math.max(
+          normalCoverTop + normalCoverSide + 16.0,
+          normalCapsuleTop - 68.0,
         );
 
-        return AnimatedBuilder(
-          animation: _queueCtrl,
-          builder: (context, _) {
-            final q = _queueCtrl.value.clamp(0.0, 1.0);
-            // t1: 收起态(0.0) -> 半屏态(0.5) 的归一化进度 (0.0 ~ 1.0)
-            final t1 = (q / _kQueueHalfSnap).clamp(0.0, 1.0);
-            // t2: 半屏态(0.5) -> 全屏态(1.0) 的归一化进度 (0.0 ~ 1.0)
-            final t2 = ((q - _kQueueHalfSnap) / (1.0 - _kQueueHalfSnap)).clamp(
-              0.0,
-              1.0,
-            );
-
-            // 封面区域插值：0 -> 0.5 放大铺满上半屏宽度；0.5 -> 1.0 向上收拢并淡出为顶部 Mini Bar
-            final halfL = ui.lerpDouble(normalCoverLeft, 0.0, t1)!;
-            final halfT = ui.lerpDouble(normalCoverTop, 0.0, t1)!;
-            final halfW = ui.lerpDouble(normalCoverSide, screenW, t1)!;
-            final halfH = ui.lerpDouble(normalCoverSide, halfCoverH, t1)!;
-            final curCoverLeft = halfL;
-            final curCoverTop = ui.lerpDouble(halfT, -40.0, t2)!;
-            final curCoverW = halfW;
-            final curCoverH = ui.lerpDouble(halfH, queueTopFull, t2)!;
-            final curCoverRadius = ui.lerpDouble(12.0, 0.0, t1)!;
-            final coverLayerOpacity = (1.0 - t2 * 1.25).clamp(0.0, 1.0);
-
-            // 歌名与歌手名位置插值：0 -> 0.5 移至放大封面左下角；0.5 -> 1.0 渐隐交接给顶部 Mini Bar
-            final curTitleTop =
-                ui.lerpDouble(normalTitleTop, halfTitleTop, t1)! - 36.0 * t2;
-            final titleLayerOpacity = (1.0 - t2 * 1.6).clamp(0.0, 1.0);
-
-            // 胶囊栏在 t1: 0 -> 0.55 率先淡出
-            final capsuleOpacity = (1.0 - t1 * 1.85).clamp(0.0, 1.0);
-            final curCapsuleTop = normalCapsuleTop - 28.0 * t1;
-
-            // 进度条与五键控制栏跟随歌单向上推并在半屏前淡出
-            final transportOpacity = (1.0 - ((t1 - 0.15) / 0.75)).clamp(
-              0.0,
-              1.0,
-            );
-            final transportSlideUp = 46.0 * t1;
-            final curSeekTop = normalSeekTop - transportSlideUp;
-            final curTransportTop = normalTransportTop - transportSlideUp;
-
-            // 队列面板顶部 Y 坐标：三段插值（收起 -> 半屏 -> 全屏）
-            final curQueueTop = q <= _kQueueHalfSnap
-                ? ui.lerpDouble(queueTopCollapsed, queueTopHalf, t1)!
-                : ui.lerpDouble(queueTopHalf, queueTopFull, t2)!;
-            final curQueueHeight = (screenH - curQueueTop).clamp(
-              handleCollapsedH,
-              screenH - queueTopFull,
-            );
-
-            // 原顶栏在进入全屏态（t2: 0 -> 0.7）时淡出，全屏 Mini Bar（图 5）在 t2: 0.25 -> 1.0 显现
-            final topBarOpacity = (1.0 - t2 * 1.5).clamp(0.0, 1.0);
-            final miniHeaderOpacity = ((t2 - 0.20) / 0.80).clamp(0.0, 1.0);
-
-            return Stack(
-              fit: StackFit.expand,
-              children: [
-                // 1. 封面 / MV 视频层（固定内部 CoverSwitchPager 逻辑尺寸为 normalCoverSide，避免逐帧重排卡顿）
-                if (coverLayerOpacity > 0.01)
-                  Positioned(
-                    left: curCoverLeft,
-                    top: curCoverTop,
-                    width: curCoverW,
-                    height: curCoverH,
-                    child: Opacity(
-                      opacity: coverLayerOpacity,
-                      child: Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          _isVideoMode
-                              ? _buildInlineMvPlayer(
-                                  context,
-                                  resolvedSong,
-                                  curCoverRadius,
-                                )
-                              : ClipRRect(
-                                  borderRadius: BorderRadius.circular(
-                                    curCoverRadius,
-                                  ),
-                                  child: FittedBox(
-                                    fit: BoxFit.cover,
-                                    clipBehavior: Clip.hardEdge,
-                                    child: SizedBox(
-                                      width: normalCoverSide,
-                                      height: normalCoverSide,
-                                      child: _buildCover(
-                                        context,
-                                        resolvedSong,
-                                        normalCoverSide,
-                                        borderRadius: curCoverRadius,
-                                        queueExpanded: q > 0.02,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                          if (t1 > 0.01)
-                            IgnorePointer(
-                              child: Opacity(
-                                opacity: t1,
-                                child: DecoratedBox(
-                                  decoration: BoxDecoration(
-                                    gradient: LinearGradient(
-                                      begin: Alignment.topCenter,
-                                      end: Alignment.bottomCenter,
-                                      stops: const [0.0, 0.28, 0.62, 1.0],
-                                      colors: [
-                                        Colors.black.withValues(alpha: 0.45),
-                                        Colors.transparent,
-                                        Colors.black.withValues(alpha: 0.25),
-                                        const Color(0xFF0D0D0D),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          if (q > 0.25 && !_isVideoMode)
-                            Positioned.fill(
-                              child: GestureDetector(
-                                behavior: HitTestBehavior.translucent,
-                                onTap: _closeQueue,
-                                onVerticalDragUpdate: _onQueueDragUpdate,
-                                onVerticalDragEnd: _onQueueDragEnd,
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-                  ),
-
-                // 2. 正常态/半屏态顶部栏
-                if (topBarOpacity > 0.01)
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    top: safeTop,
-                    height: topBarH,
-                    child: IgnorePointer(
-                      ignoring: topBarOpacity < 0.3,
-                      child: Opacity(
-                        opacity: topBarOpacity,
-                        child: _buildTopBar(context, resolvedSong),
-                      ),
-                    ),
-                  ),
-
-                // 3. 全屏队列态顶部 Mini Player 栏（1:1 还原图 5：小封面 + 歌名/歌手 + 上一首/播放/下一首）
-                if (miniHeaderOpacity > 0.01)
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    top: 0,
-                    height: safeTop + fullMiniBarH,
-                    child: IgnorePointer(
-                      ignoring: miniHeaderOpacity < 0.4,
-                      child: Opacity(
-                        opacity: miniHeaderOpacity,
-                        child: _buildFullQueueMiniHeader(
-                          context,
-                          resolvedSong,
-                          safeTop,
-                          fullMiniBarH,
-                        ),
-                      ),
-                    ),
-                  ),
-
-                // 4. 歌名与歌手名（正常态与半屏态）
-                if (titleLayerOpacity > 0.01)
-                  Positioned(
-                    left: 24,
-                    right: 24,
-                    top: curTitleTop,
-                    child: IgnorePointer(
-                      ignoring: t2 > 0.3,
-                      child: Opacity(
-                        opacity: titleLayerOpacity,
-                        child: _buildTitleAndArtist(context, resolvedSong),
-                      ),
-                    ),
-                  ),
-
-                // 5. 胶囊操作栏
-                if (capsuleOpacity > 0.01)
-                  Positioned(
-                    left: 20,
-                    right: 20,
-                    top: curCapsuleTop,
-                    child: IgnorePointer(
-                      ignoring: q > 0.15,
-                      child: Opacity(
-                        opacity: capsuleOpacity,
-                        child: cachedCapsuleRow,
-                      ),
-                    ),
-                  ),
-
-                // 6. 播放进度条
-                if (transportOpacity > 0.01)
-                  Positioned(
-                    left: 18,
-                    right: 18,
-                    top: curSeekTop,
-                    child: IgnorePointer(
-                      ignoring: q > 0.25,
-                      child: Opacity(
-                        opacity: transportOpacity,
-                        child: cachedSeekBar,
-                      ),
-                    ),
-                  ),
-
-                // 7. 五键播放控制栏
-                if (transportOpacity > 0.01)
-                  Positioned(
-                    left: 20,
-                    right: 20,
-                    top: curTransportTop,
-                    child: IgnorePointer(
-                      ignoring: q > 0.25,
-                      child: Opacity(
-                        opacity: transportOpacity,
-                        child: cachedTransport,
-                      ),
-                    ),
-                  ),
-
-                // 8. 底部「接下来播放」三态联动歌单抽屉（0.0 收起 ↔ 0.5 半屏 ↔ 1.0 全屏）
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  top: curQueueTop,
-                  height: curQueueHeight,
-                  child: _buildQueueDrawer(
-                    context,
-                    resolvedSong,
-                    q,
-                    cachedPlaylistArea,
-                  ),
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            // 当处于 MV 视频模式时，同源动态高斯模糊光晕向上延伸入侵至顶栏、向下入侵至歌名与胶囊栏背后，
+            // 并通过长渐变羽化无缝融入播放器主背景，彻底消除图 3 的圆角方框割裂感
+            if (_isVideoMode)
+              Positioned(
+                left: 0,
+                right: 0,
+                top: 0,
+                height: math.min(screenH, normalCapsuleTop + 48.0),
+                child: IgnorePointer(
+                  child: _buildMvAmbientInvasionBackdrop(resolvedSong),
                 ),
-              ],
-            );
-          },
+              ),
+
+            // 封面 / 全宽无界 MV 视频层
+            Positioned(
+              left: _isVideoMode ? 0.0 : normalCoverLeft,
+              top: normalCoverTop,
+              width: _isVideoMode ? screenW : normalCoverSide,
+              height: normalCoverSide,
+              child: _isVideoMode
+                  ? _buildInlineMvPlayer(context, resolvedSong, 0.0)
+                  : _buildCover(
+                      context,
+                      resolvedSong,
+                      normalCoverSide,
+                      borderRadius: 12.0,
+                    ),
+            ),
+
+            // 顶部栏
+            Positioned(
+              left: 0,
+              right: 0,
+              top: safeTop,
+              height: topBarH,
+              child: _buildTopBar(context, resolvedSong),
+            ),
+
+            // 歌名与歌手名
+            Positioned(
+              left: 24,
+              right: 24,
+              top: normalTitleTop,
+              child: _buildTitleAndArtist(context, resolvedSong),
+            ),
+
+            // 胶囊操作栏
+            Positioned(
+              left: 20,
+              right: 20,
+              top: normalCapsuleTop,
+              child: _buildCapsuleRow(
+                context,
+                resolvedSong,
+                isFavorited,
+                isOnline,
+              ),
+            ),
+
+            // 播放进度条
+            Positioned(
+              left: 18,
+              right: 18,
+              top: normalSeekTop,
+              child: _buildSeekBar(context, resolvedSong),
+            ),
+
+            // 五键播放控制栏
+            Positioned(
+              left: 20,
+              right: 20,
+              top: normalTransportTop,
+              child: _buildTransportControls(context),
+            ),
+
+            // 底部「接下来播放」把手（点击或上滑触发全屏展开动画，1:1 复刻歌词展开动画）
+            Positioned(
+              left: 0,
+              right: 0,
+              top: queueHandleTop,
+              height: handleCollapsedH + safeBottom,
+              child: _buildBottomQueueHandle(context, resolvedSong, safeBottom),
+            ),
+          ],
         );
       },
+    );
+  }
+
+  /// 横屏模式布局：左栏封面/MV + 右栏歌曲信息与控制区
+  Widget _buildLandscapeLayout({
+    required BuildContext context,
+    required Song resolvedSong,
+    required bool isFavorited,
+    required bool isOnline,
+    required double screenW,
+    required double screenH,
+    required double safeTop,
+    required double safeBottom,
+  }) {
+    final availH = math.max(180.0, screenH - safeTop - safeBottom);
+    final leftW = screenW * 0.45;
+    final coverSide = math.min(leftW - 40.0, availH - 68.0).clamp(120.0, 340.0);
+    final coverLeft = (leftW - coverSide) / 2.0;
+    final coverTop = safeTop + 48.0 + (availH - 48.0 - coverSide) / 2.0;
+
+    widget.onCoverRectMeasured?.call(
+      Rect.fromLTWH(coverLeft, coverTop, coverSide, coverSide),
+    );
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        if (_isVideoMode)
+          Positioned.fill(
+            child: IgnorePointer(
+              child: _buildMvAmbientInvasionBackdrop(resolvedSong),
+            ),
+          ),
+        Padding(
+          padding: EdgeInsets.only(
+            top: safeTop,
+            bottom: safeBottom,
+            left: 12,
+            right: 16,
+          ),
+          child: Row(
+            children: [
+              // 左栏：顶栏切换器 + 封面 / MV
+              SizedBox(
+                width: leftW - 12,
+                child: Column(
+                  children: [
+                    SizedBox(
+                      height: 48,
+                      child: _buildTopBar(context, resolvedSong),
+                    ),
+                    Expanded(
+                      child: Center(
+                        child: _isVideoMode
+                            ? AspectRatio(
+                                aspectRatio: 16 / 9,
+                                child: _buildInlineMvPlayer(
+                                  context,
+                                  resolvedSong,
+                                  12.0,
+                                ),
+                              )
+                            : _buildCover(
+                                context,
+                                resolvedSong,
+                                coverSide,
+                                borderRadius: 12.0,
+                              ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 16),
+              // 右栏：歌名、胶囊栏、进度条、五键控制栏、底部接下来播放把手
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: _buildTitleAndArtist(context, resolvedSong),
+                    ),
+                    _buildCapsuleRow(
+                      context,
+                      resolvedSong,
+                      isFavorited,
+                      isOnline,
+                    ),
+                    _buildSeekBar(context, resolvedSong),
+                    _buildTransportControls(context),
+                    _buildBottomQueueHandle(context, resolvedSong, 0),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// MV 视频模式下延伸入侵整个播放器上半屏的同源动态柔光高斯模糊层
+  Widget _buildMvAmbientInvasionBackdrop(Song resolvedSong) {
+    final ctrl = _videoController;
+    final initialized = ctrl != null && ctrl.value.isInitialized;
+    final vSize = initialized ? ctrl.value.size : Size.zero;
+    final vW = vSize.width > 0 ? vSize.width : 160.0;
+    final vH = vSize.height > 0 ? vSize.height : 90.0;
+
+    return ShaderMask(
+      shaderCallback: (rect) => const LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        stops: [0.0, 0.14, 0.68, 1.0],
+        colors: [
+          Colors.transparent,
+          Colors.black,
+          Colors.black,
+          Colors.transparent,
+        ],
+      ).createShader(rect),
+      blendMode: BlendMode.dstIn,
+      child: ImageFiltered(
+        imageFilter: ui.ImageFilter.blur(
+          sigmaX: 34,
+          sigmaY: 34,
+          tileMode: TileMode.mirror,
+        ),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            DepthCoverHost(
+              artworkUri: resolvedSong.artworkUri,
+              fallbackFilePath: resolvedSong.localPath,
+              fit: BoxFit.cover,
+              iconSize: 48,
+              backgroundColor: Colors.transparent,
+              iconColor: Colors.white24,
+            ),
+            if (initialized)
+              FittedBox(
+                fit: BoxFit.cover,
+                clipBehavior: Clip.hardEdge,
+                child: SizedBox(
+                  width: vW,
+                  height: vH,
+                  child: VideoPlayer(ctrl),
+                ),
+              ),
+            ColoredBox(color: Colors.black.withValues(alpha: 0.22)),
+          ],
+        ),
+      ),
     );
   }
 
@@ -1182,7 +1176,7 @@ class _YtMainViewState extends State<YtMainView>
     );
   }
 
-  /// 原地内嵌 MV 视频播放器（复刻图 3 微信视频样式：同源动态柔光高斯模糊消除上下死黑边，且控件零遮挡主视频）
+  /// 原地内嵌 MV 视频播放器（上下边缘 ShaderMask 柔化消除横线 + 控件 3 秒无操作自动隐去）
   Widget _buildInlineMvPlayer(
     BuildContext context,
     Song resolvedSong,
@@ -1193,81 +1187,31 @@ class _YtMainViewState extends State<YtMainView>
     final aspect = initialized && ctrl.value.aspectRatio > 0
         ? ctrl.value.aspectRatio
         : 16 / 9;
-    final vSize = initialized ? ctrl.value.size : Size.zero;
-    final vW = vSize.width > 0 ? vSize.width : 160.0;
-    final vH = vSize.height > 0 ? vSize.height : 90.0;
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(borderRadius),
-      child: Container(
-        color: const Color(0xFF101012),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: _onTapMvArea,
         child: Stack(
           fit: StackFit.expand,
           children: [
-            // 1. 底层：微信同款同源动态高斯模糊环境光填充（彻底消除 1:1 容器上下死黑边）
-            Positioned.fill(
-              child: ImageFiltered(
-                imageFilter: ui.ImageFilter.blur(
-                  sigmaX: 28,
-                  sigmaY: 28,
-                  tileMode: TileMode.mirror,
-                ),
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    DepthCoverHost(
-                      artworkUri: resolvedSong.artworkUri,
-                      fallbackFilePath: resolvedSong.localPath,
-                      fit: BoxFit.cover,
-                      iconSize: 48,
-                      backgroundColor: Colors.white12,
-                      iconColor: Colors.white54,
-                    ),
-                    if (initialized)
-                      FittedBox(
-                        fit: BoxFit.cover,
-                        clipBehavior: Clip.hardEdge,
-                        child: SizedBox(
-                          width: vW,
-                          height: vH,
-                          child: VideoPlayer(ctrl),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-            ),
-            // 柔和暗角渐变遮罩，让上下模糊带与主视频画面自然晕染衔接
-            Positioned.fill(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    stops: const [0.0, 0.22, 0.78, 1.0],
-                    colors: [
-                      Colors.black.withValues(alpha: 0.36),
-                      Colors.black.withValues(alpha: 0.14),
-                      Colors.black.withValues(alpha: 0.14),
-                      Colors.black.withValues(alpha: 0.42),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            // 2. 中层：16:9 完整主视频画面（0 裁剪、0 遮挡）
+            // 1. 中央 16:9 完整主视频画面：上下边缘使用 ShaderMask Alpha 羽化过渡，彻底消除两条硬横线
             if (initialized)
               Center(
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.32),
-                        blurRadius: 16,
-                        spreadRadius: 1,
-                      ),
+                child: ShaderMask(
+                  shaderCallback: (rect) => const LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    stops: [0.0, 0.055, 0.945, 1.0],
+                    colors: [
+                      Colors.transparent,
+                      Colors.black,
+                      Colors.black,
+                      Colors.transparent,
                     ],
-                  ),
+                  ).createShader(rect),
+                  blendMode: BlendMode.dstIn,
                   child: AspectRatio(
                     aspectRatio: aspect,
                     child: VideoPlayer(ctrl),
@@ -1313,93 +1257,106 @@ class _YtMainViewState extends State<YtMainView>
                   ],
                 ),
               ),
-            // 3. 顶层控件：置于右下角模糊氛围带内（位于 16:9 视频底边之下，100% 不遮挡视频内容）
+            // 2. 右下角「清晰度」与「全屏」按钮：位于视频底边下方光晕带内零遮挡，且 3 秒自动淡出隐藏
             if (initialized)
               Positioned(
-                right: 12,
+                right: 16,
                 bottom: 10,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (_mvQualities.length > 1)
-                      PopupMenuButton<int>(
-                        tooltip: '切换清晰度',
-                        color: const Color(0xFF222222),
-                        onSelected: _switchMvQuality,
-                        itemBuilder: (_) => [
-                          for (int i = 0; i < _mvQualities.length; i++)
-                            PopupMenuItem<int>(
-                              value: i,
+                child: IgnorePointer(
+                  ignoring: !_mvControlsVisible,
+                  child: AnimatedOpacity(
+                    opacity: _mvControlsVisible ? 1.0 : 0.0,
+                    duration: const Duration(milliseconds: 260),
+                    curve: Curves.easeOutCubic,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (_mvQualities.length > 1)
+                          PopupMenuButton<int>(
+                            tooltip: '切换清晰度',
+                            color: const Color(0xFF222222),
+                            onOpened: () => _mvControlsHideTimer?.cancel(),
+                            onCanceled: _showMvControlsTemporarily,
+                            onSelected: (idx) {
+                              _showMvControlsTemporarily();
+                              _switchMvQuality(idx);
+                            },
+                            itemBuilder: (_) => [
+                              for (int i = 0; i < _mvQualities.length; i++)
+                                PopupMenuItem<int>(
+                                  value: i,
+                                  child: Text(
+                                    _mvQualities[i].quality,
+                                    style: TextStyle(
+                                      color: i == _mvQualityIndex
+                                          ? Colors.white
+                                          : Colors.white70,
+                                      fontWeight: i == _mvQualityIndex
+                                          ? FontWeight.bold
+                                          : FontWeight.normal,
+                                    ),
+                                  ),
+                                ),
+                            ],
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 5,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.black.withValues(alpha: 0.45),
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(
+                                  color: Colors.white.withValues(alpha: 0.14),
+                                  width: 0.5,
+                                ),
+                              ),
                               child: Text(
-                                _mvQualities[i].quality,
-                                style: TextStyle(
-                                  color: i == _mvQualityIndex
-                                      ? Colors.white
-                                      : Colors.white70,
-                                  fontWeight: i == _mvQualityIndex
-                                      ? FontWeight.bold
-                                      : FontWeight.normal,
+                                _mvQualities[_mvQualityIndex].quality,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
                                 ),
                               ),
                             ),
-                        ],
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 5,
                           ),
-                          decoration: BoxDecoration(
-                            color: Colors.black.withValues(alpha: 0.48),
-                            borderRadius: BorderRadius.circular(14),
-                            border: Border.all(
-                              color: Colors.white.withValues(alpha: 0.14),
-                              width: 0.5,
+                        const SizedBox(width: 8),
+                        GestureDetector(
+                          onTap: () {
+                            final url = _currentVideoUrl;
+                            _exitVideoMode(resumeAudio: false);
+                            final push =
+                                widget.onPushPage ?? Navigator.of(context).push;
+                            push(
+                              MaterialPageRoute(
+                                builder: (_) => MvPlayerPage(
+                                  song: resolvedSong,
+                                  directVideoUrl: url,
+                                ),
+                              ),
+                            );
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.all(6),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withValues(alpha: 0.45),
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(
+                                color: Colors.white.withValues(alpha: 0.14),
+                                width: 0.5,
+                              ),
                             ),
-                          ),
-                          child: Text(
-                            _mvQualities[_mvQualityIndex].quality,
-                            style: const TextStyle(
+                            child: const Icon(
+                              Icons.fullscreen_rounded,
                               color: Colors.white,
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
+                              size: 18,
                             ),
                           ),
                         ),
-                      ),
-                    const SizedBox(width: 8),
-                    GestureDetector(
-                      onTap: () {
-                        final url = _currentVideoUrl;
-                        _exitVideoMode(resumeAudio: false);
-                        final push =
-                            widget.onPushPage ?? Navigator.of(context).push;
-                        push(
-                          MaterialPageRoute(
-                            builder: (_) => MvPlayerPage(
-                              song: resolvedSong,
-                              directVideoUrl: url,
-                            ),
-                          ),
-                        );
-                      },
-                      child: Container(
-                        padding: const EdgeInsets.all(6),
-                        decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.48),
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(
-                            color: Colors.white.withValues(alpha: 0.14),
-                            width: 0.5,
-                          ),
-                        ),
-                        child: const Icon(
-                          Icons.fullscreen_rounded,
-                          color: Colors.white,
-                          size: 18,
-                        ),
-                      ),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
               ),
           ],
@@ -1510,10 +1467,11 @@ class _YtMainViewState extends State<YtMainView>
       onVerticalDragEnd: widget.onDragEnd,
       onVerticalDragCancel: widget.onDragCancel,
       child: AnimatedBuilder(
-        animation: widget.lyricsExpansion,
+        animation: Listenable.merge([widget.lyricsExpansion, _queueCtrl]),
         child: coverContent,
         builder: (context, child) {
-          final drawerActive = widget.lyricsExpansion.value > 0.001;
+          final drawerActive =
+              widget.lyricsExpansion.value > 0.001 || _queueCtrl.value > 0.001;
           return Opacity(
             opacity: drawerActive ? 0.0 : 1.0,
             child: IgnorePointer(ignoring: drawerActive, child: child),
@@ -1978,342 +1936,52 @@ class _YtMainViewState extends State<YtMainView>
     );
   }
 
-  /// 全屏队列态顶部 Mini Player 顶栏（1:1 还原图 5：小封面 + 歌名/歌手 + 上一首/播放暂停/下一首）
-  Widget _buildFullQueueMiniHeader(
-    BuildContext context,
-    Song resolvedSong,
-    double safeTop,
-    double barH,
-  ) {
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: () => _snapQueueTo(_kQueueHalfSnap),
-      onVerticalDragUpdate: _onQueueDragUpdate,
-      onVerticalDragEnd: _onQueueDragEnd,
-      child: Container(
-        color: const Color(0xFF141110),
-        padding: EdgeInsets.only(top: safeTop, left: 16, right: 8),
-        height: safeTop + barH,
-        child: Row(
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(6),
-              child: SizedBox(
-                width: 44,
-                height: 44,
-                child: DepthCoverHost(
-                  artworkUri: resolvedSong.artworkUri,
-                  fallbackFilePath: resolvedSong.localPath,
-                  fit: BoxFit.cover,
-                  iconSize: 22,
-                  backgroundColor: Colors.white12,
-                  iconColor: Colors.white54,
-                ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    resolvedSong.displayName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    resolvedSong.artist,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Colors.white70,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w400,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Selector<PlayerProvider, bool>(
-              selector: (_, p) => p.isPlaying,
-              builder: (context, isPlaying, _) {
-                final playerProvider = context.read<PlayerProvider>();
-                final vCtrl = _videoController;
-                final effectivePlaying =
-                    (_isVideoMode && vCtrl != null && vCtrl.value.isInitialized)
-                    ? vCtrl.value.isPlaying
-                    : isPlaying;
-                return Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    IconButton(
-                      icon: const Icon(
-                        Icons.skip_previous,
-                        color: Colors.white,
-                        size: 28,
-                      ),
-                      onPressed: () {
-                        AppHaptics.click(HapticCategory.transport);
-                        playerProvider.previous();
-                      },
-                    ),
-                    IconButton(
-                      icon: PlayPauseMorphIcon(
-                        isPlaying: effectivePlaying,
-                        size: 28,
-                        color: Colors.white,
-                      ),
-                      onPressed: () {
-                        AppHaptics.click(HapticCategory.transport);
-                        if (_isVideoMode &&
-                            vCtrl != null &&
-                            vCtrl.value.isInitialized) {
-                          if (vCtrl.value.isPlaying) {
-                            vCtrl.pause();
-                          } else {
-                            vCtrl.play();
-                          }
-                          return;
-                        }
-                        if (isPlaying) {
-                          playerProvider.pause();
-                        } else {
-                          playerProvider.resume();
-                        }
-                      },
-                    ),
-                    IconButton(
-                      icon: const Icon(
-                        Icons.skip_next,
-                        color: Colors.white,
-                        size: 28,
-                      ),
-                      onPressed: () {
-                        AppHaptics.click(HapticCategory.transport);
-                        playerProvider.next();
-                      },
-                    ),
-                  ],
-                );
-              },
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// 预构建的可交互播放列表区域：支持在半屏态上推至全屏、以及列表到顶时任意位置顺滑下拉收起
-  Widget _buildInteractivePlaylistArea(double safeBottom) {
-    return Listener(
-      behavior: HitTestBehavior.translucent,
-      onPointerDown: (event) {
-        _listPointerStartY = event.position.dy;
-        _listDragStartQueueVal = _queueCtrl.value;
-        _listCapturingQueueDrag = false;
-        _listLastDy = 0.0;
-      },
-      onPointerMove: (event) {
-        final startY = _listPointerStartY;
-        if (startY == null) return;
-        final totalDy = event.position.dy - startY;
-        final stepDy = toDisplaySpaceDelta(context, event.delta).dy;
-        final sc = YtMainView._playlistScrollAnchor.controller;
-        final atTop = !sc.hasClients || sc.offset <= 1.0;
-
-        if (!_listCapturingQueueDrag && totalDy.abs() > 6.0) {
-          // 1) 在半屏态向上推 -> 优先将抽屉推向全屏(1.0)
-          if (totalDy < -6.0 && _listDragStartQueueVal < 0.98) {
-            _listCapturingQueueDrag = true;
-          }
-          // 2) 列表已处于顶部且向下拉 -> 无缝接管下拉抽屉（全屏 -> 半屏 -> 收起）
-          else if (totalDy > 6.0 && atTop && _queueCtrl.value > 0.01) {
-            _listCapturingQueueDrag = true;
-          }
-        }
-
-        if (_listCapturingQueueDrag) {
-          if (sc.hasClients && sc.offset > 0 && _queueCtrl.value < 0.99) {
-            sc.jumpTo(0);
-          }
-          final screenH = MediaQuery.sizeOf(context).height;
-          final range = (screenH * 0.68).clamp(240.0, 820.0);
-          _queueCtrl.stop();
-          _queueCtrl.value = (_queueCtrl.value - stepDy / range).clamp(
-            0.0,
-            1.0,
-          );
-          _listLastDy = stepDy;
-        }
-      },
-      onPointerUp: (_) {
-        if (_listCapturingQueueDrag) {
-          _listCapturingQueueDrag = false;
-          _settleQueueWithVelocity(_listLastDy * 55.0);
-        }
-        _listPointerStartY = null;
-      },
-      onPointerCancel: (_) {
-        if (_listCapturingQueueDrag) {
-          _listCapturingQueueDrag = false;
-          _settleQueueWithVelocity(0.0);
-        }
-        _listPointerStartY = null;
-      },
-      child: Padding(
-        padding: EdgeInsets.only(bottom: safeBottom),
-        child: PlayerPlaylistView(
-          scrollAnchor: YtMainView._playlistScrollAnchor,
-        ),
-      ),
-    );
-  }
-
-  /// 原版 YT Music 风格「接下来播放」三态联动歌单抽屉（0.0 收起 ↔ 0.5 半屏 ↔ 1.0 全屏）
-  Widget _buildQueueDrawer(
+  /// 底部「接下来播放」入口把手（点击或向上拖拽直接以 1:1 歌词展开动画打开全屏播放列表抽屉）
+  Widget _buildBottomQueueHandle(
     BuildContext context,
     Song currentSong,
-    double q,
-    Widget cachedPlaylistArea,
+    double safeBottom,
   ) {
     final playerProvider = context.read<PlayerProvider>();
     final nextSong = _pagerNeighborSong(playerProvider, 1) ?? currentSong;
-    final bgAlpha = (q * 1.6).clamp(0.0, 1.0);
-    final topRadius = q <= _kQueueHalfSnap
-        ? 18.0
-        : ui.lerpDouble(
-            18.0,
-            12.0,
-            (q - _kQueueHalfSnap) / (1.0 - _kQueueHalfSnap),
-          )!;
 
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: const Color(0xFF141110).withValues(alpha: bgAlpha),
-        borderRadius: BorderRadius.vertical(top: Radius.circular(topRadius)),
-      ),
-      child: Column(
-        children: [
-          // 顶部拖拽把手与折叠态标题 / 展开态「播放的音乐来自 + 保存」头部
-          GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () {
-              if (q < 0.25) {
-                _snapQueueTo(_kQueueHalfSnap);
-              } else if (q < 0.8) {
-                _snapQueueTo(1.0);
-              } else {
-                _snapQueueTo(_kQueueHalfSnap);
-              }
-            },
-            onVerticalDragUpdate: _onQueueDragUpdate,
-            onVerticalDragEnd: _onQueueDragEnd,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const SizedBox(height: 8),
-                  Container(
-                    width: 36,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: Colors.white30,
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  if (q < 0.18)
-                    Opacity(
-                      opacity: (1.0 - q * 5.5).clamp(0.0, 1.0),
-                      child: SizedBox(
-                        height: 24,
-                        child: Center(
-                          child: Text(
-                            '接下来播放 · ${nextSong.displayName}',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: Colors.white70,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ),
-                      ),
-                    )
-                  else
-                    Opacity(
-                      opacity: ((q - 0.18) / 0.32).clamp(0.0, 1.0),
-                      child: Padding(
-                        padding: const EdgeInsets.only(top: 4, bottom: 10),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  const Text(
-                                    '播放的音乐来自',
-                                    style: TextStyle(
-                                      color: Colors.white60,
-                                      fontSize: 12,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    currentSong.album.isNotEmpty &&
-                                            currentSong.album != '未知专辑'
-                                        ? currentSong.album
-                                        : currentSong.displayName,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            _buildCapsuleButton(
-                              icon: Icons.playlist_add,
-                              label: '保存',
-                              onTap: () =>
-                                  showAddToPlaylistDialog(context, currentSong),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                ],
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: _openQueue,
+      onVerticalDragUpdate: _onQueueDragUpdate,
+      onVerticalDragEnd: _onQueueDragEnd,
+      child: Padding(
+        padding: EdgeInsets.only(left: 20, right: 20, bottom: safeBottom),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            Container(
+              width: 36,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.white30,
+                borderRadius: BorderRadius.circular(2),
               ),
             ),
-          ),
-          // 展开态下的播放队列列表（复用预缓存的 cachedPlaylistArea，拖拽 0 次 Rebuild）
-          Expanded(
-            child: Offstage(
-              offstage: q <= 0.03,
-              child: Opacity(
-                opacity: ((q - 0.05) / 0.35).clamp(0.0, 1.0),
-                child: IgnorePointer(
-                  ignoring: q < 0.25,
-                  child: cachedPlaylistArea,
+            const SizedBox(height: 8),
+            SizedBox(
+              height: 24,
+              child: Center(
+                child: Text(
+                  '接下来播放 · ${nextSong.displayName}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

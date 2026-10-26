@@ -80,6 +80,13 @@ class _FullPlayerYtState extends State<FullPlayerYt>
 
   void _openLyrics() {
     AppHaptics.lightImpact(HapticCategory.control);
+    if (_queueController.value > 0.0) {
+      _queueController.animateBack(
+        0.0,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeInCubic,
+      );
+    }
     _lyricsController.animateTo(
       1.0,
       duration: const Duration(milliseconds: 340),
@@ -117,6 +124,55 @@ class _FullPlayerYtState extends State<FullPlayerYt>
       _openLyrics();
     } else {
       _closeLyrics();
+    }
+  }
+
+  void _openQueue() {
+    AppHaptics.lightImpact(HapticCategory.control);
+    if (_lyricsController.value > 0.0) {
+      _lyricsController.animateBack(
+        0.0,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeInCubic,
+      );
+    }
+    _queueController.animateTo(
+      1.0,
+      duration: const Duration(milliseconds: 340),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  void _closeQueue() {
+    AppHaptics.lightImpact(HapticCategory.control);
+    _queueController.animateBack(
+      0.0,
+      duration: const Duration(milliseconds: 280),
+      curve: Curves.easeInCubic,
+    );
+  }
+
+  void _onQueueDragUpdate(DragUpdateDetails details) {
+    final screenHeight = MediaQuery.sizeOf(context).height;
+    final dragRange = (screenHeight * 0.72).clamp(200.0, 900.0);
+    final dy = toDisplaySpaceDelta(context, details.delta).dy;
+    _queueController.stop();
+    _queueController.value = (_queueController.value - dy / dragRange).clamp(
+      0.0,
+      1.0,
+    );
+  }
+
+  void _onQueueDragEnd(DragEndDetails details) {
+    final v = details.primaryVelocity ?? 0.0;
+    if (v < -400.0) {
+      _openQueue();
+    } else if (v > 400.0) {
+      _closeQueue();
+    } else if (_queueController.value >= 0.5) {
+      _openQueue();
+    } else {
+      _closeQueue();
     }
   }
 
@@ -271,6 +327,11 @@ class _FullPlayerYtState extends State<FullPlayerYt>
       ),
     );
 
+    final Listenable overlayExpansion = Listenable.merge([
+      _lyricsController,
+      _queueController,
+    ]);
+
     Widget page = Scaffold(
       backgroundColor: const Color(0xFF030303),
       resizeToAvoidBottomInset: false,
@@ -287,16 +348,16 @@ class _FullPlayerYtState extends State<FullPlayerYt>
                   (p) => p.useArtistPhotoBackground,
                 );
                 return YtBackground(
-                  song: currentSong,
+                  song: resolvedSong,
                   isPlaying: isPlaying,
                   useArtistPhoto: useArtistPhoto,
                 );
               },
             ),
           ),
-          // 主界面层：随歌词展开淡出并轻微上移
+          // 主界面层：随歌词抽屉或播放列表抽屉展开淡出并轻微上移
           AnimatedBuilder(
-            animation: _lyricsController,
+            animation: overlayExpansion,
             child: RepaintBoundary(
               child: YtMainView(
                 song: currentSong,
@@ -317,7 +378,9 @@ class _FullPlayerYtState extends State<FullPlayerYt>
               ),
             ),
             builder: (context, mainViewChild) {
-              final t = _lyricsController.value.clamp(0.0, 1.0);
+              final t = math
+                  .max(_lyricsController.value, _queueController.value)
+                  .clamp(0.0, 1.0);
               final mainOpacity = (1.0 - t * 1.6).clamp(0.0, 1.0);
               return IgnorePointer(
                 ignoring: t > 0.05,
@@ -335,25 +398,36 @@ class _FullPlayerYtState extends State<FullPlayerYt>
           Positioned.fill(
             child: YtLyricsDrawer(
               expansion: _lyricsController,
-              song: currentSong,
+              song: resolvedSong,
               onClose: _closeLyrics,
               onVerticalDragUpdate: _onLyricsDragUpdate,
               onVerticalDragEnd: _onLyricsDragEnd,
             ),
           ),
-          // 悬浮封面层：仅在歌词抽屉拉开（t > 0.001）时接管，在居中大封面与左上角 40x40 缩略图之间平滑插值；
-          // 抽屉关闭（t == 0）时完全隐藏，由 YtMainView 内的 PlayerCoverSlot + CoverSwitchPager 渲染。
+          // 播放列表抽屉层（1:1 复刻歌词抽屉展开动画：共用顶部 MiniBar 与悬浮封面飞行缩放）
+          Positioned.fill(
+            child: YtQueueDrawer(
+              expansion: _queueController,
+              song: resolvedSong,
+              scrollAnchor: YtMainView.playlistScrollAnchor,
+              onClose: _closeQueue,
+              onVerticalDragUpdate: _onQueueDragUpdate,
+              onVerticalDragEnd: _onQueueDragEnd,
+            ),
+          ),
+          // 悬浮封面层：当歌词抽屉或播放列表抽屉拉开（t > 0.001）时接管，
+          // 在居中大封面与左上角 40x40 缩略图之间沿对角线平滑插值飞行。
           LayoutBuilder(
             builder: (context, constraints) {
-              final defaultAvailW = math.max(0.0, screenSize.width - 40.0);
+              final defaultAvailW = math.max(0.0, screenSize.width - 48.0);
               final defaultAvailH = math.max(
                 160.0,
-                screenSize.height - safeTop - safeBottom - 52.0 - 10.0 - 296.0,
+                screenSize.height - safeTop - safeBottom - 52.0 - 24.0 - 280.0,
               );
               final defaultSide = math.min(defaultAvailW, defaultAvailH);
               final fallbackRect = Rect.fromLTWH(
                 (screenSize.width - defaultSide) / 2.0,
-                safeTop + 52.0 + 10.0,
+                safeTop + 52.0 + 24.0,
                 defaultSide,
                 defaultSide,
               );
@@ -364,10 +438,12 @@ class _FullPlayerYtState extends State<FullPlayerYt>
               final double smallTop = safeTop + (56.0 - smallSize) / 2.0;
 
               return AnimatedBuilder(
-                animation: _lyricsController,
+                animation: overlayExpansion,
                 child: staticCoverChild,
                 builder: (context, coverChild) {
-                  final t = _lyricsController.value.clamp(0.0, 1.0);
+                  final t = math
+                      .max(_lyricsController.value, _queueController.value)
+                      .clamp(0.0, 1.0);
                   if (t <= 0.001) {
                     return const SizedBox.shrink();
                   }
@@ -377,7 +453,7 @@ class _FullPlayerYtState extends State<FullPlayerYt>
                     1.0,
                     ui.lerpDouble(largeRect.width, smallSize, t)!,
                   );
-                  final curRadius = ui.lerpDouble(16.0, 6.0, t)!;
+                  final curRadius = ui.lerpDouble(12.0, 6.0, t)!;
                   final shadowAlpha = 0.45 * (1.0 - t);
 
                   return Stack(
@@ -432,6 +508,10 @@ class _FullPlayerYtState extends State<FullPlayerYt>
           if (widget.dockMode) return;
           if (_lyricsController.value > 0.05) {
             _closeLyrics();
+            return;
+          }
+          if (_queueController.value > 0.05) {
+            _closeQueue();
             return;
           }
           _collapseByButton();

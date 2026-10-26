@@ -28,10 +28,33 @@ import '../song_info_page.dart';
 import '../speed_picker_sheet.dart';
 
 class YtMoreMenu {
+  static final RegExp _kugouLowResPathRegex = RegExp(
+    r'/(64|100|120|150|240|400|480)/',
+  );
+
+  /// 将酷狗封面 URL 中的低分辨率档位（如 400/240/150 或 {size}）升级为 1080p 超清原图档位
+  static String? upgradeArtworkUri(String? uri) {
+    if (uri == null || uri.isEmpty) return uri;
+    var result = uri.replaceAll('{size}', '1080');
+    if (result.contains('kugou.com')) {
+      result = result.replaceFirst(_kugouLowResPathRegex, '/1080/');
+    }
+    return result;
+  }
+
   static Song resolveMatchedSong(Song song) {
-    if (song.isOnline) return song;
-    final info = SongMatchRepository().get(song.id);
-    return (info != null && info.isMatched) ? info.toSong() : song;
+    Song base = song;
+    if (!song.isOnline) {
+      final info = SongMatchRepository().get(song.id);
+      if (info != null && info.isMatched) {
+        base = info.toSong();
+      }
+    }
+    final upgradedUri = upgradeArtworkUri(base.artworkUri);
+    if (upgradedUri != base.artworkUri) {
+      return base.copyWith(artworkUri: upgradedUri);
+    }
+    return base;
   }
 
   static void show(
@@ -134,8 +157,9 @@ class YtMoreMenu {
                     showM3EModalBottomSheet(
                       context: rootContext,
                       isScrollControlled: true,
-                      backgroundColor:
-                          Theme.of(rootContext).colorScheme.surfaceContainerLow,
+                      backgroundColor: Theme.of(rootContext)
+                          .colorScheme
+                          .surfaceContainerLow,
                       builder: (_) =>
                           const SafeArea(child: LyricPreferencesPanel()),
                     );
@@ -299,9 +323,9 @@ class YtMoreMenu {
                               showM3EModalBottomSheet(
                                 context: rootContext,
                                 isScrollControlled: true,
-                                backgroundColor: Theme.of(
-                                  rootContext,
-                                ).colorScheme.surfaceContainerLow,
+                                backgroundColor: Theme.of(rootContext)
+                                    .colorScheme
+                                    .surfaceContainerLow,
                                 builder: (_) => const DlnaCastSheet(),
                               );
                             },
@@ -336,9 +360,7 @@ class YtMoreMenu {
       artworkUri: resolved.artworkUri,
       songCount: 0,
     );
-    pushPage(
-      MaterialPageRoute(builder: (_) => AlbumDetailPage(album: album)),
-    );
+    pushPage(MaterialPageRoute(builder: (_) => AlbumDetailPage(album: album)));
   }
 
   static void navigateToArtist(
@@ -376,9 +398,8 @@ class YtMoreMenu {
                 padding: const EdgeInsets.all(16),
                 child: Text(
                   '选择歌手',
-                  style: Theme.of(sheetCtx).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
+                  style: Theme.of(sheetCtx).textTheme.titleMedium
+                      ?.copyWith(fontWeight: FontWeight.bold),
                 ),
               ),
               ...artists.map((name) {
@@ -412,9 +433,7 @@ class YtMoreMenu {
     showDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (_) => const Center(
-        child: CircularProgressIndicator(),
-      ),
+      builder: (_) => const Center(child: CircularProgressIndicator()),
     );
     final navigator = Navigator.of(context, rootNavigator: true);
     void Function()? pendingPush;
