@@ -16,8 +16,8 @@ import '../../../widgets/apple_lyrics/layout/lyric_preferences_panel.dart';
 import '../../../widgets/apple_lyrics/models/lyric_line.dart';
 import '../../../widgets/apple_lyrics/parsers/lyric_parser_chain.dart';
 import '../../../widgets/apple_lyrics/utils/lyric_credit_filter.dart';
+import '../../../widgets/player_artwork_image.dart';
 import '../../../widgets/player_playlist_view.dart';
-import '../../../widgets/smart_artwork_image.dart';
 import '../../library/song_match_sheet.dart';
 import '../widgets/play_pause_morph_icon.dart';
 
@@ -151,11 +151,18 @@ class YtMiniBar extends StatelessWidget {
             if (showCover)
               ClipRRect(
                 borderRadius: BorderRadius.circular(6),
-                child: SmartArtworkImage(
-                  artworkUri: song.artworkUri,
-                  fallbackFilePath: song.localPath,
-                  songId: song.id,
-                  size: 40,
+                child: SizedBox(
+                  width: 40,
+                  height: 40,
+                  child: PlayerArtworkImage(
+                    artworkUri: song.artworkUri,
+                    fallbackFilePath: song.localPath,
+                    isFill: true,
+                    fit: BoxFit.cover,
+                    iconSize: 20,
+                    backgroundColor: Colors.white12,
+                    iconColor: Colors.white54,
+                  ),
                 ),
               )
             else

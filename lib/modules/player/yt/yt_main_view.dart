@@ -98,6 +98,9 @@ class _YtMainViewState extends State<YtMainView>
 
   /// 拖动进度条前是否正在播放（修复点击/拖动时间轴导致歌曲暂停的 Bug）
   bool _wasPlayingBeforeDrag = false;
+  bool _isSeekingVideo = false;
+  bool _lastVideoPlayingState = false;
+  DateTime? _lastSongSwitchAt;
 
   /// 内部兜底队列动画控制器（当父级未传入 queueController 时使用）
   AnimationController? _internalQueueController;
@@ -156,9 +159,16 @@ class _YtMainViewState extends State<YtMainView>
   void didUpdateWidget(covariant YtMainView oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.song.id != oldWidget.song.id ||
-        widget.song.albumAudioId != oldWidget.song.albumAudioId) {
+        widget.song.albumAudioId != oldWidget.song.albumAudioId ||
+        widget.song.artworkUri != oldWidget.song.artworkUri) {
       final resolved = YtMoreMenu.resolveMatchedSong(widget.song);
       _defaultStarred = _isSongInDefaultCollection(widget.song, resolved);
+      if (widget.song.albumAudioId != oldWidget.song.albumAudioId) {
+        _syncSongCapabilities(
+          widget.song,
+          autoEnterVideoIfAvailable: _isVideoMode,
+        );
+      }
     }
   }
 
@@ -200,6 +210,9 @@ class _YtMainViewState extends State<YtMainView>
       if (mounted) {
         setState(() => _currentMvInfo = null);
       }
+      if (autoEnterVideoIfAvailable) {
+        _exitVideoMode(resumeAudio: true);
+      }
       return;
     }
 
@@ -207,10 +220,12 @@ class _YtMainViewState extends State<YtMainView>
       final cachedInfo = YtMainView._mvInfoCache[albumAudioId];
       if (mounted) {
         setState(() => _currentMvInfo = cachedInfo);
-        if (autoEnterVideoIfAvailable &&
-            cachedInfo != null &&
-            cachedInfo.hasMv) {
-          unawaited(_enterVideoMode(resolved));
+        if (autoEnterVideoIfAvailable) {
+          if (cachedInfo != null && cachedInfo.hasMv) {
+            unawaited(_enterVideoMode(resolved, forceReload: true));
+          } else {
+            _exitVideoMode(resumeAudio: true);
+          }
         }
       }
       return;
@@ -226,21 +241,34 @@ class _YtMainViewState extends State<YtMainView>
           setState(() {
             _currentMvInfo = validInfo;
           });
-          if (autoEnterVideoIfAvailable && validInfo != null) {
-            unawaited(_enterVideoMode(resolved));
+          if (autoEnterVideoIfAvailable) {
+            if (validInfo != null) {
+              unawaited(_enterVideoMode(resolved, forceReload: true));
+            } else {
+              _exitVideoMode(resumeAudio: true);
+            }
           }
         })
-        .catchError((_) {});
+        .catchError((_) {
+          if (mounted &&
+              _probedAlbumAudioId == albumAudioId &&
+              autoEnterVideoIfAvailable) {
+            _exitVideoMode(resumeAudio: true);
+          }
+        });
   }
 
   bool get _hasMv => _currentMvInfo != null && _currentMvInfo!.hasMv;
 
-  Future<void> _enterVideoMode(Song resolvedSong) async {
+  Future<void> _enterVideoMode(
+    Song resolvedSong, {
+    bool forceReload = false,
+  }) async {
     if (!_hasMv) {
       showToast('当前歌曲暂无 MV 视频');
       return;
     }
-    if (_isVideoMode) return;
+    if (_isVideoMode && !forceReload) return;
     AppHaptics.lightImpact(HapticCategory.control);
 
     final player = context.read<PlayerProvider>();
@@ -324,8 +352,14 @@ class _YtMainViewState extends State<YtMainView>
       if (startAt != null && startAt > Duration.zero) {
         await ctrl.seekTo(startAt);
       }
+      final loopOne = _playerProvider?.loopMode == AppLoopMode.one;
+      await ctrl.setLooping(loopOne);
+      if (_playerProvider?.isPlaying ?? false) {
+        _playerProvider?.pause();
+      }
       ctrl.addListener(_onInlineVideoTick);
       await ctrl.play();
+      _lastVideoPlayingState = true;
       WakelockService.instance.setVideoPlaying(true);
       if (mounted) {
         setState(() {
@@ -391,36 +425,41 @@ class _YtMainViewState extends State<YtMainView>
   void _onInlineVideoTick() {
     if (!mounted || !_isVideoMode) return;
     final ctrl = _videoController;
-    if (ctrl != null) {
-      final val = ctrl.value;
+    if (ctrl == null) return;
+    final val = ctrl.value;
+    if (val.isPlaying != _lastVideoPlayingState) {
+      _lastVideoPlayingState = val.isPlaying;
       WakelockService.instance.setVideoPlaying(val.isPlaying);
-      if (val.isInitialized &&
-          !_videoLoading &&
-          !_handlingMvCompletion &&
-          val.duration > const Duration(seconds: 1) &&
-          val.position >= val.duration - const Duration(milliseconds: 250) &&
-          !val.isPlaying) {
-        _handlingMvCompletion = true;
-        final player = _playerProvider;
-        if (player != null) {
-          if (player.loopMode == AppLoopMode.one) {
-            ctrl.seekTo(Duration.zero).then((_) => ctrl.play()).whenComplete(
-              () {
-                _handlingMvCompletion = false;
-              },
-            );
-          } else {
-            _autoReenterVideoOnNextSong = true;
-            player.next().whenComplete(() {
-              _handlingMvCompletion = false;
-            });
-          }
-        } else {
+    }
+    if (val.isInitialized &&
+        !_videoLoading &&
+        !_isSeekingVideo &&
+        !_handlingMvCompletion &&
+        !val.isLooping &&
+        val.duration > const Duration(seconds: 1) &&
+        val.position >= val.duration - const Duration(milliseconds: 250) &&
+        !val.isPlaying) {
+      _handlingMvCompletion = true;
+      final player = _playerProvider;
+      if (player != null) {
+        if (player.loopMode == AppLoopMode.one) {
+          ctrl.seekTo(Duration.zero).then((_) => ctrl.play()).whenComplete(() {
+            _handlingMvCompletion = false;
+          });
+        } else if (player.loopMode == AppLoopMode.off &&
+            player.currentIndex >= player.playlist.length - 1) {
+          // 列表不循环且已到最后一首：停留在末尾，不再循环切歌
           _handlingMvCompletion = false;
+        } else {
+          _autoReenterVideoOnNextSong = true;
+          player.next().whenComplete(() {
+            _handlingMvCompletion = false;
+          });
         }
+      } else {
+        _handlingMvCompletion = false;
       }
     }
-    setState(() {});
   }
 
   void _exitVideoMode({bool resumeAudio = true}) {
@@ -461,6 +500,16 @@ class _YtMainViewState extends State<YtMainView>
     if (!mounted) return;
     final player = _playerProvider;
     if (player == null) return;
+
+    // 同步单曲循环状态至内嵌 MV 播放器
+    final ctrl = _videoController;
+    if (_isVideoMode && ctrl != null && ctrl.value.isInitialized) {
+      final shouldLoop = player.loopMode == AppLoopMode.one;
+      if (ctrl.value.isLooping != shouldLoop) {
+        unawaited(ctrl.setLooping(shouldLoop));
+      }
+    }
+
     final song = player.currentSong;
     final slideDirection = coverSlideDirectionForIndexChange(
       fromIndex: _lastPagerIndex ?? player.currentIndex,
@@ -470,21 +519,27 @@ class _YtMainViewState extends State<YtMainView>
     _lastPagerIndex = player.currentIndex;
     if (song != null && song.id != _lastSongId) {
       _lastSongId = song.id;
+      _lastSongSwitchAt = DateTime.now();
       final bool shouldAutoPlayMv = _isVideoMode || _autoReenterVideoOnNextSong;
       _autoReenterVideoOnNextSong = false;
-      if (_isVideoMode) {
-        _exitVideoMode(resumeAudio: false);
+      if (shouldAutoPlayMv) {
+        // 切歌但希望保持 MV 模式：立即压制背景音频起播，并探测新歌 MV
+        if (player.isPlaying) {
+          player.pause();
+        }
+        _syncSongCapabilities(song, autoEnterVideoIfAvailable: true);
+      } else {
+        if (_isVideoMode) {
+          _exitVideoMode(resumeAudio: false);
+        }
+        _dynamicCoverReady = false;
+        _songSwitchDeferTimer?.cancel();
+        _songSwitchDeferTimer = Timer(const Duration(milliseconds: 280), () {
+          if (!mounted) return;
+          setState(() => _dynamicCoverReady = true);
+          _syncSongCapabilities(song, autoEnterVideoIfAvailable: false);
+        });
       }
-      _dynamicCoverReady = false;
-      _songSwitchDeferTimer?.cancel();
-      _songSwitchDeferTimer = Timer(const Duration(milliseconds: 280), () {
-        if (!mounted) return;
-        setState(() => _dynamicCoverReady = true);
-        _syncSongCapabilities(
-          song,
-          autoEnterVideoIfAvailable: shouldAutoPlayMv,
-        );
-      });
       if (slideDirection != 0) {
         _coverFlipDirection = slideDirection;
       }
@@ -507,9 +562,18 @@ class _YtMainViewState extends State<YtMainView>
         preloadPlayerArtwork(nextResolved.artworkUri);
       }
     } else if (_isVideoMode && player.isPlaying) {
-      // 当处于 MV 视频模式时，若用户在播放列表中点击了当前同一首歌触发了音频播放，
-      // 立即退出 MV 模式停止视频，避免音频与 MV 双声道同时发声
-      _exitVideoMode(resumeAudio: false);
+      final switchAt = _lastSongSwitchAt;
+      final isJustSwitched =
+          switchAt != null &&
+          DateTime.now().difference(switchAt) <
+              const Duration(milliseconds: 1600);
+      if (_videoLoading || isJustSwitched) {
+        // 切歌或 MV 正在加载期间，音频引擎异步解析完自动起播：静默压制音频，不退出 MV 模式
+        player.pause();
+      } else {
+        // 当处于稳定 MV 模式时，若用户在播放列表或迷你栏主动触发了音频播放，退出 MV 模式避免双声道混音
+        _exitVideoMode(resumeAudio: false);
+      }
     }
   }
 
@@ -833,7 +897,8 @@ class _YtMainViewState extends State<YtMainView>
           24.0,
           availForCoverAndVSpace - normalCoverSide,
         );
-        final double coverTopGap = (extraVertical * 0.45).clamp(20.0, 34.0);
+        // 封面位置稍微往下一点点，与原版 YT Music 视觉重心完全对齐
+        final double coverTopGap = (extraVertical * 0.58).clamp(28.0, 44.0);
         final double normalCoverLeft = (screenW - normalCoverSide) / 2.0;
         final double normalCoverTop = safeTop + topBarH + coverTopGap;
 
@@ -848,15 +913,15 @@ class _YtMainViewState extends State<YtMainView>
           );
         }
 
-        // 2. 下半区四件套位置：1:1 对齐原版 YT Music（图 1），
-        // 向上适度提拉歌名与胶囊栏，收窄「封面底边 → 歌名」的间距，并在五键控制栏与底部把手之间留出舒适呼吸感
+        // 2. 下半区四件套位置：1:1 对齐原版 YT Music，
+        // 歌名和歌手稍微往上一丢丢，配合稍大一点的胶囊按钮与五键控制栏
         final double queueHandleTop = screenH - safeBottom - handleCollapsedH;
-        final double normalTransportTop = queueHandleTop - 30.0 - 74.0;
+        final double normalTransportTop = queueHandleTop - 28.0 - 78.0;
         final double normalSeekTop = normalTransportTop - 54.0;
-        final double normalCapsuleTop = normalSeekTop - 58.0;
+        final double normalCapsuleTop = normalSeekTop - 60.0;
         final double normalTitleTop = math.max(
-          normalCoverTop + normalCoverSide + 14.0,
-          normalCapsuleTop - 72.0,
+          normalCoverTop + normalCoverSide + 10.0,
+          normalCapsuleTop - 78.0,
         );
 
         return Stack(
@@ -1734,7 +1799,7 @@ class _YtMainViewState extends State<YtMainView>
     return Container(
       decoration: BoxDecoration(
         color: Colors.white.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(22),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -1749,16 +1814,16 @@ class _YtMainViewState extends State<YtMainView>
               }
             },
             borderRadius: const BorderRadius.horizontal(
-              left: Radius.circular(20),
+              left: Radius.circular(22),
             ),
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(14, 7, 11, 7),
+              padding: const EdgeInsets.fromLTRB(15.5, 8.5, 12.5, 8.5),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Icon(
                     isFavorited ? Icons.favorite : Icons.favorite_border,
-                    size: 18,
+                    size: 19.5,
                     color: isFavorited ? Colors.redAccent : Colors.white,
                   ),
                   const SizedBox(width: 6),
@@ -1766,7 +1831,7 @@ class _YtMainViewState extends State<YtMainView>
                     '喜欢',
                     style: TextStyle(
                       color: Colors.white,
-                      fontSize: 13,
+                      fontSize: 13.5,
                       fontWeight: FontWeight.w500,
                     ),
                   ),
@@ -1776,16 +1841,16 @@ class _YtMainViewState extends State<YtMainView>
           ),
           Container(
             width: 1,
-            height: 16,
+            height: 17,
             color: Colors.white.withValues(alpha: 0.22),
           ),
           InkWell(
             onTap: () => _toggleDefaultCollection(song),
             borderRadius: const BorderRadius.horizontal(
-              right: Radius.circular(20),
+              right: Radius.circular(22),
             ),
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(11, 7, 14, 7),
+              padding: const EdgeInsets.fromLTRB(12.5, 8.5, 15.5, 8.5),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -1793,7 +1858,7 @@ class _YtMainViewState extends State<YtMainView>
                     _defaultStarred
                         ? Icons.star_rounded
                         : Icons.star_border_rounded,
-                    size: 19,
+                    size: 20.5,
                     color: _defaultStarred
                         ? const Color(0xFFFFD54F)
                         : Colors.white,
@@ -1803,7 +1868,7 @@ class _YtMainViewState extends State<YtMainView>
                     '收藏',
                     style: TextStyle(
                       color: Colors.white,
-                      fontSize: 13,
+                      fontSize: 13.5,
                       fontWeight: FontWeight.w500,
                     ),
                   ),
@@ -1824,23 +1889,23 @@ class _YtMainViewState extends State<YtMainView>
   }) {
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(20),
+      borderRadius: BorderRadius.circular(22),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+        padding: const EdgeInsets.symmetric(horizontal: 15.5, vertical: 8.5),
         decoration: BoxDecoration(
           color: Colors.white.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(20),
+          borderRadius: BorderRadius.circular(22),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 18, color: iconColor),
+            Icon(icon, size: 19.5, color: iconColor),
             const SizedBox(width: 6),
             Text(
               label,
               style: const TextStyle(
                 color: Colors.white,
-                fontSize: 13,
+                fontSize: 13.5,
                 fontWeight: FontWeight.w500,
               ),
             ),
@@ -1853,29 +1918,38 @@ class _YtMainViewState extends State<YtMainView>
   Widget _buildSeekBar(BuildContext context, Song song) {
     final vCtrl = _videoController;
     if (_isVideoMode && vCtrl != null && vCtrl.value.isInitialized) {
-      final vVal = vCtrl.value;
-      return PlayerSeekBar(
-        position: vVal.position,
-        duration: vVal.duration,
-        isPlaying: vVal.isPlaying,
-        speed: vVal.playbackSpeed,
-        md3Style: true,
-        waveEnabled: false,
-        activeColor: Colors.white,
-        inactiveColor: Colors.white24,
-        labelColor: Colors.white70,
-        onSeekStart: () {
-          _wasPlayingBeforeDrag = vCtrl.value.isPlaying;
-          if (_wasPlayingBeforeDrag) {
-            vCtrl.pause();
-          }
-        },
-        onSeekEnd: (pos) async {
-          AppHaptics.tick(HapticCategory.transport);
-          await vCtrl.seekTo(pos);
-          if (_wasPlayingBeforeDrag) {
-            await vCtrl.play();
-          }
+      return ValueListenableBuilder<VideoPlayerValue>(
+        valueListenable: vCtrl,
+        builder: (context, vVal, _) {
+          return PlayerSeekBar(
+            position: vVal.position,
+            duration: vVal.duration,
+            isPlaying: vVal.isPlaying,
+            speed: vVal.playbackSpeed,
+            md3Style: true,
+            waveEnabled: false,
+            activeColor: Colors.white,
+            inactiveColor: Colors.white24,
+            labelColor: Colors.white70,
+            onSeekStart: () {
+              _isSeekingVideo = true;
+              _wasPlayingBeforeDrag = vCtrl.value.isPlaying;
+              if (_wasPlayingBeforeDrag) {
+                vCtrl.pause();
+              }
+            },
+            onSeekEnd: (pos) async {
+              AppHaptics.tick(HapticCategory.transport);
+              try {
+                await vCtrl.seekTo(pos);
+                if (_wasPlayingBeforeDrag) {
+                  await vCtrl.play();
+                }
+              } finally {
+                _isSeekingVideo = false;
+              }
+            },
+          );
         },
       );
     }
@@ -1945,15 +2019,28 @@ class _YtMainViewState extends State<YtMainView>
         final playerProvider = context.read<PlayerProvider>();
         final loopMode = state.loopMode;
         final vCtrl = _videoController;
-        final effectivePlaying =
-            (_isVideoMode && vCtrl != null && vCtrl.value.isInitialized)
-            ? vCtrl.value.isPlaying
-            : state.isPlaying;
 
         final IconData loopIcon = switch (loopMode) {
           AppLoopMode.one => Icons.repeat_one_rounded,
           AppLoopMode.all || AppLoopMode.off => Icons.repeat_rounded,
         };
+
+        Widget playPauseCircle(bool isPlayingNow) {
+          return Container(
+            width: 78,
+            height: 78,
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              shape: BoxShape.circle,
+            ),
+            alignment: Alignment.center,
+            child: PlayPauseMorphIcon(
+              isPlaying: isPlayingNow,
+              size: 38,
+              color: Colors.black,
+            ),
+          );
+        }
 
         return Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -1961,24 +2048,59 @@ class _YtMainViewState extends State<YtMainView>
           children: [
             IconButton(
               padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-              icon: const Icon(Icons.shuffle_rounded, size: 28),
-              color: state.shuffleEnabled ? Colors.white : Colors.white60,
-              onPressed: () {
+              constraints: const BoxConstraints(minWidth: 42, minHeight: 42),
+              tooltip: state.shuffleEnabled ? '随机播放：已开启' : '随机播放：已关闭',
+              icon: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.shuffle_rounded,
+                    size: 30,
+                    color: state.shuffleEnabled ? Colors.white : Colors.white60,
+                  ),
+                  const SizedBox(height: 2),
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 180),
+                    width: 4,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: state.shuffleEnabled
+                          ? Colors.white
+                          : Colors.transparent,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                ],
+              ),
+              onPressed: () async {
                 AppHaptics.lightImpact(HapticCategory.transport);
-                playerProvider.toggleShuffle();
+                final enabling = !state.shuffleEnabled;
+                await playerProvider.toggleShuffle();
+                _lastPagerIndex = playerProvider.currentIndex;
+                // 开启随机播放时若处于单曲循环或不循环，自动联动切为列表循环，避免随机播放失效
+                if (enabling && playerProvider.loopMode != AppLoopMode.all) {
+                  await playerProvider.setLoopMode(AppLoopMode.all);
+                  if (_isVideoMode &&
+                      vCtrl != null &&
+                      vCtrl.value.isInitialized) {
+                    unawaited(vCtrl.setLooping(false));
+                  }
+                }
               },
             ),
             IconButton(
               padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+              constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
               icon: const Icon(
                 Icons.skip_previous_rounded,
-                size: 40,
+                size: 44,
                 color: Colors.white,
               ),
               onPressed: () {
                 AppHaptics.click(HapticCategory.transport);
+                if (_isVideoMode) {
+                  _autoReenterVideoOnNextSong = true;
+                }
                 playerProvider.previous();
               },
             ),
@@ -1991,6 +2113,11 @@ class _YtMainViewState extends State<YtMainView>
                   if (vCtrl.value.isPlaying) {
                     vCtrl.pause();
                   } else {
+                    if (vCtrl.value.position >=
+                        vCtrl.value.duration -
+                            const Duration(milliseconds: 300)) {
+                      vCtrl.seekTo(Duration.zero);
+                    }
                     vCtrl.play();
                   }
                   return;
@@ -2001,44 +2128,74 @@ class _YtMainViewState extends State<YtMainView>
                   playerProvider.resume();
                 }
               },
-              child: Container(
-                width: 74,
-                height: 74,
-                decoration: const BoxDecoration(
-                  color: Colors.white,
-                  shape: BoxShape.circle,
-                ),
-                alignment: Alignment.center,
-                child: PlayPauseMorphIcon(
-                  isPlaying: effectivePlaying,
-                  size: 36,
-                  color: Colors.black,
-                ),
-              ),
+              child: (_isVideoMode && vCtrl != null && vCtrl.value.isInitialized)
+                  ? ValueListenableBuilder<VideoPlayerValue>(
+                      valueListenable: vCtrl,
+                      builder: (context, vVal, _) =>
+                          playPauseCircle(vVal.isPlaying),
+                    )
+                  : playPauseCircle(state.isPlaying),
             ),
             IconButton(
               padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+              constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
               icon: const Icon(
                 Icons.skip_next_rounded,
-                size: 40,
+                size: 44,
                 color: Colors.white,
               ),
               onPressed: () {
                 AppHaptics.click(HapticCategory.transport);
+                if (_isVideoMode) {
+                  _autoReenterVideoOnNextSong = true;
+                }
                 playerProvider.next();
               },
             ),
             IconButton(
               padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-              icon: Icon(loopIcon, size: 28),
-              color: loopMode != AppLoopMode.off
-                  ? Colors.white
-                  : Colors.white60,
-              onPressed: () {
+              constraints: const BoxConstraints(minWidth: 42, minHeight: 42),
+              tooltip: switch (loopMode) {
+                AppLoopMode.off => '循环关闭',
+                AppLoopMode.all => '列表循环',
+                AppLoopMode.one => '单曲循环',
+              },
+              icon: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    loopIcon,
+                    size: 30,
+                    color: loopMode != AppLoopMode.off
+                        ? Colors.white
+                        : Colors.white60,
+                  ),
+                  const SizedBox(height: 2),
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 180),
+                    width: 4,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: loopMode != AppLoopMode.off
+                          ? Colors.white
+                          : Colors.transparent,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                ],
+              ),
+              onPressed: () async {
                 AppHaptics.lightImpact(HapticCategory.transport);
-                playerProvider.toggleLoopMode();
+                await playerProvider.toggleLoopMode();
+                if (_isVideoMode &&
+                    vCtrl != null &&
+                    vCtrl.value.isInitialized) {
+                  unawaited(
+                    vCtrl.setLooping(
+                      playerProvider.loopMode == AppLoopMode.one,
+                    ),
+                  );
+                }
               },
             ),
           ],
@@ -2053,47 +2210,49 @@ class _YtMainViewState extends State<YtMainView>
     Song currentSong,
     double safeBottom,
   ) {
-    final playerProvider = context.read<PlayerProvider>();
-    final nextSong = _pagerNeighborSong(playerProvider, 1) ?? currentSong;
-
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: _openQueue,
-      onVerticalDragUpdate: _onQueueDragUpdate,
-      onVerticalDragEnd: _onQueueDragEnd,
-      child: Padding(
-        padding: EdgeInsets.only(left: 20, right: 20, bottom: safeBottom),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(height: 8),
-            Container(
-              width: 36,
-              height: 4,
-              decoration: BoxDecoration(
-                color: Colors.white30,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            const SizedBox(height: 8),
-            SizedBox(
-              height: 24,
-              child: Center(
-                child: Text(
-                  '接下来播放 · ${nextSong.displayName}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Colors.white70,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
+    return Selector<PlayerProvider, String>(
+      selector: (_, p) => (_pagerNeighborSong(p, 1) ?? currentSong).displayName,
+      builder: (context, nextTitle, _) {
+        return GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: _openQueue,
+          onVerticalDragUpdate: _onQueueDragUpdate,
+          onVerticalDragEnd: _onQueueDragEnd,
+          child: Padding(
+            padding: EdgeInsets.only(left: 20, right: 20, bottom: safeBottom),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(height: 8),
+                Container(
+                  width: 36,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.white30,
+                    borderRadius: BorderRadius.circular(2),
                   ),
                 ),
-              ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  height: 24,
+                  child: Center(
+                    child: Text(
+                      '接下来播放 · $nextTitle',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 }

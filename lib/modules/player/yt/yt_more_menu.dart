@@ -29,14 +29,16 @@ import '../speed_picker_sheet.dart';
 
 class YtMoreMenu {
   static final RegExp _kugouLowResPathRegex = RegExp(
-    r'/(64|100|120|150|240|400|480)/',
+    r'/(64|100|120|135|150|160|200|240|300|400|480|500|600|720)/',
   );
 
   /// 将酷狗封面 URL 中的低分辨率档位（如 400/240/150 或 {size}）升级为 1080p 超清原图档位
   static String? upgradeArtworkUri(String? uri) {
     if (uri == null || uri.isEmpty) return uri;
     var result = uri.replaceAll('{size}', '1080');
-    if (result.contains('kugou.com')) {
+    if (result.contains('kugou.com') ||
+        result.contains('kgimg.com') ||
+        result.contains('/stdmusic/')) {
       result = result.replaceFirst(_kugouLowResPathRegex, '/1080/');
     }
     return result;
@@ -189,7 +191,7 @@ class YtMoreMenu {
                     children: [
                       Row(
                         children: [
-                          if (song.isOnline)
+                          if (resolvedSong.isOnline)
                             MenuActionCell(
                               icon: Icons.music_video_outlined,
                               label: 'MV',
@@ -198,7 +200,8 @@ class YtMoreMenu {
                                 Navigator.pop(sheetContext);
                                 pushOverPlayer(
                                   MaterialPageRoute(
-                                    builder: (_) => MvPlayerPage(song: song),
+                                    builder: (_) =>
+                                        MvPlayerPage(song: resolvedSong),
                                   ),
                                 );
                               },

@@ -12,8 +12,8 @@ import '../../core/utils/app_haptics.dart';
 import '../../data/models/song.dart';
 import '../../providers/player_provider.dart';
 import '../../providers/theme_provider.dart';
+import '../../widgets/player_artwork_image.dart';
 import '../../widgets/player_playlist_view.dart';
-import '../../widgets/smart_artwork_image.dart';
 import 'full_player_route.dart';
 import 'player_page_role.dart';
 import 'yt/yt_background.dart';
@@ -41,6 +41,7 @@ class _FullPlayerYtState extends State<FullPlayerYt>
   final GlobalKey<PlayerPlaylistViewState> _playlistKey =
       GlobalKey<PlayerPlaylistViewState>();
   Rect? _measuredCoverRect;
+  String? _prewarmedCoverKey;
 
   DraggablePlayerRoute? _topBarDragRoute;
   double _topBarDragDistance = 0.0;
@@ -338,21 +339,7 @@ class _FullPlayerYtState extends State<FullPlayerYt>
     final safeTop = MediaQuery.paddingOf(context).top;
     final safeBottom = MediaQuery.paddingOf(context).bottom;
     final screenSize = MediaQuery.sizeOf(context);
-
-    final Widget staticCoverChild = SizedBox(
-      width: 400,
-      height: 400,
-      child: SmartArtworkImage(
-        key: ValueKey(
-          'yt_floating_cover_${resolvedSong.id}_${resolvedSong.artworkUri}',
-        ),
-        artworkUri: resolvedSong.artworkUri,
-        fallbackFilePath: resolvedSong.localPath,
-        songId: resolvedSong.id,
-        size: 400,
-        borderRadius: 0,
-      ),
-    );
+    final dpr = MediaQuery.devicePixelRatioOf(context);
 
     final Listenable overlayExpansion = Listenable.merge([
       _lyricsController,
@@ -446,7 +433,8 @@ class _FullPlayerYtState extends State<FullPlayerYt>
             ),
           ],
           // 悬浮封面层：当歌词抽屉或播放列表抽屉拉开（t > 0.001）时接管，
-          // 在居中大封面与左上角 40x40 缩略图之间沿对角线平滑插值飞行。
+          // 与主封面共享同一份 1080p PlayerArtworkImage 解码档位与 GPU 纹理，
+          // 全程以 Transform 矩阵缩放平移，零二次加载、零布局重算。
           LayoutBuilder(
             builder: (context, constraints) {
               final defaultAvailW = math.max(0.0, screenSize.width - 48.0);
@@ -457,70 +445,83 @@ class _FullPlayerYtState extends State<FullPlayerYt>
               final defaultSide = math.min(defaultAvailW, defaultAvailH);
               final fallbackRect = Rect.fromLTWH(
                 (screenSize.width - defaultSide) / 2.0,
-                safeTop + 52.0 + 24.0,
+                safeTop + 52.0 + 32.0,
                 defaultSide,
                 defaultSide,
               );
               final largeRect = _measuredCoverRect ?? fallbackRect;
+              final baseSide = math.max(1.0, largeRect.width);
+
+              final prewarmKey =
+                  '${resolvedSong.artworkUri}_${baseSide.round()}_$dpr';
+              if (_prewarmedCoverKey != prewarmKey) {
+                _prewarmedCoverKey = prewarmKey;
+                unawaited(
+                  prewarmPlayerArtworkTexture(
+                    artworkUri: resolvedSong.artworkUri,
+                    settledLogicalWidth: baseSide,
+                    devicePixelRatio: dpr,
+                  ),
+                );
+              }
 
               const double smallSize = 40.0;
               const double smallLeft = 16.0;
               final double smallTop = safeTop + (56.0 - smallSize) / 2.0;
 
+              final Widget sharedCoverSurface = RepaintBoundary(
+                child: SizedBox(
+                  width: baseSide,
+                  height: baseSide,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(12.0),
+                    child: PlayerArtworkImage(
+                      key: ValueKey(
+                        'yt_floating_cover_${resolvedSong.id}_${resolvedSong.artworkUri}',
+                      ),
+                      artworkUri: resolvedSong.artworkUri,
+                      fallbackFilePath: resolvedSong.localPath,
+                      isFill: true,
+                      fit: BoxFit.cover,
+                      iconSize: 48,
+                      backgroundColor: Colors.white12,
+                      iconColor: Colors.white54,
+                    ),
+                  ),
+                ),
+              );
+
               return AnimatedBuilder(
                 animation: overlayExpansion,
-                child: staticCoverChild,
+                child: sharedCoverSurface,
                 builder: (context, coverChild) {
                   final t = math
                       .max(_lyricsController.value, _queueController.value)
                       .clamp(0.0, 1.0);
-                  if (t <= 0.001) {
-                    return const SizedBox.shrink();
-                  }
+                  final active = t > 0.001;
                   final curLeft = ui.lerpDouble(largeRect.left, smallLeft, t)!;
                   final curTop = ui.lerpDouble(largeRect.top, smallTop, t)!;
                   final curSize = math.max(
                     1.0,
-                    ui.lerpDouble(largeRect.width, smallSize, t)!,
+                    ui.lerpDouble(baseSide, smallSize, t)!,
                   );
-                  final curRadius = ui.lerpDouble(12.0, 6.0, t)!;
-                  final shadowAlpha = 0.45 * (1.0 - t);
+                  final scale = curSize / baseSide;
 
-                  return Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      Positioned(
-                        left: curLeft,
-                        top: curTop,
-                        width: curSize,
-                        height: curSize,
-                        child: IgnorePointer(
-                          child: DecoratedBox(
-                            decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(curRadius),
-                              boxShadow: shadowAlpha > 0.01
-                                  ? [
-                                      BoxShadow(
-                                        color: Colors.black.withValues(
-                                          alpha: shadowAlpha,
-                                        ),
-                                        blurRadius: 20.0 * (1.0 - t),
-                                        offset: Offset(0, 10.0 * (1.0 - t)),
-                                      ),
-                                    ]
-                                  : const [],
-                            ),
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(curRadius),
-                              child: FittedBox(
-                                fit: BoxFit.cover,
-                                child: coverChild,
-                              ),
-                            ),
+                  return Offstage(
+                    offstage: !active,
+                    child: IgnorePointer(
+                      child: Align(
+                        alignment: Alignment.topLeft,
+                        child: Transform.translate(
+                          offset: Offset(curLeft, curTop),
+                          child: Transform.scale(
+                            scale: scale,
+                            alignment: Alignment.topLeft,
+                            child: coverChild,
                           ),
                         ),
                       ),
-                    ],
+                    ),
                   );
                 },
               );
