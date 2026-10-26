@@ -24,20 +24,18 @@ import 'yt/yt_more_menu.dart';
 class FullPlayerYt extends StatefulWidget {
   final bool dockMode;
 
-  const FullPlayerYt({
-    super.key,
-    this.dockMode = false,
-  });
+  const FullPlayerYt({super.key, this.dockMode = false});
 
   @override
   State<FullPlayerYt> createState() => _FullPlayerYtState();
 }
 
 class _FullPlayerYtState extends State<FullPlayerYt>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   bool _isDismissing = false;
 
   late final AnimationController _lyricsController;
+  late final AnimationController _queueController;
   Rect? _measuredCoverRect;
 
   DraggablePlayerRoute? _topBarDragRoute;
@@ -56,11 +54,17 @@ class _FullPlayerYtState extends State<FullPlayerYt>
       duration: const Duration(milliseconds: 340),
       reverseDuration: const Duration(milliseconds: 280),
     );
+    _queueController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 340),
+      reverseDuration: const Duration(milliseconds: 280),
+    );
   }
 
   @override
   void dispose() {
     _lyricsController.dispose();
+    _queueController.dispose();
     MusicHapticsService.instance.setPlayerPageActive(false);
     super.dispose();
   }
@@ -242,10 +246,7 @@ class _FullPlayerYtState extends State<FullPlayerYt>
       return const Scaffold(
         backgroundColor: Colors.black,
         body: Center(
-          child: Text(
-            '未在播放',
-            style: TextStyle(color: Colors.white70),
-          ),
+          child: Text('未在播放', style: TextStyle(color: Colors.white70)),
         ),
       );
     }
@@ -301,6 +302,7 @@ class _FullPlayerYtState extends State<FullPlayerYt>
                 song: currentSong,
                 dockMode: widget.dockMode,
                 lyricsExpansion: _lyricsController,
+                queueController: _queueController,
                 onCollapse: _collapseByButton,
                 onOpenLyrics: _openLyrics,
                 onCoverRectMeasured: (rect) {
@@ -343,15 +345,15 @@ class _FullPlayerYtState extends State<FullPlayerYt>
           // 抽屉关闭（t == 0）时完全隐藏，由 YtMainView 内的 PlayerCoverSlot + CoverSwitchPager 渲染。
           LayoutBuilder(
             builder: (context, constraints) {
-              final defaultAvailW = math.max(0.0, screenSize.width - 48.0);
+              final defaultAvailW = math.max(0.0, screenSize.width - 40.0);
               final defaultAvailH = math.max(
-                0.0,
-                screenSize.height - safeTop - safeBottom - 56.0 - 310.0,
+                160.0,
+                screenSize.height - safeTop - safeBottom - 52.0 - 10.0 - 296.0,
               );
               final defaultSide = math.min(defaultAvailW, defaultAvailH);
               final fallbackRect = Rect.fromLTWH(
                 (screenSize.width - defaultSide) / 2.0,
-                safeTop + 56.0 + 8.0 + (defaultAvailH - defaultSide) / 2.0,
+                safeTop + 52.0 + 10.0,
                 defaultSide,
                 defaultSide,
               );

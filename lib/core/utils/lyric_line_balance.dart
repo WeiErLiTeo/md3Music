@@ -53,7 +53,7 @@ const double _punctuationBreakRewardRatio = 0.6;
 
 /// 单元末尾若是这些字符，判定为「在标点后换行」→ 奖励。
 final RegExp _trailingPunctuationRegex = RegExp(
-  r'[,.;:!?，。；：！？、）】》」』’”)’}\]…]$',
+  r'[,.;:!?/\\，。；：！？、）】》」』’”)’}\]…]$',
 );
 
 /// 是否 CJK 文字码点（汉字 / 日文假名 / 韩文音节 / 兼容区）。
@@ -171,12 +171,10 @@ List<int> balancedRowStarts(List<BalanceUnit> units, double maxWidth) {
   final double rewardSpace =
       -(maxWidth * maxWidth * _spaceBreakRewardRatio * _spaceBreakRewardRatio);
   final double rewardPunctuation =
-      -(
-        maxWidth *
-        maxWidth *
-        _punctuationBreakRewardRatio *
-        _punctuationBreakRewardRatio
-      );
+      -(maxWidth *
+          maxWidth *
+          _punctuationBreakRewardRatio *
+          _punctuationBreakRewardRatio);
 
   // dp[i] = 从单元 i 排到结尾的最小代价；next[i] = i 之后下一行的起始下标
   final List<double> dp = List<double>.filled(n + 1, double.infinity);

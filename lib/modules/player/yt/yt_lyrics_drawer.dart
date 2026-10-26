@@ -168,10 +168,7 @@ class YtMiniBar extends StatelessWidget {
                     song.artist,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Colors.white70,
-                      fontSize: 12,
-                    ),
+                    style: const TextStyle(color: Colors.white70, fontSize: 12),
                   ),
                 ],
               ),
@@ -403,105 +400,129 @@ class _YtLyricsDrawerContentState extends State<YtLyricsDrawerContent> {
       behavior: HitTestBehavior.opaque,
       onVerticalDragUpdate: widget.onVerticalDragUpdate,
       onVerticalDragEnd: widget.onVerticalDragEnd,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        child: Row(
-          children: [
-            IconButton(
-              icon: const Icon(
-                Icons.keyboard_arrow_down,
-                color: Colors.white70,
-                size: 26,
+      child: SizedBox(
+        height: 52,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              Align(
+                alignment: Alignment.centerLeft,
+                child: IconButton(
+                  visualDensity: VisualDensity.compact,
+                  icon: const Icon(
+                    Icons.keyboard_arrow_down,
+                    color: Colors.white70,
+                    size: 26,
+                  ),
+                  onPressed: widget.onClose,
+                ),
               ),
-              onPressed: widget.onClose,
-            ),
-            const Spacer(),
-            Container(
-              width: 36,
-              height: 4,
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.3),
-                borderRadius: BorderRadius.circular(2),
+              IgnorePointer(
+                child: Container(
+                  width: 36,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.3),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
               ),
-            ),
-            const Spacer(),
-            if (_hasTranslation)
-              ListenableBuilder(
-                listenable: prefs,
-                builder: (context, _) {
-                  final showTrans =
-                      prefs.showTranslation &&
-                      prefs.displayMode == LyricDisplayMode.translation;
-                  return IconButton(
-                    icon: Text(
-                      '译',
-                      style: TextStyle(
-                        color: showTrans ? Colors.white : Colors.white38,
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
+              Align(
+                alignment: Alignment.centerRight,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (_hasTranslation)
+                      ListenableBuilder(
+                        listenable: prefs,
+                        builder: (context, _) {
+                          final showTrans =
+                              prefs.showTranslation &&
+                              prefs.displayMode == LyricDisplayMode.translation;
+                          return IconButton(
+                            visualDensity: VisualDensity.compact,
+                            tooltip: '歌词翻译',
+                            icon: Icon(
+                              Icons.translate_rounded,
+                              color: showTrans ? Colors.white : Colors.white38,
+                              size: 20,
+                            ),
+                            onPressed: () {
+                              if (showTrans) {
+                                prefs.setShowTranslation(false);
+                              } else {
+                                prefs.setDisplayMode(
+                                  LyricDisplayMode.translation,
+                                );
+                                prefs.setShowTranslation(true);
+                              }
+                            },
+                          );
+                        },
                       ),
-                    ),
-                    onPressed: () {
-                      if (showTrans) {
-                        prefs.setShowTranslation(false);
-                      } else {
-                        prefs.setDisplayMode(LyricDisplayMode.translation);
-                        prefs.setShowTranslation(true);
-                      }
-                    },
-                  );
-                },
-              ),
-            if (_hasRomanization)
-              ListenableBuilder(
-                listenable: prefs,
-                builder: (context, _) {
-                  final showRoma =
-                      prefs.showTranslation &&
-                      prefs.displayMode == LyricDisplayMode.roma;
-                  return IconButton(
-                    icon: Text(
-                      '音',
-                      style: TextStyle(
-                        color: showRoma ? Colors.white : Colors.white38,
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
+                    if (_hasRomanization)
+                      ListenableBuilder(
+                        listenable: prefs,
+                        builder: (context, _) {
+                          final showRoma =
+                              prefs.showTranslation &&
+                              prefs.displayMode == LyricDisplayMode.roma;
+                          return IconButton(
+                            visualDensity: VisualDensity.compact,
+                            tooltip: '罗马音',
+                            icon: Icon(
+                              Icons.abc_rounded,
+                              color: showRoma ? Colors.white : Colors.white38,
+                              size: 22,
+                            ),
+                            onPressed: () {
+                              if (showRoma) {
+                                prefs.setShowTranslation(false);
+                              } else {
+                                prefs.setDisplayMode(LyricDisplayMode.roma);
+                                prefs.setShowTranslation(true);
+                              }
+                            },
+                          );
+                        },
                       ),
+                    IconButton(
+                      visualDensity: VisualDensity.compact,
+                      icon: const Icon(
+                        Icons.tune_rounded,
+                        color: Colors.white70,
+                        size: 20,
+                      ),
+                      tooltip: '歌词显示设置',
+                      onPressed: () {
+                        showM3EModalBottomSheet(
+                          context: context,
+                          isScrollControlled: true,
+                          backgroundColor: Theme.of(context)
+                              .colorScheme
+                              .surfaceContainerLow,
+                          builder: (_) =>
+                              const SafeArea(child: LyricPreferencesPanel()),
+                        );
+                      },
                     ),
-                    onPressed: () {
-                      if (showRoma) {
-                        prefs.setShowTranslation(false);
-                      } else {
-                        prefs.setDisplayMode(LyricDisplayMode.roma);
-                        prefs.setShowTranslation(true);
-                      }
-                    },
-                  );
-                },
+                    IconButton(
+                      visualDensity: VisualDensity.compact,
+                      tooltip: '刷新歌词',
+                      icon: const Icon(
+                        Icons.refresh_rounded,
+                        color: Colors.white70,
+                        size: 20,
+                      ),
+                      onPressed: () => _loadLyricsFor(currentSong, force: true),
+                    ),
+                  ],
+                ),
               ),
-            IconButton(
-              icon: const Icon(
-                Icons.tune_rounded,
-                color: Colors.white70,
-                size: 20,
-              ),
-              tooltip: '歌词显示设置',
-              onPressed: () {
-                showM3EModalBottomSheet(
-                  context: context,
-                  isScrollControlled: true,
-                  backgroundColor:
-                      Theme.of(context).colorScheme.surfaceContainerLow,
-                  builder: (_) =>
-                      const SafeArea(child: LyricPreferencesPanel()),
-                );
-              },
-            ),
-            IconButton(
-              icon: const Icon(Icons.refresh, color: Colors.white70, size: 20),
-              onPressed: () => _loadLyricsFor(currentSong, force: true),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -523,9 +544,7 @@ class _YtLyricsDrawerContentState extends State<YtLyricsDrawerContent> {
             positionListenable: player.positionNotifier,
             isPlaying: isPlaying,
             playbackNotReady: false,
-            onSeek: (timeMs) => player.seek(
-              Duration(milliseconds: timeMs),
-            ),
+            onSeek: (timeMs) => player.seek(Duration(milliseconds: timeMs)),
             forceDarkBackground: true,
           ),
         );
@@ -538,11 +557,7 @@ class _YtLyricsDrawerContentState extends State<YtLyricsDrawerContent> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(
-            Icons.music_off_outlined,
-            color: Colors.white38,
-            size: 48,
-          ),
+          const Icon(Icons.music_off_outlined, color: Colors.white38, size: 48),
           const SizedBox(height: 12),
           const Text(
             '暂无歌词',
@@ -558,10 +573,7 @@ class _YtLyricsDrawerContentState extends State<YtLyricsDrawerContent> {
               ),
             ),
             onPressed: () async {
-              await showSongMatchSheet(
-                context,
-                currentSong,
-              );
+              await showSongMatchSheet(context, currentSong);
               if (mounted) {
                 _loadLyricsFor(currentSong, force: true);
               }

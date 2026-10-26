@@ -23,17 +23,21 @@ import 'package:material_ui/material_ui.dart';
 import 'package:flutter/scheduler.dart';
 
 import '../../core/utils/app_haptics.dart';
+
 import 'package:flutter/widgets.dart';
 
 import '../../core/build_flags.dart';
 import '../../core/services/player_frame_driver.dart';
+import '../../core/utils/lyric_line_balance.dart';
 import '../../core/utils/lyric_wrap_plan.dart';
 import 'controllers/lyric_scroll_controller.dart';
 import 'animation/spring.dart';
 import 'layout/duet_layout.dart';
 import 'layout/lyric_layout.dart';
 import 'layout/lyric_preferences.dart';
+
 import 'package:md3music/widgets/apple_lyrics/models/lyric_line.dart';
+
 import 'renderers/emphasize_effect.dart';
 import 'renderers/interlude_dots.dart';
 import 'renderers/line_renderer.dart';
@@ -371,10 +375,9 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
   /// 验证 tick 窗口外的行被钉在稳态 inactive(滚动到远处不出现未缩小行)。
   /// 列表尚未建立(首帧 tick 前)返回 NaN。
   @visibleForTesting
-  double lineScaleForTest(int i) =>
-      i >= 0 && i < _reusedPerLineScales.length
-          ? _reusedPerLineScales[i]
-          : double.nan;
+  double lineScaleForTest(int i) => i >= 0 && i < _reusedPerLineScales.length
+      ? _reusedPerLineScales[i]
+      : double.nan;
 
   /// 当前滚动弹簧位置。仅测试用：验证快速连切兜底把 posY 直接瞬移到目标。
   @visibleForTesting
@@ -546,7 +549,7 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
     // 模式仅对整首歌无逐字（LRC 逐行 / 纯文本）生效
     _cachedHasAnyWordTiming = widget.lines.any((l) => l.words.isNotEmpty);
     final result = DuetLayout.process(widget.lines, useDuet);
-    _cleanedLines = result.cleanedLines;
+    _cleanedLines = _normalizeCompoundWords(result.cleanedLines);
     _duetAlignments = result.alignments;
     // 失效行高缓存，让 _recomputeLineHeightsIfNeeded 用新的 _cleanedLines 重算
     _cachedLinesRef = null;
@@ -556,6 +559,81 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
     // 失效模糊图片缓存：对齐/文本变化后旧模糊图位置与内容均不再匹配
     _clearLineBlurCache();
     _cachedBlurLineIndex = -1;
+  }
+
+  /// 拆分 KRC 中将整句或多歌手名（含内部空格或 `/`、`\`）打包为单个 [LyricWord] 的复合词。
+  ///
+  /// KRC 开头常见 `<0,1000,0>Song - Artist` 或 `<200,800,0>ArtistA/ArtistB/ArtistC`，
+  /// 若保持单个 [LyricWord] 不拆：
+  /// 1. `LyricWrapPlanner.forLine` 只能将其视为 1 个不可再分的单元，测量出 `rowCount = 1`；
+  /// 2. 非当前行 `TextPainter.layout(maxWidth)` 却会在空格处折成 2 行，造成行高预留不足而与下一行重叠；
+  /// 3. 当前行 `WordRenderer` 无法在超宽单 word 内换行，造成右侧超出屏幕截断。
+  static List<LyricLine> _normalizeCompoundWords(List<LyricLine> lines) {
+    List<LyricLine>? out;
+    for (int i = 0; i < lines.length; i++) {
+      final line = lines[i];
+      if (line.words.isEmpty) continue;
+      bool needsSplit = false;
+      for (final w in line.words) {
+        final trimmed = w.text.trim();
+        if (trimmed.length >= 4 &&
+            (trimmed.contains(' ') ||
+                trimmed.contains('/') ||
+                trimmed.contains('\\'))) {
+          needsSplit = true;
+          break;
+        }
+      }
+      if (!needsSplit) continue;
+
+      final newWords = <LyricWord>[];
+      for (final w in line.words) {
+        final trimmed = w.text.trim();
+        if (trimmed.length < 4 ||
+            (!trimmed.contains(' ') &&
+                !trimmed.contains('/') &&
+                !trimmed.contains('\\'))) {
+          newWords.add(w);
+          continue;
+        }
+        final rawUnits = segmentLyricUnits(w.text);
+        // 将纯空白单元合并到前一个词尾，保持与标准 KRC 逐词带尾随空格一致
+        final mergedUnits = <String>[];
+        for (final u in rawUnits) {
+          if (u.trim().isEmpty && mergedUnits.isNotEmpty) {
+            mergedUnits[mergedUnits.length - 1] = mergedUnits.last + u;
+          } else {
+            mergedUnits.add(u);
+          }
+        }
+        if (mergedUnits.length <= 1) {
+          newWords.add(w);
+          continue;
+        }
+        final totalLen = w.text.length;
+        int offsetChars = 0;
+        for (int idx = 0; idx < mergedUnits.length; idx++) {
+          final piece = mergedUnits[idx];
+          final startRatio = offsetChars / totalLen;
+          final endRatio = (offsetChars + piece.length) / totalLen;
+          final pieceStart = w.startTime + (w.duration * startRatio).round();
+          final pieceEnd = idx == mergedUnits.length - 1
+              ? w.startTime + w.duration
+              : w.startTime + (w.duration * endRatio).round();
+          newWords.add(
+            LyricWord(
+              startTime: pieceStart,
+              duration: (pieceEnd - pieceStart).clamp(0, w.duration),
+              text: piece,
+            ),
+          );
+          offsetChars += piece.length;
+        }
+      }
+      out ??= List<LyricLine>.of(lines);
+      out[i] = line.copyWith(words: newWords);
+    }
+    return out ?? lines;
   }
 
   // ============== 级联错峰延迟 ==============
@@ -1644,7 +1722,8 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
       final double nowMs = _frameClockMs;
       final double lastMs = _lastLineSwitchFrameMs;
       final bool quickGap =
-          lastMs >= 0 && nowMs - lastMs >= 0 &&
+          lastMs >= 0 &&
+          nowMs - lastMs >= 0 &&
           nowMs - lastMs < _fastSwitchThresholdMs;
       _consecutiveFastSwitches = quickGap ? _consecutiveFastSwitches + 1 : 0;
       // 首次切行（lastMs < 0）计数为 0；连续 >= 2 次才启用兜底
@@ -2061,8 +2140,10 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
       // AMLL 风格级联延迟：delayMs 为逐行累积延迟，baseStepMs 为当前错峰步长。
       // 步长 / 上限 / 衰减均可由用户在设置页"歌词动画"调节（无极）。
       // 循环外读一次偏好，避免每帧重复访问。
-      final double cascadeMaxDelay = LyricPreferences.instance.cascadeMaxDelayMs;
-      final double cascadeBaseStep = LyricPreferences.instance.cascadeBaseStepMs;
+      final double cascadeMaxDelay =
+          LyricPreferences.instance.cascadeMaxDelayMs;
+      final double cascadeBaseStep =
+          LyricPreferences.instance.cascadeBaseStepMs;
       final double cascadeDecay = LyricPreferences.instance.cascadeStepDecay;
       final bool staggerFromCurrent =
           LyricPreferences.instance.staggerFromCurrentLine;
@@ -2532,7 +2613,8 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
     // - 深色主题 → 白色
     // - 浅色主题 → 黑色
     final isLightTheme = Theme.of(context).brightness == Brightness.light;
-    LyricLayout.textColorValue = customTextColor?.toARGB32() ??
+    LyricLayout.textColorValue =
+        customTextColor?.toARGB32() ??
         ((widget.forceDarkBackground || !isLightTheme)
             ? 0xFFFFFFFF
             : 0xFF000000);
@@ -2668,43 +2750,43 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
           behavior: HitTestBehavior.opaque,
           onPointerSignal: _onPointerSignal,
           child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTapDown: widget.doubleTapToJump ? null : _onTapDown,
-          onTapUp: widget.doubleTapToJump ? null : _onTapUp,
-          onDoubleTapDown: widget.doubleTapToJump ? _onTapDown : null,
-          onDoubleTap: widget.doubleTapToJump ? _triggerDoubleTapSeek : null,
-          onVerticalDragUpdate: _onVerticalDragUpdate,
-          onVerticalDragEnd: _onVerticalDragEnd,
-          child: ShaderMask(
-            // 歌词界面上下边界 alpha 渐变（参数与评论区一致：24px 渐变高度），
-            // 顶部 24px alpha 0→1，底部 24px alpha 1→0，
-            // 让歌词从边界柔和淡入/淡出。
-            // P2-H 方案 A：shader 按 bounds 尺寸缓存复用，避免每次 build 重建。
-            shaderCallback: (Rect bounds) => _fadeShaderFor(bounds),
-            blendMode: BlendMode.dstIn,
-            child: useGaussian
-                ? ClipRect(
-                    child: Builder(
-                      builder: (context) {
-                        // 视口宽必须先赋值：_buildBlurLayers 内的几何签名依赖它，
-                        // 宽度变化由签名比对自动触发模糊图重渲染（无需手动清空缓存，
-                        // 手动清空会连带丢弃仍然有效的行）。
-                        _viewportWidth = constraints.maxWidth;
-                        return Stack(
-                          children: [
-                            lyricsContent,
-                            ..._buildBlurLayers(
-                              constraints.maxHeight,
-                              mainLineHeight,
-                            ),
-                          ],
-                        );
-                      },
-                    ),
-                  )
-                : lyricsContent,
+            behavior: HitTestBehavior.opaque,
+            onTapDown: widget.doubleTapToJump ? null : _onTapDown,
+            onTapUp: widget.doubleTapToJump ? null : _onTapUp,
+            onDoubleTapDown: widget.doubleTapToJump ? _onTapDown : null,
+            onDoubleTap: widget.doubleTapToJump ? _triggerDoubleTapSeek : null,
+            onVerticalDragUpdate: _onVerticalDragUpdate,
+            onVerticalDragEnd: _onVerticalDragEnd,
+            child: ShaderMask(
+              // 歌词界面上下边界 alpha 渐变（参数与评论区一致：24px 渐变高度），
+              // 顶部 24px alpha 0→1，底部 24px alpha 1→0，
+              // 让歌词从边界柔和淡入/淡出。
+              // P2-H 方案 A：shader 按 bounds 尺寸缓存复用，避免每次 build 重建。
+              shaderCallback: (Rect bounds) => _fadeShaderFor(bounds),
+              blendMode: BlendMode.dstIn,
+              child: useGaussian
+                  ? ClipRect(
+                      child: Builder(
+                        builder: (context) {
+                          // 视口宽必须先赋值：_buildBlurLayers 内的几何签名依赖它，
+                          // 宽度变化由签名比对自动触发模糊图重渲染（无需手动清空缓存，
+                          // 手动清空会连带丢弃仍然有效的行）。
+                          _viewportWidth = constraints.maxWidth;
+                          return Stack(
+                            children: [
+                              lyricsContent,
+                              ..._buildBlurLayers(
+                                constraints.maxHeight,
+                                mainLineHeight,
+                              ),
+                            ],
+                          );
+                        },
+                      ),
+                    )
+                  : lyricsContent,
+            ),
           ),
-        ),
         );
       },
     );
@@ -2931,14 +3013,15 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
       _lineBlurPending[lineIndex] = (token, signature);
 
       (lineBlurRendererForTest ?? _renderLineBlur)(
-        lineIndex, blurLevel, _duetAlignmentAt(lineIndex),
-      ).then((
-        image,
-      ) {
+        lineIndex,
+        blurLevel,
+        _duetAlignmentAt(lineIndex),
+      ).then((image) {
         // 只允许最新请求写回；销毁或失效后仍需释放迟到的 GPU 图片。
         if (!mounted || _lineBlurPending[lineIndex]?.$1 != token) {
           image?.dispose();
-          if (kDebugMode) debugPrint('[LyricRender] discard stale blur line=$lineIndex');
+          if (kDebugMode)
+            debugPrint('[LyricRender] discard stale blur line=$lineIndex');
           return;
         }
         _lineBlurPending.remove(lineIndex);
@@ -2993,8 +3076,14 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
   /// 文字）严格一致，不会把烘焙图纵向拉伸。取同源测量而非各自按行数重算，
   /// 也消除 KRC 行（word 累加压缩高度）与非 KRC 行（TextPainter 完整行高）
   /// 两套高度模型导致的 pivot Y 偏差。
-  ({double sigma, double padding, double blockHeight, double fontSize,
-    double imageHeight}) _blurGeometry(int lineIndex, int blurLevel) {
+  ({
+    double sigma,
+    double padding,
+    double blockHeight,
+    double fontSize,
+    double imageHeight,
+  })
+  _blurGeometry(int lineIndex, int blurLevel) {
     // sigma = 距离分级值 × 用户强度倍数。
     // 倍数默认 1.0 时与历史行为完全一致（sigma = blurLevel）；
     // 上限 10 = maxBlurIntensity 2.0 × 最远分级 5。
