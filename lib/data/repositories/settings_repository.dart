@@ -104,6 +104,8 @@ class SettingsRepository {
       'settings_startup_auto_play_source';
   static const String _keyStartupAutoPlayOpenPage =
       'settings_startup_auto_play_open_page';
+  static const String _keyIdleKeepaliveStopMinutes =
+      'settings_idle_keepalive_stop_minutes';
   // 早期预留的死键，全仓无任何调用方，勿与上面的启动自动播放混用。
   static const String _keyAutoPlay = 'settings_auto_play';
   static const String _keyShowLyrics = 'settings_show_lyrics';
@@ -116,6 +118,17 @@ class SettingsRepository {
   static const String _keyMvDanmakuEnabled = 'settings_mv_danmaku_enabled';
   static const String _keyMvDanmakuOpacity = 'settings_mv_danmaku_opacity';
   static const String _keySongDanmakuEnabled = 'settings_song_danmaku_enabled';
+  // MD3Music fork v46：歌曲弹幕速度倍率（0.5~2.0，1.0=默认 120px/s）与颜色
+  //（int color value，null=跟随弹幕池/默认白）。静态镜像供播放页即时生效。
+  static const String _keySongDanmakuSpeed = 'settings_song_danmaku_speed';
+  static const String _keySongDanmakuColor = 'settings_song_danmaku_color';
+  // MD3Music fork v47：只看弹幕（隐藏播放页"发弹幕"按钮）。
+  static const String _keySongDanmakuReadOnly = 'settings_song_danmaku_read_only';
+  // MD3Music fork v52：歌曲弹幕透明度（0.1~1.0，1.0=不透明）。
+  static const String _keySongDanmakuOpacity = 'settings_song_danmaku_opacity';
+  // MD3Music fork v54：MV 弹幕速度与颜色。
+  static const String _keyMvDanmakuSpeed = 'settings_mv_danmaku_speed';
+  static const String _keyMvDanmakuColor = 'settings_mv_danmaku_color';
 
   /// 封面流歌单源（CoverFlowSource.rawValue：'daily' / 'personalFm' / 'homeDiscover'）。
   /// 存原始字符串而非 int 下标：枚举顺序是 UI 契约，持久化不跟它走。
@@ -626,6 +639,130 @@ class SettingsRepository {
     amLandscapeEdgeFade.value = value;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_keyAmLandscapeEdgeFade, value);
+  }
+
+  /// MD3Music fork v46：歌曲弹幕速度倍率（0.5~2.0）。静态镜像供
+  /// 播放页即时生效（同 songDanmakuEnabled 模式：getter 读盘回填、setter
+  /// 写盘前先更新）。v59：默认改 0.5（用户拍板的口径）。
+  static final ValueNotifier<double> songDanmakuSpeed =
+      ValueNotifier<double>(0.5);
+
+  Future<double> getSongDanmakuSpeed() async {
+    final prefs = await SharedPreferences.getInstance();
+    final v = (prefs.getDouble(_keySongDanmakuSpeed) ?? 0.5).clamp(0.5, 2.0);
+    songDanmakuSpeed.value = v;
+    return v;
+  }
+
+  Future<void> setSongDanmakuSpeed(double value) async {
+    final v = value.clamp(0.5, 2.0);
+    songDanmakuSpeed.value = v;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_keySongDanmakuSpeed, v);
+  }
+
+  /// MD3Music fork v46：歌曲弹幕颜色（int ARGB；null=跟随弹幕池/默认白；
+  /// v49：-1=随机哨值——每条弹幕从固定调色板随机取色）。
+  /// v55：镜像初始值 -1——回填前的首帧也走随机（与 getter 默认口径一致）。
+  static final ValueNotifier<int?> songDanmakuColor =
+      ValueNotifier<int?>(-1);
+
+  Future<int?> getSongDanmakuColor() async {
+    final prefs = await SharedPreferences.getInstance();
+    final hasColor = prefs.containsKey(_keySongDanmakuColor);
+    // v54：未设置时默认随机（-1 哨值）——用户此前拍板的默认口径；显式选过
+    // 任何档位（含跟随=null）的老用户不受影响。
+    final v = hasColor ? prefs.getInt(_keySongDanmakuColor) : -1;
+    songDanmakuColor.value = v;
+    return v;
+  }
+
+  Future<void> setSongDanmakuColor(int? value) async {
+    songDanmakuColor.value = value;
+    final prefs = await SharedPreferences.getInstance();
+    if (value == null) {
+      await prefs.remove(_keySongDanmakuColor);
+    } else {
+      await prefs.setInt(_keySongDanmakuColor, value);
+    }
+  }
+
+  /// MD3Music fork v47：只看弹幕——隐藏播放页右下角的"发弹幕"按钮。
+  /// 默认关（按钮显示）。静态镜像供播放页即时生效。
+  static final ValueNotifier<bool> songDanmakuReadOnly =
+      ValueNotifier<bool>(false);
+
+  Future<bool> getSongDanmakuReadOnly() async {
+    final prefs = await SharedPreferences.getInstance();
+    final v = prefs.getBool(_keySongDanmakuReadOnly) ?? false;
+    songDanmakuReadOnly.value = v;
+    return v;
+  }
+
+  Future<void> setSongDanmakuReadOnly(bool value) async {
+    songDanmakuReadOnly.value = value;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keySongDanmakuReadOnly, value);
+  }
+
+  /// MD3Music fork v52：歌曲弹幕透明度（0.1~1.0；1.0=不透明）。
+  /// v59：默认改 0.8（用户拍板的口径）。
+  static final ValueNotifier<double> songDanmakuOpacity =
+      ValueNotifier<double>(0.8);
+
+  Future<double> getSongDanmakuOpacity() async {
+    final prefs = await SharedPreferences.getInstance();
+    final v = (prefs.getDouble(_keySongDanmakuOpacity) ?? 0.8).clamp(0.1, 1.0);
+    songDanmakuOpacity.value = v;
+    return v;
+  }
+
+  Future<void> setSongDanmakuOpacity(double value) async {
+    final v = value.clamp(0.1, 1.0);
+    songDanmakuOpacity.value = v;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_keySongDanmakuOpacity, v);
+  }
+
+  /// MD3Music fork v54：MV 弹幕速度倍率（0.5~2.0，1.0=默认时长 10s）与
+  /// 颜色（int ARGB；-1=随机哨值，null=跟随弹幕池；默认随机）。静态镜像
+  /// 同歌曲弹幕组模式。
+  static final ValueNotifier<double> mvDanmakuSpeed =
+      ValueNotifier<double>(1.0);
+
+  static final ValueNotifier<int?> mvDanmakuColor =
+      ValueNotifier<int?>(-1);
+
+  Future<double> getMvDanmakuSpeed() async {
+    final prefs = await SharedPreferences.getInstance();
+    final v = (prefs.getDouble(_keyMvDanmakuSpeed) ?? 1.0).clamp(0.5, 2.0);
+    mvDanmakuSpeed.value = v;
+    return v;
+  }
+
+  Future<void> setMvDanmakuSpeed(double value) async {
+    final v = value.clamp(0.5, 2.0);
+    mvDanmakuSpeed.value = v;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_keyMvDanmakuSpeed, v);
+  }
+
+  Future<int?> getMvDanmakuColor() async {
+    final prefs = await SharedPreferences.getInstance();
+    final hasColor = prefs.containsKey(_keyMvDanmakuColor);
+    final v = hasColor ? prefs.getInt(_keyMvDanmakuColor) : -1;
+    mvDanmakuColor.value = v;
+    return v;
+  }
+
+  Future<void> setMvDanmakuColor(int? value) async {
+    mvDanmakuColor.value = value;
+    final prefs = await SharedPreferences.getInstance();
+    if (value == null) {
+      await prefs.remove(_keyMvDanmakuColor);
+    } else {
+      await prefs.setInt(_keyMvDanmakuColor, value);
+    }
   }
 
   /// 「听歌数据云同步」总开关，默认开启。
@@ -2018,6 +2155,16 @@ class SettingsRepository {
   Future<void> setStartupAutoPlayOpenPage(bool value) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_keyStartupAutoPlayOpenPage, value);
+  }
+
+  Future<int> getIdleKeepaliveStopMinutes() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt(_keyIdleKeepaliveStopMinutes) ?? 10;
+  }
+
+  Future<void> setIdleKeepaliveStopMinutes(int minutes) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_keyIdleKeepaliveStopMinutes, minutes);
   }
 
   // ===== 本地音乐评论区 =====

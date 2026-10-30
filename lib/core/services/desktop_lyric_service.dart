@@ -549,6 +549,7 @@ class DesktopLyricService {
     };
     MediaNotificationService.onScreenStateChanged = (on) {
       _screenOn = on;
+      _syncNativeSyncProbeInterval();
       if (!on && !_lockScreenLyricEnabled) {
         // 熄屏且未开锁屏歌词：停表前先清掉预测调度，否则它们仍会到点唤醒
         _cancelLineTimer();
@@ -842,11 +843,24 @@ class DesktopLyricService {
   // 该方法（如 Windows 某些宿主）时入口抛 MissingPluginException 被
   // 吞掉，探测退化为空操作。
   Timer? _nativeSyncProbe;
+  int _nativeSyncProbeIntervalSeconds = 5;
   DateTime? _lastDisabledAt;
 
   void _startNativeSyncProbe() {
-    _nativeSyncProbe ??= Timer.periodic(
-      const Duration(seconds: 5),
+    _syncNativeSyncProbeInterval();
+  }
+
+  void _syncNativeSyncProbeInterval([bool? playing]) {
+    final seconds = (playing ?? _player?.isPlaying ?? false) || _screenOn
+        ? 5
+        : 30;
+    if (_nativeSyncProbe != null && seconds == _nativeSyncProbeIntervalSeconds) {
+      return;
+    }
+    _nativeSyncProbe?.cancel();
+    _nativeSyncProbeIntervalSeconds = seconds;
+    _nativeSyncProbe = Timer.periodic(
+      Duration(seconds: seconds),
       (_) => _probeNativeWindow(),
     );
   }
@@ -1501,6 +1515,7 @@ class DesktopLyricService {
   }
 
   Future<void> _pushPlaying(bool playing) async {
+    _syncNativeSyncProbeInterval(playing);
     // 同 _pushProgress：仅悬浮窗开启时推送。
     // 推送成功才更新基线：失败时基线保持旧值，让 tick 自愈机制
     // 在下个周期重试（否则失败后永远不再推送，暂停冻结失效）。

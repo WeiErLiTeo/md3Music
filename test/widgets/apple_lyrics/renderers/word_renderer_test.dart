@@ -839,6 +839,173 @@ void main() {
           reason: '逐字符 sweep 路径也应 drawRect 贴 4 停渐变');
     });
   });
+
+  // ==================== 辉光颜色与剖面 ====================
+  group('辉光跟随动态颜色 + 三层剖面（方块字贴合笔画）', () {
+    test('辉光上色 = 当前文字色（不再恒白）', () {
+      final renderer = WordRenderer();
+      // 深色背景下的动态混色结果（如 30% 封面色混出来的浅蓝）
+      final filter = renderer.debugGlowTintForTest(0x33, 0x66, 0xCC, 0.8);
+      expect(
+        filter,
+        equals(
+          ColorFilter.mode(
+            const Color.fromRGBO(0x33, 0x66, 0xCC, 0.8),
+            BlendMode.srcIn,
+          ),
+        ),
+        reason: '辉光必须用当前文字色（含动态取色比例），不能用白色矩阵',
+      );
+    });
+
+    test('辉光强度仍只由 alpha 控制：同色不同 alpha 是两个 filter', () {
+      final renderer = WordRenderer();
+      expect(
+        renderer.debugGlowTintForTest(0x11, 0x22, 0x33, 0.2),
+        isNot(equals(renderer.debugGlowTintForTest(0x11, 0x22, 0x33, 0.9))),
+      );
+    });
+
+    test('辉光强度倍数只乘 alpha、不改剖面半径', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final prefs = LyricPreferences.instance;
+      addTearDown(() => prefs.reset());
+      final renderer = WordRenderer();
+      final sigmasBefore = WordRenderer.glowSigmaProfileEmForTest;
+
+      // 默认 1.0 = 历史行为（只有常规叠加层，无追加层）
+      expect(prefs.glowIntensity, equals(1.0));
+      var a = renderer.debugGlowDrawAlphaForTest(0.5);
+      expect(a.base, closeTo(0.5, 1e-9));
+      expect(a.extra, equals(0.0));
+
+      // 0.5 倍 → 亮度减半
+      await prefs.setGlowIntensity(0.5);
+      a = renderer.debugGlowDrawAlphaForTest(0.5);
+      expect(a.base, closeTo(0.25, 1e-9));
+      expect(a.extra, equals(0.0));
+
+      // 2.0 倍 → 峰值处常规层饱和 1.0，超出部分走加法叠加
+      await prefs.setGlowIntensity(2.0);
+      a = renderer.debugGlowDrawAlphaForTest(0.6);
+      expect(a.base, equals(1.0));
+      expect(a.extra, closeTo(0.2, 1e-9));
+      a = renderer.debugGlowDrawAlphaForTest(0.2);
+      expect(a.base, closeTo(0.4, 1e-9));
+      expect(a.extra, equals(0.0));
+
+      // 强度上限下最亮处 = 常规 1.0 + 加法 1.0
+      a = renderer.debugGlowDrawAlphaForTest(1.0);
+      expect(a.base, equals(1.0));
+      expect(a.extra, equals(1.0));
+
+      // 剖面半径不随强度变化（贴笔画的光形稳定）
+      expect(WordRenderer.glowSigmaProfileEmForTest, equals(sigmasBefore));
+    });
+
+    test('多层剖面由内到外递增，最内层必须紧到不糊满字怀', () {
+      final sigmas = WordRenderer.glowSigmaProfileEmForTest;
+      expect(sigmas.length, greaterThanOrEqualTo(2));
+      // 汉字字怀约 0.15em 宽。光从笔画两侧各向内扩 sigma，两侧相加必须
+      // 明显小于字怀宽度，空腔才不会被填满 → 最内层上限取 0.08em
+      // （0.08×2=0.16 已接近字怀宽度，是留了余量的上限；实测采用 0.07em，
+      // 再大就会沿笔画出现亮暗亮，见 profile 测试的字怀内侧断言）。
+      expect(sigmas.first, lessThanOrEqualTo(0.08));
+      for (int i = 1; i < sigmas.length; i++) {
+        expect(sigmas[i], greaterThan(sigmas[i - 1]));
+      }
+      // 最外层不应再回到旧实现那种 0.24em 以上的糊块
+      expect(sigmas.last, lessThanOrEqualTo(0.3));
+    });
+
+    test('权重由内到外递减（最内层最亮）', () {
+      final weights = WordRenderer.glowWeightProfileForTest;
+      expect(weights.length, greaterThanOrEqualTo(2));
+      for (int i = 1; i < weights.length; i++) {
+        expect(weights[i], lessThan(weights[i - 1]));
+      }
+      // 最内层必须占主导，否则观感退回"一层柔光糊块"
+      expect(weights.first, greaterThan(0.6));
+    });
+
+    test('精灵外扩按最外层 3σ（与绘制侧同口径，避免光晕被裁切）', () {
+      final renderer = WordRenderer();
+      final sigmas = WordRenderer.glowSigmaProfileEmForTest;
+      const fontSize = 40.0;
+      expect(
+        renderer.debugGlowSpritePadForTest(fontSize),
+        closeTo(sigmas.last * fontSize * 3, 1e-9),
+      );
+    });
+
+    testWidgets('辉光精灵可正常烘焙：尺寸按最外层 3σ 外扩', (tester) async {
+      final renderer = WordRenderer();
+      ui.Image? image;
+      await tester.runAsync(() async {
+        image = await renderer.debugRenderGlowSpriteForTest(
+          text: '日',
+          fontSize: 40,
+          rowHeight: 1.4,
+        );
+      });
+      expect(image, isNotNull, reason: '多层辉光剖面必须能烘焙成功');
+      final sigmas = WordRenderer.glowSigmaProfileEmForTest;
+      final pad = sigmas.last * 40 * 3;
+      // 精灵按超采样倍数烘焙：尺寸 = (行盒 + 上下 pad) × 倍数
+      final int ss = WordRenderer.glowSupersampleForTest;
+      expect(image!.height, closeTo((40 * 1.4 + pad * 2).ceil() * ss, 2));
+      expect(image!.width, greaterThan((pad * 2).ceil() * ss));
+      image!.dispose();
+    });
+
+    testWidgets('拖动混色比例（文字色逐帧变化）不得重烘焙辉光精灵', (tester) async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      await LyricPreferences.instance.setUseGlowEffect(true);
+      addTearDown(() => LyricPreferences.instance.reset());
+
+      // 单字、时长 2000ms（>= 默认固定阈值 1000ms）→ 触发辉光
+      const glowLine = LyricLine(
+        startTime: 0,
+        duration: 4000,
+        text: '华',
+        words: [LyricWord(startTime: 0, duration: 2000, text: '华')],
+      );
+      final renderer = WordRenderer();
+      renderer.emphasizeEffect = EmphasizeEffect();
+      renderer.setLineState(
+        isActive: true,
+        scale: LyricLayout.activeScale,
+        activeColorValue: 0xFF3366CC,
+      );
+      renderer.paintLine(makeCanvas(), ui.Offset.zero, glowLine, 24);
+      for (int t = 0; t <= 400; t += 16) {
+        renderer.tick(0.016, t, isPlaying: true);
+        renderer.paintLine(makeCanvas(), ui.Offset.zero, glowLine, 24);
+      }
+      // toImage 走 native 回调，多等几轮事件循环让精灵落地
+      for (int i = 0; i < 40; i++) {
+        await tester.pump(const Duration(milliseconds: 5));
+      }
+      final first = renderer.debugGlowSpriteForTest(0, 0);
+      expect(first, isNotNull, reason: '强调字应烘焙出辉光精灵');
+
+      // 模拟拖动「动态颜色混色比例」：文字色每帧都变
+      for (int i = 1; i <= 5; i++) {
+        renderer.setLineState(
+          isActive: true,
+          scale: LyricLayout.activeScale,
+          activeColorValue: 0xFF000000 | (0x11 * i << 16) | (0x22 * i << 8) | 0x33,
+        );
+        renderer.paintLine(makeCanvas(), ui.Offset.zero, glowLine, 24);
+        await tester.pump(const Duration(milliseconds: 5));
+      }
+      expect(
+        renderer.debugGlowSpriteForTest(0, 0),
+        same(first),
+        reason: '颜色由绘制期 ColorFilter 上色，改色不得触发 toImage 重烘焙（否则拖动必掉帧）',
+      );
+    });
+  });
 }
 
 /// 记录 `saveLayer` / `drawRect` 调用（其余方法 noSuchMethod 兜底）的探测画布。

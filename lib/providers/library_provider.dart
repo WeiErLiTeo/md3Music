@@ -268,6 +268,12 @@ class LibraryProvider extends ChangeNotifier {
 
     await _repository.addExcludedFolder(path);
     _excludedFolders = await _repository.getExcludedFolders();
+    _indexedSongs = _repository.filterSongs(
+      _indexedSongs,
+      excludedFolders: _excludedFolders,
+    );
+    await _repository.saveSongs(_indexedSongs);
+    _rebuildCategories();
     notifyListeners();
     return true;
   }

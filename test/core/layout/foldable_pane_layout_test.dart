@@ -3,6 +3,7 @@ import 'dart:ui' as ui;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:md3music/core/layout/adaptive_navigator.dart';
+import 'package:md3music/core/layout/responsive_layout.dart';
 
 /// 折叠屏展开（竖屏）下双栏几何的 widget 回归（issue #138）。
 ///
@@ -42,6 +43,12 @@ Rect _masterRect(WidgetTester tester) =>
     tester.getRect(find.byKey(const Key('fold-master')));
 
 void main() {
+  // 双栏开关三端通用后显式开启：本组用例断言的是双栏几何对折痕的避让。
+  setUp(() {
+    kWindowsTwoPaneEnabled.value = true;
+  });
+  tearDown(() => kWindowsTwoPaneEnabled.value = false);
+
   testWidgets('竖屏展开（fold + postureFlat）：内容满宽，不再被折痕挤到一侧', (tester) async {
     await _pumpPane(tester, [_fold(ui.DisplayFeatureState.postureFlat)]);
     final master = _masterRect(tester);

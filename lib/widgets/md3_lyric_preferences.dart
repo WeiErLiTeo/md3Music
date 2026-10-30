@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../core/services/windows_default_font.dart';
 import 'apple_lyrics/layout/lyric_layout.dart';
 
 /// MD3 风格播放页歌词字体来源枚举。
@@ -121,18 +122,27 @@ class Md3LyricPreferences extends ChangeNotifier {
   String? get customFontPath => _customFontPath;
   Color? get customTextColor => _customTextColor;
 
+  /// 自定义字体（[Md3LyricFontSource.custom]）是否加载成功。
+  ///
+  /// 面板提示「已应用自定义字体 / 字体加载失败」必须用它：
+  /// [effectiveFontFamily] 在 Windows 的 system 档也非 null（内置思源黑体），
+  /// 用它判断会把「回落到默认字体」误报成「自定义字体已生效」。
+  bool get customFontLoaded => _loadedCustomFontFamily != null;
+
   /// 当前生效的 fontFamily（传给 TextPainter 的 TextStyle）：
-  /// - [Md3LyricFontSource.system]：返回 null（让 Flutter 走系统字体链）
-  /// - [Md3LyricFontSource.bundled]：已废弃（内置 SimHei 已移除），等同 system 返回 null
+  /// - [Md3LyricFontSource.system]：Windows 返回内置思源黑体（与全局 UI 同族，
+  ///   否则「还原所有设置」后歌词会掉到引擎兜底字形）；其他平台返回 null，
+  ///   让 Flutter 走系统字体链
+  /// - [Md3LyricFontSource.bundled]：已废弃（内置 SimHei 已移除），等同 system
   /// - [Md3LyricFontSource.custom]：返回 [_loadedCustomFontFamily]，
-  ///   加载失败时为 null（实际降级为 system 行为）
+  ///   加载失败时降级为对应平台默认字体（Windows = 内置思源黑体）
   String? get effectiveFontFamily {
     switch (_fontSource) {
       case Md3LyricFontSource.system:
       case Md3LyricFontSource.bundled:
-        return null;
+        return WindowsDefaultFont.loadedFamily;
       case Md3LyricFontSource.custom:
-        return _loadedCustomFontFamily;
+        return _loadedCustomFontFamily ?? WindowsDefaultFont.loadedFamily;
     }
   }
 

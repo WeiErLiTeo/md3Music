@@ -47,6 +47,7 @@ class CarModeProvider extends ChangeNotifier {
   bool _autoScreenTouched = false;
   bool _ratioTouched = false;
   bool _sideTouched = false;
+  bool _dockClearanceTouched = false;
 
   /// 是否已有一次通知被推迟到微任务队列（见 [_notifySafely]）。
   bool _notifyScheduled = false;
@@ -74,6 +75,7 @@ class CarModeProvider extends ChangeNotifier {
     final clamped = value.isFinite
         ? value.clamp(0.0, kCarModeDockClearanceMax)
         : kCarModeBottomDockClearance;
+    _dockClearanceTouched = true;
     final changed = clamped != _dockClearanceDp;
     // Windows 滑块先以 persist:false 预览，松手传入同值也必须写盘。
     if (!changed && !(Platform.isWindows && persist)) return;
@@ -167,11 +169,35 @@ class CarModeProvider extends ChangeNotifier {
       if (!_autoScreenTouched) _autoScreenEnabled = autoScreen;
       if (!_ratioTouched) _panelRatio = ratio;
       if (!_sideTouched) _panelSide = side;
-      _dockClearanceDp = clearance;
+      // v34：与上面四个 touched 门同模型——载入窗口里用户拖过 dock 避让
+      // 滑条时，不得用磁盘旧值盖回内存新值（磁盘已正确，错的是盖回）。
+      if (!_dockClearanceTouched) _dockClearanceDp = clearance;
       _notifySafely();
     } catch (_) {
       // 读取失败保持默认（关闭），不影响启动。
+    } finally {
+      if (!_loadGate.isCompleted) _loadGate.complete();
     }
+  }
+
+  /// 偏好加载就绪门：`_load()` 完成（成功或失败）后落位。启动早期的状态判定
+  /// （车机卡片深链分流等）应 `await ready` 再读 [active]，否则 prefs 未回位
+  /// 时 `_enabled`/`_autoScreenEnabled` 都是构造默认 false，会把车机场景
+  /// 误分流到非车机分支。
+  final Completer<void> _loadGate = Completer<void>();
+
+  Future<void> get ready => _loadGate.future;
+
+  /// 首帧屏幕判定注入门：`updateScreenMetrics` 第一次被 UI 层（车机面板
+  /// build）调用后落位。深链分流读 [active] 前应同时等 [ready] 与本门——
+  /// autoScreen 档的 [screenIsCar] 只在首帧后有真值。
+  /// v33：两处都是懒建——上一版只读判 null 导致整道门从未完成（死门被
+  /// 三路代理坐实），这里补上懒建配对：任何一方先到都能把门挂起来。
+  Completer<void>? _firstMetricsGate;
+
+  Future<void> get metricsReady {
+    final gate = _firstMetricsGate ??= Completer<void>();
+    return gate.future;
   }
 
   /// UI 层在 build 阶段按 MediaQuery 尺寸计算并注入两个屏幕判定：
@@ -181,6 +207,10 @@ class CarModeProvider extends ChangeNotifier {
     required bool isCar,
     required bool portraitOrSquare,
   }) {
+    // 首帧注入即落门：门由本方或 metricsReady 懒建。哪怕恰好与默认值
+    // 相同走了早退，等待方也不能挂在"真值恰好等于默认"的稀有组合上。
+    final gate = _firstMetricsGate ??= Completer<void>();
+    if (!gate.isCompleted) gate.complete();
     if (_screenIsCar == isCar && _screenPortraitOrSquare == portraitOrSquare) {
       return;
     }

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:md3music/core/layout/adaptive_navigator.dart';
+import 'package:md3music/core/layout/responsive_layout.dart';
 
 /// AdaptiveNav.openDetail 的分派钉子（封面连贯过渡对齐原生 Hero 的地基）：
 ///
@@ -17,6 +18,12 @@ import 'package:md3music/core/layout/adaptive_navigator.dart';
 void main() {
   const phoneSize = Size(400, 800);
   const tabletSize = Size(1280, 853);
+
+  // 双栏开关三端通用后，宽屏双栏用例需显式开启（全局 notifier 初值 false）。
+  setUp(() {
+    kWindowsTwoPaneEnabled.value = true;
+  });
+  tearDown(() => kWindowsTwoPaneEnabled.value = false);
 
   Future<GlobalKey<NavigatorState>> pumpHarness(
     WidgetTester tester, {

@@ -5,10 +5,10 @@
 <img src="assets/images/app_icon.png" width="128" alt="MD3Music 应用图标" />
 
 <p><strong>A modern Material 3 music player built with Flutter &amp; Rust.</strong><br />
-一个以 Material 3 与 Apple Music 风格体验为核心的 Android 音乐客户端。</p>
+支持 Android、Windows 与 Android TV 的 Material 3 / Apple Music 风格音乐播放器。</p>
 
 [![Flutter](https://img.shields.io/badge/Flutter-3.47.0+-02569B?logo=flutter)](https://flutter.dev)
-[![Platform](https://img.shields.io/badge/Platform-Android-green)]()
+[![Platform](https://img.shields.io/badge/Platform-Android%20%7C%20Windows%20%7C%20TV-green)](https://github.com/zzyoxml/md3Music/releases)
 [![License](https://img.shields.io/badge/License-AGPL--3.0-blue)](LICENSE)
 
 <p>
@@ -16,7 +16,7 @@
   <a href="#-功能特性">功能特性</a> ·
   <a href="#-快速开始">构建指南</a> ·
   <a href="MCP_GUIDE.md">AI 代理接入</a> ·
-  <a href="CONTRIBUTING.md">贡献指南</a>
+  <a href="CONTRIBUTING.md">贡献指南</a> ·
 </p>
 
 </div>
@@ -27,7 +27,7 @@
   <img src="img/phone/md3/Screenshot_2026-08-31-23-36-24-517_com.md3music.md3music-edit.png" width="220" alt="MD3Music Material 3 歌词页" />
 </p>
 
-MD3Music 是一款基于酷狗音乐 API 的 Flutter 音乐播放器，内置嵌入式 Rust API 服务器，无需外部服务器即可使用。支持手机/平板自适应、MD3 与 Apple Music 风格播放页、逐字歌词和多种音频输出能力。本项目仅供学习，请勿用于商业用途，详情见[免责声明](DISCLAIMER.md)。
+MD3Music 是一款基于酷狗音乐 API 的 Flutter 音乐播放器，内置嵌入式 Rust API 服务器，无需外部服务器即可使用。支持手机/平板、Windows 桌面、车机与 Android TV，提供 MD3 与 Apple Music 风格播放页、逐字歌词和多种音频输出能力。本项目仅供学习，请勿用于商业用途，详情见[免责声明](DISCLAIMER.md)。
 
 > **版本说明**：V5 之前的所有版本与分支均已废弃并彻底删除，请勿使用过时版本。最新版请前往 [GitHub Releases](https://github.com/zzyoxml/md3Music/releases)。
 >
@@ -61,12 +61,17 @@ MD3Music 是一款基于酷狗音乐 API 的 Flutter 音乐播放器，内置嵌
 ## ✨ 功能特性
 
 - **在线音乐** — 搜索、每日推荐、排行榜、新碟上架、听歌识曲、私人 FM、歌单/专辑/歌手/评论/MV、云盘、听书、场景音乐、频道、刷刷短视频、一起听、刷歌推荐
-- **本地音乐** — 文件夹浏览、内嵌封面与歌词、本地收藏、音质标签、多维度排序、在线歌曲元数据智能匹配
-- **播放体验** — 多音质选择（标准/高质/无损/Hi-Res）、USB 独占输出、均衡器、automix无缝过渡、响度均衡、DLNA 投屏、睡眠定时、倍速、进度记忆、画中画、弹幕显示、动态封面、3D封面、歌曲弹幕
-- **歌词UI** — Apple Music 风格逐字歌词（KRC/LRC），支持翻译/罗马音、辉光、模糊、动态取色，以及桌面/锁屏/蓝牙歌词与 lyricinfo lyricon词幕 SuperLyric flyme歌词 推送协议
+- **本地音乐** — 文件夹浏览、内嵌封面与歌词、本地收藏、音质标签、多维度排序、在线歌曲元数据智能匹配；Android 支持扫描系统授权目录中的 U 盘等外部存储音乐
+- **播放体验** — 多音质选择（标准/高质/无损/Hi-Res）、USB 独占输出、均衡器、AutoMix 无缝过渡、响度均衡、DLNA 投屏、睡眠定时、倍速、进度记忆、画中画
+- **视觉效果** — 动态封面、3D 景深封面、流动背景，歌曲/MV 弹幕支持透明度、速度与颜色设置
+- **歌词显示** — Apple Music 风格逐字歌词（KRC/LRC），支持翻译/罗马音、辉光、模糊、动态取色，以及桌面/锁屏/蓝牙歌词与 lyricinfo lyricon词幕 SuperLyric flyme歌词 推送协议
 - **用户中心** — VIP 三签到、多账号管理、听歌等级/排行/识曲、收藏与播放历史、桌面小组件
-- **个性化** — MD3E/AM 双风格、主题色与动态取色、深色模式、全局背景图、桌面歌词、主页 Tab 自定义
-- **电视端** — 适配电视端遥控器操作，覆盖全场景使用
+- **个性化** — MD3E/AM 双风格、主题色与动态取色、深色模式、自定义壁纸与字体；全局文字及两种播放页歌词颜色独立设置，支持双栏开关（左右各 50%）、悬浮迷你播放器与主页 Tab 管理
+- **设置管理** — 设置项搜索、一键还原默认设置并保留登录状态
+- **Windows 桌面** — 便携版、系统托盘、SMTC 系统媒体控制、桌面歌词、全屏/沉浸式播放页，以及版本检查、镜像下载与便携版更新
+- **车机模式** — 自适应播放面板、左右停靠与底部 dock 避让
+- **电视端** — 遥控器焦点导航、播放/歌词/评论交互及播放队列操作
+- **AI 代理** — 内置 [MCP 接入](MCP_GUIDE.md)，支持搜索、播放控制与歌词查询，提供只读模式及写操作确认；默认关闭，支持 HTTP / stdio 桥接
 
 ***
 
@@ -380,7 +385,7 @@ A: 有。可以直接从 [GitHub Releases](https://github.com/zzyoxml/md3Music/r
 powershell -ExecutionPolicy Bypass -File .\scripts\tasks\windows.ps1
 ```
 
-脚本会构建 Rust 桌面版 `kugou_server.dll`、Flutter Windows 应用并打包 VC++ 运行库，产物为 `build\windows\md3music-windows-<版本>.zip`。解压后运行 `md3music.exe` 即可。Android 专属功能（如 USB 独占输出、主屏小组件）在 Windows 上不可用，属预期。
+脚本会构建 Rust 桌面版 `kugou_server.dll`、Flutter Windows 应用并打包 VC++ 运行库，产物为 `build\windows\md3music-windows-<版本>.zip`。解压后运行 `md3music.exe` 即可。Android 专属功能（如 USB 独占输出、主屏小组件）在 Windows 上不可用，属预期。默认产物不含 3D 封面（`kDepthCoverAvailable` 为 false）；需要时加 `-With3D`，脚本会按固定版本下载 ONNX Runtime 运行时并把深度模型一起打进包里。
 
 **Q: 应用启动后无法搜索或播放音乐？**
 
@@ -403,9 +408,9 @@ A: Rust 的 TLS 依赖（`ring` crate）需要交叉编译为 Android 平台的 
 A: 该开关仅在魅族 Flyme 机型上出现（由设备能力探测决定），其他品牌不显示。
 
 **Q: 切歌提示只能看MV**
-A: 登录过期，请重新登录
+A: 登录过期或者没有登录
 
-***
+<a id="sponsor"></a>
 
 ## 🤝 致谢
 
@@ -450,6 +455,7 @@ A: 登录过期，请重新登录
   <a href="https://github.com/floveey"><img src="https://avatars.githubusercontent.com/u/54261748?v=4&s=80" width="80" height="80" alt="floveey" title="floveey" /></a>
   <a href="https://github.com/nn3456"><img src="https://avatars.githubusercontent.com/u/74135472?v=4&s=80" width="80" height="80" alt="nn3456" title="nn3456" /></a>
   <a href="https://github.com/huaaaajjj"><img src="https://avatars.githubusercontent.com/u/170057899?v=4&s=80" width="80" height="80" alt="huaaaajjj" title="huaaaajjj" /></a>
+  <a href="https://github.com/WeiErLiTeo"><img src="https://avatars.githubusercontent.com/u/222311740?v=4&s=80" width="80" height="80" alt="WeiErLiTeo" title="WeiErLiTeo" /></a>
 </p>
 
 ***

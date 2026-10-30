@@ -121,8 +121,15 @@ class _AudioDecoderCapabilityViewState
       summary = '尚未探测';
     } else if (probeError.isNotEmpty) {
       summary = '探测失败：$probeError';
+    } else if (snap!.hardwareCodecCount == 0) {
+      // 移动平台音频解码普遍不走 MediaCodec 硬件路径（硬解在 DSP/offload
+      // 完成），全软解是常态而非故障。摘要必须给出格式总数并点明原因，
+      // 否则用户会把「硬解 0 个」误读成探测坏了（下方 offload 协商区块
+      // 往往同时显示多项支持，两个数字直接打架）。
+      summary = '探测到 ${snap.formatCount} 种编码 · 均为软解'
+          '（音频硬解通常走 DSP，不经 MediaCodec）';
     } else {
-      summary = '硬解解码器 ${snap!.hardwareCodecCount} 个 · '
+      summary = '硬解解码器 ${snap.hardwareCodecCount} 个 · '
           '支持编码 ${snap.supportedFormatCount} 种 · '
           '探测耗时 ${snap.probeCostMs} ms';
     }
@@ -343,7 +350,15 @@ class _AudioDecoderCapabilityViewState
         for (final DecoderBitDepth depth in DecoderBitDepth.values)
           _buildBitDepthBadge(theme, colorScheme, depth, format.bitDepths[depth]),
         if (!bitDepthProbed)
-          Text('未实测（configure 预算内跳过）', style: hintStyle),
+          // 文案区分两种「未实测」：该格式根本没有硬件解码器可试配（全软解
+          // 设备的常态，位深试配只对硬解条目跑）；真的有硬解但被预算跳过。
+          // 两者都显示会与「均为软解」的 header 语义重复，统一收敛为一句。
+          Text(
+            format.hasHardware
+                ? '未实测（configure 预算内跳过）'
+                : '未实测（无硬件解码器，不做试配）',
+            style: hintStyle,
+          ),
       ],
     );
   }

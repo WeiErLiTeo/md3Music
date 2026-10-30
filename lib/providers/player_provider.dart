@@ -160,6 +160,9 @@ String? safePlaybackErrorMessage(String? error) {
 bool kMiniPlayerSkipNextEntrance = false;
 
 class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
+  Timer? _idleKeepaliveStopTimer;
+  int _idleKeepaliveStopTimerGeneration = 0;
+  bool _idleKeepaliveEligible = false;
   static int _nextDiagnosticSessionId = 0;
   final String _diagnosticSessionId = (++_nextDiagnosticSessionId)
       .toRadixString(36);
@@ -615,6 +618,69 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
   bool get isPlaybackNotReady => _playbackNotReady;
   bool _playbackNotReady = false;
 
+  /// 最近一次平台上报的处理态（只用于区分「数据没到位」与「播完/停止」）。
+  just_audio.ProcessingState _processingState = just_audio.ProcessingState.idle;
+
+  /// 音频流正在为出声准备数据：解析地址 / 装载 / 缓冲。
+  ///
+  /// 与 [isPlaybackNotReady] 的区别：不含 idle（停止 / 未装载）与 completed（播完），
+  /// 因此播放页的「缓冲中」提示**不需要**再用 `isPlaying` 兜底 —— 拖动进度条后
+  /// 播放器是被我们主动 `pauseForSeek()` 暂停的，但为落点重新缓冲照样在跑，
+  /// 用 isPlaying 门控会把整段缓冲吞掉，表现成「不显示 / 只闪一下」。
+  ///
+  /// 保留 [_isResolvingUrl] 一项：地址解析窗口里平台处理态往往还是 idle，
+  /// 而这段同样是「数据没到位」（切歌装载/换源），提示口径要一致。
+  bool get isStreamBuffering =>
+      _isResolvingUrl ||
+      _processingState == just_audio.ProcessingState.loading ||
+      _processingState == just_audio.ProcessingState.buffering;
+
+  /// 起播延迟判定窗口：播放/恢复命令下发后，平台在这个时长内还没真正开始播，
+  /// 才当作「等待起播」。取 350ms —— 正常恢复的位置推进通常在 200ms 内到达，
+  /// 短于此不提示，避免每次恢复播放都闪一下「缓冲中」。
+  static const Duration _playStartGrace = Duration(milliseconds: 350);
+
+  Timer? _playStartGraceTimer;
+
+  /// 已下发播放命令、尚未看到平台进入「正在播」。
+  bool _playStartPending = false;
+
+  /// 起播等待已超过 [_playStartGrace]。
+  bool _slowPlayStart = false;
+
+  /// 已下发播放命令、但平台迟迟没有真正出声（起播 / 定位后的起步延迟）。
+  ///
+  /// 为什么需要它：[isStreamBuffering] 只认平台的处理态，而 **Windows/WinRT 在
+  /// seek 与「暂停后恢复」这段起步延迟里一直是 ready**（真机日志实测：松手到
+  /// 出声之间 1.3s 只有 ready，没有任何 buffering 事件），因此单靠处理态在桌面端
+  /// 永远看不到「缓冲中」。这里改用「意图已下发、平台还没播」这一可观测的窗口来补，
+  /// 出声瞬间 `playingStream` 翻 true 即收掉。
+  ///
+  /// 与 [isAwaitingPlaybackProgress] 的区别：那条要求 `_isPlaying` 为真且位置真的
+  /// 推进过；起步延迟期间平台恰恰报的是「未在播」，用它永远为假。
+  bool get isWaitingForAudioStart => _slowPlayStart;
+
+  void _armPlayStartWatch() {
+    _playStartGraceTimer?.cancel();
+    _playStartPending = true;
+    _slowPlayStart = false;
+    _playStartGraceTimer = Timer(_playStartGrace, () {
+      _playStartGraceTimer = null;
+      if (_isDisposed || !_playStartPending) return;
+      _slowPlayStart = true;
+      notifyListeners();
+    });
+  }
+
+  void _clearPlayStartWatch({bool notify = false}) {
+    _playStartGraceTimer?.cancel();
+    _playStartGraceTimer = null;
+    _playStartPending = false;
+    if (!_slowPlayStart) return;
+    _slowPlayStart = false;
+    if (notify && !_isDisposed) notifyListeners();
+  }
+
   /// audio_service 实例（歌曲信息页读取源格式用）。
   dynamic get audioService => _audioService;
 
@@ -623,6 +689,17 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
   /// 现在高频更新只通知 [positionNotifier]，进度条/歌词等高频 UI 订阅它，
   /// 其它 widget 仅在 currentSong/isPlaying/duration 等低频字段变化时重建。
   final ValueNotifier<Duration> positionNotifier = ValueNotifier(Duration.zero);
+
+  /// 交叉淡化（播放页提示文案里的「音频过渡」）是否正在进行。
+  ///
+  /// 数据源是 `AudioService.crossfadingStream`：淡入斜坡开始为 true，淡完或
+  /// `abortCrossfade`（暂停 / 拖动 / 切歌）为 false，因此「过渡」的起止口径
+  /// 只由音频层定义，本类不另行推断。播放页把它并入进度条的 Listenable，
+  /// 据此在时间行中央显示「音频过渡中」胶囊（见 `widgets/playback_hint_pills.dart`）。
+  ///
+  /// 用独立 [ValueNotifier] 而不是 notifyListeners：一次淡化只变两下，
+  /// 不该让整页 `Consumer<PlayerProvider>` 跟着重建。
+  final ValueNotifier<bool> crossfadeActiveNotifier = ValueNotifier<bool>(false);
 
   /// 换源装载期间的「位置回退闸门」（见 [_updatePosition]、[PositionRewindGate]）。
   final PositionRewindGate _positionRewindGate = PositionRewindGate();
@@ -655,6 +732,10 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     _diagnosticRequestClock = Stopwatch()..start();
     _isResolvingUrl = false;
     _manualRetryRequest = null;
+    // 新请求＝新的播放意图：开始盯「平台什么时候真的开始播」（起步延迟提示）。
+    // 平台此刻已经在播（切歌时旧歌还在响）就不盯：那一路该由 loading/buffering
+    // 处理态负责，否则切歌的瞬间会闪一下无意义的「缓冲中」。
+    if (_audioService?.player.playing != true) _armPlayStartWatch();
     _logPlaybackEvent('request.issued', request: request);
     return request;
   }
@@ -680,6 +761,8 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     _playbackProgressGate.reset();
     _isResolvingUrl = false;
     _manualRetryRequest = null;
+    // 请求已作废（用户暂停 / 停止 / 拖条起手暂停）：不再等起播。
+    _clearPlayStartWatch(notify: true);
     return invalidation;
   }
 
@@ -952,6 +1035,9 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
   /// 播放器错误订阅（进诊断日志，App 生命周期级）。
   StreamSubscription<dynamic>? _playerErrorSubscription;
   StreamSubscription<double>? _speedSubscription;
+
+  /// 交叉淡化状态订阅（驱动 [crossfadeActiveNotifier]）。
+  StreamSubscription<bool>? _crossfadeSubscription;
 
   /// 输出两层开关（USB 独占 / 系统 Direct PCM）变化监听。
   VoidCallback? _outputModeListener;
@@ -2216,6 +2302,9 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
         // true），必须能看到事件本体才能定位来源。
         debugPrint('[PlayerState] playingStream → $isPlaying');
         _isPlaying = isPlaying;
+        // 平台真的开始播了：收掉「等待起播」提示（本监听随后就会 notifyListeners）。
+        if (isPlaying) _clearPlayStartWatch();
+        _syncIdleKeepaliveStopTimer();
         _updatePlaybackDiagnosticSampling(isPlaying);
         WakelockService.instance.setSongPlaying(isPlaying);
         // CSCC 时长计时：暂停时停表、恢复时续表（墙钟累计，天然扣除暂停）。
@@ -2350,9 +2439,20 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
           // 播放流未就绪跟踪：loading/buffering 期间 position 冻结且不可靠，
           // 歌词逐字动画冻结（语义对齐暂停）。processingState 变化必发
           // playerState 事件（→ready 无残留），无需在切歌路径手动重置。
+          final bool wasStreamBuffering =
+              _processingState == just_audio.ProcessingState.loading ||
+              _processingState == just_audio.ProcessingState.buffering;
+          _processingState = playerState.processingState;
+          final bool isStreamBufferingNow =
+              _processingState == just_audio.ProcessingState.loading ||
+              _processingState == just_audio.ProcessingState.buffering;
           final bool notReady =
               playerState.processingState != just_audio.ProcessingState.ready;
-          if (notReady != _playbackNotReady) {
+          // 「缓冲中」提示要区分 loading/buffering 与 idle/completed（后两者也算
+          // notReady）；进出装载/缓冲时必须各通知一次，否则提示会停在旧状态。
+          // loading↔buffering 两者提示文案相同，不必为此再通知。
+          if (notReady != _playbackNotReady ||
+              isStreamBufferingNow != wasStreamBuffering) {
             _playbackNotReady = notReady;
             notifyListeners();
           }
@@ -2427,6 +2527,18 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
         _speed = speed;
         notifyListeners();
       }, onError: (e) {});
+
+      // 交叉淡化状态：播放页「音频过渡中」胶囊的唯一数据源。
+      // 单独 try/catch —— `_audioService` 是 dynamic，测试替身可能没有该 getter，
+      // 抛出的 NoSuchMethodError 不能连累上面已建好的订阅。
+      try {
+        _crossfadeSubscription = _audioService.crossfadingStream.listen((active) {
+          if (_isDisposed) return;
+          crossfadeActiveNotifier.value = active;
+        }, onError: (e) {});
+      } catch (_) {
+        // 替身音频服务没有 crossfadingStream：视为永不淡化。
+      }
     } catch (e) {}
     _logPlaybackEvent(
       'engine.ready',
@@ -3903,10 +4015,15 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     }
     final request = playbackRequest ?? _issuePlaybackRequest();
     final apiClient = KugouApiClient();
-    if (!apiClient.isLoggedIn) {
+    // 先等凭证加载完成再判定登录态，避免启动窗口期误弹登录提示
+    if (!await apiClient.isLoggedInWhenReady()) {
+      // v28d：await 期间的顶替再起播会让本续延失效，直接 write 旧歌会覆盖
+      // 持久化 playlist（_savePlaylistIfChanged 冷启动恢复错歌）——比对代次。
+      if (!_isPlaybackRequestCurrent(request)) return;
       onLoginRequired?.call();
       return;
     }
+    if (!_isPlaybackRequestCurrent(request)) return;
     // 一起听房主：房间歌单外的曲目交由守卫拦截（本地队列播放不走此入口）
     if (onRoomOwnerInterceptPlayback?.call(song) ?? false) return;
     _resetAbnormalRetry();
@@ -4186,11 +4303,17 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       if (!_isPlaybackRequestCurrent(playbackRequest)) return;
     }
 
-    // 缓存未命中且未登录时才提示登录
-    if (cachedPath == null && !KugouApiClient().isLoggedIn) {
-      onLoginRequired?.call();
+    // 缓存未命中且未登录时才提示登录（先等凭证加载完成，避免启动期误判）
+    if (cachedPath == null && !await KugouApiClient().isLoggedInWhenReady()) {
+      // v31：等待期被顶替则静默作罢——登录提示只属于仍在途的请求，防误弹。
+      if (_isPlaybackRequestCurrent(playbackRequest)) {
+        onLoginRequired?.call();
+      }
       return;
     }
+    // v28d：await 期间被顶替则作罢——_loadPlaylist 会全表替换并落盘，
+    // 旧列表续延跑赢就是持久化污染。
+    if (!_isPlaybackRequestCurrent(playbackRequest)) return;
 
     _loadPlaylist(songs, startIndex);
     _currentSong = _playlist[_currentIndex];
@@ -4392,11 +4515,18 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     // 一起听听众：云盘列表同样是「列表点击」入口
     final guestGate = _roomGuestPlayGate(songs[startIndex]);
     if (guestGate != null && !await guestGate) return;
-    if (!KugouApiClient().isLoggedIn) {
-      onLoginRequired?.call();
+    // v28d：先领代次再 await 登录态——旧"先 await 后领"会让本续延在凭证
+    // 就绪后才发出新代次，反而作废用户在等待期里的更新起播，旧云盘列表赢。
+    final playbackRequest = _issuePlaybackRequest();
+    if (!await KugouApiClient().isLoggedInWhenReady()) {
+      // v31：等待期被顶替则静默作罢，防误弹（同 playOnlinePlaylist 口径）。
+      if (_isPlaybackRequestCurrent(playbackRequest)) {
+        onLoginRequired?.call();
+      }
       return;
     }
-    final playbackRequest = _issuePlaybackRequest();
+    // 等待期被顶替则作罢，不入队不落盘。
+    if (!_isPlaybackRequestCurrent(playbackRequest)) return;
 
     _loadPlaylist(songs, startIndex);
     _currentSong = _playlist[_currentIndex];
@@ -5345,12 +5475,14 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
           prefetchedQuality != _audioQuality.value;
       if (song.url == null || cachedUrlStale) {
         // URL 不存在，需要解析
-        if (!KugouApiClient().isLoggedIn) {
+        if (!await KugouApiClient().isLoggedInWhenReady()) {
           // 仅用户主动播放（play=true）才提示登录。play=false 是启动恢复等
           // 静默路径：启动早期登录 token 可能尚未从存储加载完成、本地服务器
           // 也未必就绪，此刻误判未登录会误弹「请先登录」。改为静默跳过，
           // 待用户点击播放时用已就绪的状态重新校验（届时仍会正确判断）。
-          if (play) {
+          // v31：登录提示只属于仍在途的请求——等待期被顶替则静默作罢；
+          // play=false 路径与代次由上层复审，不需要任何提示。
+          if (play && _isPlaybackRequestCurrent(request)) {
             onLoginRequired?.call();
           }
           return false;
@@ -7182,7 +7314,9 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
             if (filePath.startsWith('file://')) {
               filePath = Uri.parse(filePath).toFilePath();
             }
-            final embedded = await LocalLyricLoader.loadForAudioAsync(filePath);
+            final embedded = song.localLyrics?.isNotEmpty == true
+                ? song.localLyrics
+                : await LocalLyricLoader.loadForAudioAsync(filePath);
             if (embedded != null && embedded.isNotEmpty) {
               lines = await parseLyricOffMainThread(embedded);
             }
@@ -7286,6 +7420,15 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
         state == AppLifecycleState.inactive ||
         state == AppLifecycleState.detached) {
       _isAppBackgrounded = true;
+      _idleKeepaliveEligible =
+          state == AppLifecycleState.paused;
+      if (_idleKeepaliveEligible) {
+        _syncIdleKeepaliveStopTimer();
+      } else {
+        _idleKeepaliveStopTimer?.cancel();
+        _idleKeepaliveStopTimer = null;
+        _idleKeepaliveStopTimerGeneration++;
+      }
       // App 进入后台或即将被杀死，立即保存播放状态
       _saveState();
       _saveDebounce?.cancel();
@@ -7301,9 +7444,37 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     } else if (state == AppLifecycleState.resumed) {
       // 回到前台：停止兜底定时器，立即重试一次失败的当前歌曲
       _isAppBackgrounded = false;
+      _idleKeepaliveEligible = false;
+      _idleKeepaliveStopTimer?.cancel();
+      _idleKeepaliveStopTimer = null;
+      _idleKeepaliveStopTimerGeneration++;
       _stopRetryFailedTimer();
       _retryFailedPlayback();
     }
+  }
+
+  Future<void> _syncIdleKeepaliveStopTimer() async {
+    final generation = ++_idleKeepaliveStopTimerGeneration;
+    _idleKeepaliveStopTimer?.cancel();
+    _idleKeepaliveStopTimer = null;
+    if (_isPlaying || !_idleKeepaliveEligible || _isDisposed) return;
+    final prefs = await SharedPreferences.getInstance();
+    final minutes = prefs.getInt('settings_idle_keepalive_stop_minutes') ?? 10;
+    if (generation != _idleKeepaliveStopTimerGeneration ||
+        minutes <= 0 || _isPlaying || !_idleKeepaliveEligible || _isDisposed) {
+      return;
+    }
+    _idleKeepaliveStopTimer = Timer(Duration(minutes: minutes), () async {
+      if (generation != _idleKeepaliveStopTimerGeneration ||
+          _isPlaying || !_idleKeepaliveEligible || _isDisposed) {
+        return;
+      }
+      await MediaNotificationService.hideNotification();
+    });
+  }
+
+  void refreshIdleKeepaliveStopTimer() {
+    _syncIdleKeepaliveStopTimer();
   }
 
   @override
@@ -7317,6 +7488,9 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     if (_isDisposed) return;
     _logPlaybackResourceSnapshot();
     _isDisposed = true;
+    _idleKeepaliveStopTimer?.cancel();
+    _idleKeepaliveStopTimer = null;
+    _idleKeepaliveStopTimerGeneration++;
     _playbackDiagnosticSampleTimer?.cancel();
     _playbackDiagnosticSampleTimer = null;
     _invalidatePlaybackRequest(
@@ -7350,10 +7524,15 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     _sequenceStateSubscription?.cancel();
     _playerErrorSubscription?.cancel();
     _speedSubscription?.cancel();
+    _crossfadeSubscription?.cancel();
+    _crossfadeSubscription = null;
+    _playStartGraceTimer?.cancel();
+    _playStartGraceTimer = null;
     _sleepTimerTicker?.cancel();
     _sleepTimerTicker = null;
     sleepTimerRemainingNotifier.dispose();
     positionNotifier.dispose();
+    crossfadeActiveNotifier.dispose();
     super.dispose();
   }
 }

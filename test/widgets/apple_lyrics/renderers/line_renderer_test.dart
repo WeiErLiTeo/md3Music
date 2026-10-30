@@ -865,6 +865,33 @@ void main() {
       );
     });
   });
+
+  // ==================== 行级颜色覆盖（当前行 / 上方已播行） ====================
+  group('行级颜色覆盖', () {
+    test('非当前行也使用调用方传入的覆盖色（不再按 isActive 门控）', () {
+      // 「上方行使用已播颜色」开启时上方已播行 isActive=false，
+      // 但仍必须用当前行的高亮色绘制。
+      const int override = 0xFF3366CC;
+      renderer.setLineState(
+        isActive: false,
+        scale: LyricLayout.inactiveScale,
+        activeColorValue: override,
+      );
+      renderer.paintLine(makeCanvas(), ui.Offset.zero, line, 20);
+      expect(renderer.lastPaintedTextColorValue, equals(override));
+    });
+
+    test('未传覆盖色时回退主题歌词色', () {
+      LyricLayout.textColorValue = 0xFF112233;
+      addTearDown(() => LyricLayout.textColorValue = 0xFFFFFFFF);
+      renderer.setLineState(
+        isActive: false,
+        scale: LyricLayout.inactiveScale,
+      );
+      renderer.paintLine(makeCanvas(), ui.Offset.zero, line, 20);
+      expect(renderer.lastPaintedTextColorValue, equals(0xFF112233));
+    });
+  });
 }
 
 /// 记录 [ui.Canvas.drawParagraph] 位置与画布变换的测试画布（其余方法走 noSuchMethod 兜底）。

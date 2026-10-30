@@ -32,7 +32,9 @@ import 'core/services/external_media_intent_service.dart';
 import 'core/services/fm_widget_sync.dart';
 import 'core/services/lock_screen_action_service.dart';
 import 'core/services/lyricon_provider_service.dart';
+import 'core/services/media_notification_service.dart';
 import 'core/services/music_haptics_service.dart';
+import 'core/services/vivo_mix_sync.dart';
 import 'core/services/startup_auto_play.dart';
 import 'core/services/windows_fullscreen.dart';
 import 'core/services/windows_taskbar_sync.dart';
@@ -75,6 +77,8 @@ import 'modules/user/favorites_page.dart';
 import 'modules/brush/brush_page.dart';
 import 'modules/listen_together/listen_together_page.dart';
 import 'modules/listen_together/widgets/guest_play_confirm_dialog.dart';
+import 'modules/update/windows_update_dialog.dart';
+import 'modules/update/windows_update_service.dart';
 
 import 'modules/player/full_player.dart';
 import 'modules/player/full_player_route.dart';
@@ -393,6 +397,7 @@ class _AppViewState extends State<_AppView> {
   /// 挂在应用根而不是某个 Focus 上：桌面端焦点可能停在任意控件，全屏快捷键
   /// 不该被焦点位置左右。
   VoidCallback? _windowsF11Dispose;
+  Timer? _windowsUpdateStartupTimer;
 
   @override
   void initState() {
@@ -432,6 +437,12 @@ class _AppViewState extends State<_AppView> {
       // 并主动拉取一次冷启动期间原生侧积压的待处理音频
       // ignore: discarded_futures
       ExternalMediaIntentService.instance.start();
+      // MD3Music fork v21 车机卡片：点系统媒体卡片直达全屏歌词。冷启动残留
+      // （引擎未就绪时原生只置 pending）在本帧根导航就绪后拉取一次。
+      MediaNotificationService.onOpenCardLyric = _openFullPlayerOnLyrics;
+      unawaited(MediaNotificationService.consumePendingOpenCardLyric().then((pending) {
+        if (pending) _openFullPlayerOnLyrics();
+      }));
     });
     // 预测性返回 + 封面连贯过渡：两个开关互斥，冷启动一起载入并纠正历史同开的值
     // （裁决见 resolveCoverBackExclusivity，封面连贯过渡优先）。
@@ -445,6 +456,36 @@ class _AppViewState extends State<_AppView> {
     if (WindowsFullscreen.supported) {
       unawaited(WindowsFullscreen.sync());
     }
+    if (Platform.isWindows &&
+        !widget.showOnboarding &&
+        !widget.showUserAgreement) {
+      _windowsUpdateStartupTimer = Timer(
+        const Duration(seconds: 1),
+        _checkWindowsUpdateAtStartup,
+      );
+    }
+  }
+
+  Future<void> _checkWindowsUpdateAtStartup() async {
+    try {
+      final result = await WindowsUpdateService.instance.takeInstallResult();
+      if (!mounted) return;
+      if (result != null) {
+        showToast(result, long: true);
+        // 失败结果也要继续检查尚未安装的版本，不能因此吃掉本次启动提醒。
+      }
+    } catch (error) {
+      debugPrint('[WindowsUpdate] 读取安装结果失败：$error');
+    }
+    final release = await WindowsUpdateService.instance.checkForUpdate();
+    if (!mounted || release == null) return;
+    final context = appNavigatorKey.currentContext;
+    if (context == null || !context.mounted) return;
+    await showWindowsUpdateDialog(
+      context,
+      release,
+      onExitForUpdate: finishWindowsAppExit,
+    );
   }
 
   /// 建立私人FM桌面小部件桥接：监听三个 provider 推送快照，并接上原生按钮回调。
@@ -454,7 +495,60 @@ class _AppViewState extends State<_AppView> {
       player: context.read<PlayerProvider>(),
       favorites: context.read<FavoritesProvider>(),
     );
+    // MD3Music fork v39：vivo 原子随身听的列表快照（当前队列/收藏/本地）。
+    VivoMixSync.instance.attach(
+      player: context.read<PlayerProvider>(),
+      favorites: context.read<FavoritesProvider>(),
+      library: context.read<LibraryProvider>(),
+    );
   }
+
+  /// MD3Music fork v21 车机卡片：直达全屏歌词页。预置「歌词页」为初始 tab——
+  /// 窄屏页身份的歌词下标是 2，宽屏由 _syncTabLayout 按页身份自动换算，不用管
+  /// 横竖屏差异；歌的播放状态保持不变（只是看词，不会顺手开始播放）。
+  ///
+  /// MD3Music fork v42（用户拍板）：车机点卡片＝打开播放页 + 落歌词 tab
+  /// （宽屏布局的右窗格即歌词页）。v29/v30 的"临时铺满全屏 + 面板抑制 +
+  /// 看门狗回退"一族已整体退场。
+  Future<void> _openFullPlayerOnLyrics() async {
+    // v34：首行守卫必须先于 context.read——冷启动消费路径经
+    // consumePendingOpenCardLyric().then(_openFullPlayerOnLyrics)，旧 State 的
+    // 闭包在 dispose 后仍可能在途执行（引擎复用重建窗口），无守卫会
+    // 在 deactivated ancestor 上抛非受检异常并吞掉本代次深链。
+    if (!mounted) return;
+    final carMode = context.read<CarModeProvider>();
+    await carMode.ready;
+    // v32：同时等首帧屏幕判定注入（autoScreen 档的 screenIsCar 只在首帧后有
+    // 真值，601ms 兜底防面板缺席）；窗口前送达的深链不再被分错支。
+    await Future.any<void>([
+      carMode.metricsReady,
+      Future<void>.delayed(const Duration(milliseconds: 600)),
+    ]);
+    if (!mounted) return;
+    // v43（用户拍板二次修正）：车机投屏下 App 打开的是平板双栏主壳（左发现 +
+    // 右"查看详情"占位），v42 的 openFullPlayer 打错靶子。改为：优先把播放页
+    // 推进最近可见的双栏右窗格（右窗格内 playerTabIndex=2 落歌词 tab）；无
+    // 双栏（手机竖屏）才退回 openFullPlayer。车机忽略守卫已在 full_player_route
+    // 恢复（防双实例），深链经 bypass 旁路一次。
+    debugPrint('[CardLyricLink] dart open: carMode.active=${carMode.active}');
+    final detailUsed = AdaptiveNav.pushDetailGlobal((_) => const FullPlayer());
+    if (detailUsed) {
+      debugPrint('[CardLyricLink] pushed FullPlayer into detail pane');
+      return;
+    }
+    final navContext = appNavigatorKey.currentContext;
+    if (navContext == null) {
+      // 根导航器尚未附着（冷启动）：本次直达取消，避免打开无效路由。
+      return;
+    }
+    playerTabIndex.value = 2;
+    sendDockPlayerLyricsCommand();
+    openFullPlayer(navContext, bypassCarGuardOnce: true);
+  }
+
+  // v42（用户拍板）：车机深链改为"打开播放页 + 右窗格歌词"后，
+  // v29/v30 的面板抑制/看门狗/force 一族（_suppressPanelForCardLyrics、
+  // _watchPanelReturn、_releasePanelForCardLyrics 及两个字段）整体退场。
 
   /// 根据 ShortcutConfigProvider 当前配置，整体替换 Android 桌面快捷方式列表。
   /// type 统一为 `action_open_<tabId>`，由 main.dart handleShortcut 路由到对应页。
@@ -718,8 +812,15 @@ class _AppViewState extends State<_AppView> {
 
   @override
   void dispose() {
+    _windowsUpdateStartupTimer?.cancel();
     _windowsF11Dispose?.call();
     _windowsF11Dispose = null;
+    // v32：命令回调一并摘除——旧 State 的闭包引用已销毁 context，若引擎
+    // 复用重建后首帧前的深链恰好到达，会读到失效 context；置空后这类深链
+    // 不清 pending，由重建后的 _AppView postFrame 消费兜底补开。
+    MediaNotificationService.onOpenCardLyric = null;
+    // v40：原子随身听列表同步一并解绑（去抖 Timer、provider 监听、点播回调）。
+    VivoMixSync.instance.dispose();
     _shortcutConfig?.removeListener(_applyDesktopShortcuts);
     _playerProvider?.removeListener(_onPlayerChanged);
     _backgroundThemeProvider?.removeListener(_onBackgroundChanged);

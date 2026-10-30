@@ -26,6 +26,9 @@ void main() {
     await LyricPreferences.instance.setUseGlowEffect(false);
     await LyricPreferences.instance.setUseGaussianBlur(false);
     await LyricPreferences.instance.setUseDynamicLyricColor(false);
+    await LyricPreferences.instance.setUseAboveLinesPlayedColor(false);
+    await LyricPreferences.instance
+        .setDynamicColorMixRatio(LyricPreferences.defaultDynamicColorMixRatio);
   });
 
   testWidgets('AM 对唱开启时两行左右分列，且不带性别前缀', (tester) async {
@@ -182,6 +185,56 @@ void main() {
     );
   });
 
+  testWidgets('辉光强度倍数直接作用在演示卡阴影 alpha 上', (tester) async {
+    final prefs = LyricPreferences.instance;
+    await prefs.setUseGlowEffect(true);
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            height: 320,
+            child: LyricEffectPreview(isAmStyle: true),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final glowChar = _charsOf(_currentLineText).first;
+    double? firstShadowAlpha() {
+      final texts = _textsOf(tester, glowChar);
+      final shadows = texts.first.style?.shadows;
+      return shadows == null || shadows.isEmpty ? null : shadows.first.color.a;
+    }
+
+    final atDefault = firstShadowAlpha();
+    expect(atDefault, isNotNull, reason: '当前行首字应有辉光阴影');
+    // 默认 100%：每层一条阴影（三层剖面）
+    expect(
+      _textsOf(tester, glowChar).first.style!.shadows!.length,
+      equals(3),
+    );
+
+    // 强度 200% → 最内层权重 0.55 × 2 = 1.1 > 1，拆成「饱和 1.0 + 追加 0.1」
+    await prefs.setGlowIntensity(2.0);
+    await tester.pump();
+    final shadowsAtMax = _textsOf(tester, glowChar).first.style!.shadows!;
+    expect(
+      shadowsAtMax.length,
+      greaterThan(3),
+      reason: '超过 100% 的强度必须有追加层，否则亮度封顶不再变化',
+    );
+    expect(shadowsAtMax.first.color.a, equals(1.0));
+    expect(shadowsAtMax[1].color.a, closeTo(0.1, 1e-6));
+
+    // 强度减半 → 阴影 alpha 减半
+    await prefs.setGlowIntensity(0.5);
+    await tester.pump();
+    final atHalf = firstShadowAlpha();
+    expect(atHalf, isNotNull);
+    expect(atHalf!, closeTo(atDefault! * 0.5, 1e-6));
+  });
+
   testWidgets('浅色主题下不出现整片白字', (tester) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -199,5 +252,43 @@ void main() {
     expect(tester.takeException(), isNull);
     final currentFirst = _charsOf(_currentLineText).first;
     expect(_textsOf(tester, currentFirst), isNotEmpty);
+  });
+
+  testWidgets('上方行使用已播颜色：开启后与普通背景行不同色，关闭后恢复', (tester) async {
+    final prefs = LyricPreferences.instance;
+    await prefs.setUseDynamicLyricColor(true);
+    await prefs.setUseAboveLinesPlayedColor(true);
+    await prefs.setDynamicColorMixRatio(0.5);
+
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            height: 320,
+            child: LyricEffectPreview(isAmStyle: true),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    // 第 0 行 = 当前行上方（已唱）；第 2 行 = 当前行下方（待唱，仍是背景色）。
+    final aboveFirst = _charsOf(kPreviewSingleTexts[0]).first;
+    final belowFirst = _charsOf(kPreviewSingleTexts[2]).first;
+    final aboveTexts = _textsOf(tester, aboveFirst);
+    expect(aboveTexts, isNotEmpty);
+    final Color playedColor = aboveTexts.first.style!.color!;
+    final Color plainColor =
+        _textsOf(tester, belowFirst).first.style!.color!;
+    expect(playedColor, isNot(equals(plainColor)),
+        reason: '开关开启后上方行必须改用已播色');
+
+    await prefs.setUseAboveLinesPlayedColor(false);
+    await tester.pump();
+    expect(
+      _textsOf(tester, aboveFirst).first.style!.color,
+      equals(plainColor),
+      reason: '关闭开关后上方行回到普通背景色',
+    );
   });
 }

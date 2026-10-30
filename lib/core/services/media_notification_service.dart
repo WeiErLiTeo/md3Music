@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 /// 为原生重试提供有界的命令去重，并且只确认实际交给回调的命令。
@@ -67,6 +70,8 @@ class MediaNotificationService {
   /// 原生锁屏 Activity 只负责拉起 App 并回传动作字符串，目标面板由
   /// `LockScreenActionService` 在 Navigator 就绪后打开。
   static void Function(String)? onWidgetAction;
+  // MD3Music fork v21：车机卡片点入（投屏屏判据由原生侧把控），直达全屏歌词
+  static void Function()? onOpenCardLyric;
   static final MediaCommandAckRouter _mediaCommandAckRouter =
       MediaCommandAckRouter();
 
@@ -90,6 +95,17 @@ class MediaNotificationService {
     if (callback == null) return false;
     callback();
     return true;
+  }
+
+  /// MD3Music fork v21 车机卡片：冷启动残留深链拉取——MainActivity 在引擎
+  /// 未就绪时只置 pending，这里在根导航就绪后主动取一次。
+  static Future<bool> consumePendingOpenCardLyric() async {
+    try {
+      final r = await _channel.invokeMethod<bool>('consumePendingOpenCardLyric');
+      return r ?? false;
+    } catch (_) {
+      return false;
+    }
   }
 
   static void initCallbacks() {
@@ -128,6 +144,40 @@ class MediaNotificationService {
         case 'setLoopMode':
           final mode = call.arguments as String?;
           if (mode != null) onSetLoopMode?.call(mode);
+          break;
+        case 'openCardLyricView':
+          // MD3Music fork v30：回调未装配（首帧前送达）时不清 pending——
+          // 由 _AppView postFrame 的消费兜底接住；装配后才投递并清零。
+          // 否则车机冷启动的点击会被静默丢弃（v29 的"投递即清"过激）。
+          debugPrint('[CardLyricLink] Dart case openCardLyricView, '
+              'handlerMounted=${onOpenCardLyric != null}');
+          if (onOpenCardLyric != null) {
+            onOpenCardLyric!();
+            // v33：显式 dynamic——catchError 的返回形态与 Future<dynamic?>
+            // 匹配，防止日后改成强类型时 catcher 在 zone 抛 TypeError。
+            unawaited(_channel
+                .invokeMethod<dynamic>('consumePendingOpenCardLyric')
+                .catchError((Object _) {}));
+          }
+          break;
+        // MD3Music fork v40：原子随身听列表项点播——岛按 media id 回播，原生经
+        // ACTION_VIVO_MIX_PLAY 转发到引擎通道。media id 口径 `<来源>:<songId>`。
+        case 'vivoMixPlay':
+          final args = call.arguments as Map<dynamic, dynamic>?;
+          final mediaId = args?['mediaId'] as String?;
+          if (mediaId != null && mediaId.isNotEmpty) onVivoMixPlay?.call(mediaId);
+          break;
+        // MD3Music fork v45：原子随身听循环模式切换（mode 1=列表/2=单曲/3=随机）。
+        case 'vivoMixPlayMode':
+          final args = call.arguments as Map<dynamic, dynamic>?;
+          final mode = args?['mode'] as int?;
+          if (mode != null) onVivoMixPlayMode?.call(mode);
+          break;
+        // MD3Music fork v64：原子随身听 ❤️ 收藏（岛 setRating/HeartRating 的目标态）。
+        case 'vivoMixRating':
+          final args = call.arguments as Map<dynamic, dynamic>?;
+          final favorite = args?['favorite'] as bool?;
+          if (favorite != null) onVivoMixRating?.call(favorite);
           break;
         case 'toggleDesktopLyric':
           onToggleDesktopLyric?.call();
@@ -242,6 +292,66 @@ class MediaNotificationService {
       await _channel.invokeMethod('playerReady');
     } catch (_) {}
   }
+
+  /// MD3Music fork v39：把 vivo 原子随身听（vivomusicmix）的三棵列表快照推给原生。
+  ///
+  /// 岛在能力位放行后经 MediaBrowserServiceCompat 绑定来取列表；原生侧只读内存
+  /// 快照，故由 Dart 主动推（不在 binder 回调里回拉，避免卡住岛的调用线程）。
+  /// v40：失败不再静默——主通道缺 case 这类问题（第六轮审查 P0）必须当场暴露。
+  static Future<void> updateVivoMixLists({
+    required List<Map<String, dynamic>> current,
+    required List<Map<String, dynamic>> favorites,
+    required List<Map<String, dynamic>> local,
+  }) async {
+    try {
+      await _channel.invokeMethod('updateVivoMixLists', {
+        'current': current,
+        'favorites': favorites,
+        'local': local,
+      });
+    } catch (e) {
+      debugPrint('[VivoMixSync] updateVivoMixLists failed: $e');
+    }
+  }
+
+  /// MD3Music fork v63：点歌后强制刷新岛列表——岛的高亮只在收到列表刷新
+  /// 时重渲染（列表内容不变时 notifyChildrenChanged 不会被列表指纹触发，
+  /// 高亮就停在旧项，真机实测要 3~5 秒才被别的刷新带出来）。不推数据，
+  /// 只让岛重新拉一次当前列表（原生侧走 childrenChangedNotifier 三树通知）。
+  static Future<void> refreshVivoMixChildren() async {
+    try {
+      await _channel.invokeMethod('refreshVivoMixChildren');
+    } catch (e) {
+      debugPrint('[VivoMixSync] refreshVivoMixChildren failed: $e');
+    }
+  }
+
+  /// MD3Music fork v50：岛状态回显——循环模式（1=列表/2=单曲/3=随机）与当前曲
+  /// 红心。岛只在 metadata 变化时读 LOOP_MODE/RATING 来点亮按钮并计算下一次点击
+  /// （岛端 c0.l0），原生收到后写 metadata 并重发。[isFav] null=尚无当前曲。
+  static Future<void> updateVivoMixState({
+    required int loopMode,
+    required bool? isFav,
+  }) async {
+    try {
+      await _channel.invokeMethod('updateVivoMixState', {
+        'loopMode': loopMode,
+        'isFav': isFav,
+      });
+    } catch (e) {
+      debugPrint('[VivoMixSync] updateVivoMixState failed: $e');
+    }
+  }
+
+  /// MD3Music fork v40：原子随身听列表项点播回调（media id = `<来源>:<songId>`）。
+  static void Function(String mediaId)? onVivoMixPlay;
+
+  /// MD3Music fork v45：原子随身听循环模式切换回调（mode 1=列表/2=单曲/3=随机）。
+  static void Function(int mode)? onVivoMixPlayMode;
+
+  /// MD3Music fork v64：原子随身听 ❤️ 收藏回调（岛 setRating/HeartRating 目标态）。
+  /// true=收藏，false=取消收藏；由 VivoMixSync 按目标态落地，不做 toggle 猜测。
+  static void Function(bool favorite)? onVivoMixRating;
 
   // 桌面歌词（悬浮窗）相关
   static Future<bool> hasOverlayPermission() async {

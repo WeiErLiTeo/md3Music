@@ -13,6 +13,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:md3music/widgets/resizable_splitter.dart';
 
 void main() {
+  // 双栏开关三端通用后，宽屏双栏/分隔条用例需显式开启（全局初值 false）。
+  setUp(() {
+    kWindowsTwoPaneEnabled.value = true;
+  });
+  tearDown(() => kWindowsTwoPaneEnabled.value = false);
+
   testWidgets('窄双栏分隔条触及上限后能立即回拖', (tester) async {
     tester.view.devicePixelRatio = 1;
     tester.view.physicalSize = const Size(1000, 800);
@@ -453,7 +459,7 @@ void main() {
     );
     expect(
       tester.getSize(find.byKey(const Key('content'))).width,
-      AppLayout.maxContentWidth,
+      1280 * 0.85,
     );
     tester.view.physicalSize = const Size(400, 800);
     await tester.pump();

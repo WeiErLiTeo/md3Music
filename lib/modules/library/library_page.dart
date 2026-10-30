@@ -132,9 +132,8 @@ class _LibraryPageState extends State<LibraryPage>
     final isLandscape =
         MediaQuery.orientationOf(context) == Orientation.landscape;
     final compactHeader = constraints.maxWidth >= 600 && isLandscape;
-    final sideGutter = constraints.maxWidth > AppLayout.maxContentWidth
-        ? (constraints.maxWidth - AppLayout.maxContentWidth) / 2
-        : 0.0;
+    final sideGutter = (constraints.maxWidth - ContentWidth.resolveWidth(
+        context, constraints.maxWidth)) / 2;
 
     return Scaffold(
       appBar: AppBar(

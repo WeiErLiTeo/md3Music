@@ -36,6 +36,7 @@ struct RunningServer {
     generation: u64,
     port: u16,
     stop: Arc<AtomicBool>,
+    server: Arc<Server>,
     listener_thread: JoinHandle<()>,
 }
 
@@ -238,11 +239,13 @@ pub fn start(port: u16, data_dir: String) -> Option<u16> {
         }
     };
 
+    let server = Arc::new(server);
     let stop = Arc::new(AtomicBool::new(false));
     let loop_stop = Arc::clone(&stop);
+    let loop_server = Arc::clone(&server);
     let listener_thread = match std::thread::Builder::new()
         .name("kugou-http-listener".into())
-        .spawn(move || run_loop(server, data_dir, loop_stop))
+        .spawn(move || run_loop(loop_server, data_dir, loop_stop))
     {
         Ok(handle) => handle,
         Err(error) => {
@@ -255,6 +258,7 @@ pub fn start(port: u16, data_dir: String) -> Option<u16> {
         generation: state.generation,
         port: chosen,
         stop,
+        server,
         listener_thread,
     });
     Some(chosen)
@@ -273,10 +277,12 @@ pub fn stop() {
     if let Some(active) = state.active.take() {
         let RunningServer {
             stop,
+            server,
             listener_thread,
             ..
         } = active;
         stop.store(true, Ordering::SeqCst);
+        server.unblock();
         if let Err(error) = listener_thread.join() {
             eprintln!("[server] listener thread panicked during stop: {error:?}");
         }
@@ -306,10 +312,10 @@ pub fn active_request_count() -> usize {
     ACTIVE_REQUESTS.load(Ordering::Acquire)
 }
 
-fn run_loop(server: Server, data_dir: String, stop: Arc<AtomicBool>) {
+fn run_loop(server: Arc<Server>, data_dir: String, stop: Arc<AtomicBool>) {
     while !stop.load(Ordering::SeqCst) {
-        match server.recv_timeout(Duration::from_millis(50)) {
-            Ok(Some(request)) => {
+        match server.recv() {
+            Ok(request) => {
                 if stop.load(Ordering::SeqCst) {
                     let _ = request.respond(Response::empty(503));
                     break;
@@ -347,8 +353,10 @@ fn run_loop(server: Server, data_dir: String, stop: Arc<AtomicBool>) {
                     eprintln!("[server] spawn handler thread failed: {}", e);
                 }
             }
-            Ok(None) => {}
             Err(_) => {
+                if stop.load(Ordering::SeqCst) {
+                    break;
+                }
                 std::thread::sleep(Duration::from_millis(100));
             }
         }

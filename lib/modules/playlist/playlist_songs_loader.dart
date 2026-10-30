@@ -52,6 +52,8 @@ class PlaylistSongsLoader {
     BuildContext context,
     Playlist playlist, {
     bool isInMyFavorites = true,
+    bool isAlbum = false,
+    String? albumId,
   }) async {
     final api = KugouApiClient();
     final isLoggedIn = api.isLoggedIn;
@@ -60,7 +62,15 @@ class PlaylistSongsLoader {
     List<Song> all = [];
     bool apiSucceeded = false;
 
-    if (isLoggedIn && fetchListid != null && fetchListid.isNotEmpty) {
+    if (isAlbum) {
+      if (albumId != null && albumId.isNotEmpty) {
+        final result = await api.getAlbumSongsAll(albumId);
+        if (result != null) {
+          all = result.songs.map((song) => song.toSong()).toList();
+          apiSucceeded = true;
+        }
+      }
+    } else if (isLoggedIn && fetchListid != null && fetchListid.isNotEmpty) {
       const int pageSize = 200;
       const int maxSongs = 9999;
       const int maxPages = (maxSongs + pageSize - 1) ~/ pageSize;

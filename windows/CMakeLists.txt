@@ -159,6 +159,69 @@ else()
     "否则本地 API 服务器无法启动，App 无法联网。")
 endif()
 
+# === 复制 ONNX Runtime 与深度模型到 exe 同目录（3D 封面，可选能力） ===
+# Dart FFI 后端（--dart-define=DEPTH_BACKEND=dart_ffi）用 dart:ffi 打开 exe 同目录的
+# onnxruntime.dll 做深度推理，模型从 exe 同目录的 depth_model\ 子目录按文件名加载。
+# 运行时来源：windows/vendor/onnxruntime/（官方 win-x64 zip 里挑的两个 dll，**不入库**，
+# 缺失时由 scripts\md3.ps1 windows -With3D 按固定版本 + SHA256 下载；CI/发布包不带 3D，
+# 因此既不下载也不随包；见该脚本头部常量）。
+# 模型来源：android/app/src/depth3d/assets/models/（已入库，直接拷贝，不进 flutter_assets
+# —— 否则 Android APK 被这约 30MB 资产增重）。
+#
+# 与上面 kugou_server.dll 的处理**故意不同**：那里 FATAL_ERROR，这里只 WARNING。
+# 理由：kugou_server.dll 缺失会打出「能开、能显示 UI、但完全不能联网」的残包，用户无从
+# 判断原因，必须构建期就失败；3D 封面是可选能力，运行时缺 dll 时 App 只提示一次并回落
+# 平面封面（其余功能完全正常）。若这里也硬失败，所有还没取过 ONNX Runtime 的开发者
+# （含离线环境、以及只做普通功能改动的贡献者）连 `flutter run -d windows` 都起不来，
+# 代价远大于收益。
+set(ORT_VENDOR_DIR "${CMAKE_CURRENT_SOURCE_DIR}/vendor/onnxruntime")
+# onnxruntime_providers_shared.dll 是 CPU EP 运行必需的配套 dll（provider bridge 的共享
+# 符号在其中），漏带会让 CreateSession 失败，必须与主 dll 成对复制，因此两个都在才算就位。
+if(EXISTS "${ORT_VENDOR_DIR}/onnxruntime.dll" AND
+   EXISTS "${ORT_VENDOR_DIR}/onnxruntime_providers_shared.dll")
+  add_custom_target(depth_runtime_copy ALL
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${ORT_VENDOR_DIR}/onnxruntime.dll"
+      "$<TARGET_FILE_DIR:${BINARY_NAME}>/onnxruntime.dll"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${ORT_VENDOR_DIR}/onnxruntime_providers_shared.dll"
+      "$<TARGET_FILE_DIR:${BINARY_NAME}>/onnxruntime_providers_shared.dll"
+    COMMENT "复制 onnxruntime dll 到 exe 目录（3D 封面）")
+else()
+  message(WARNING
+    "未找到 ONNX Runtime：${ORT_VENDOR_DIR}/onnxruntime.dll\n"
+    "3D 封面将不可用（App 内提示一次并回落平面封面），其余功能不受影响。\n"
+    "要启用：运行 scripts\\md3.ps1 windows（自动按固定版本下载并校验），或手动下载官方\n"
+    "onnxruntime-win-x64 zip，把 lib\\onnxruntime.dll 与 lib\\onnxruntime_providers_shared.dll\n"
+    "（1.30.0 在 lib\\ 下，更早版本在 bin\\）放到 windows\\vendor\\onnxruntime\\。\n"
+    "注意本判断在【配置期】做：补齐 dll 后需让 CMake 重新配置（flutter clean，或删除\n"
+    "build\\windows）才会生成复制目标；否则只有构建脚本/CI 会把 dll 放进 Release 目录。")
+endif()
+
+set(DEPTH_MODEL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../android/app/src/depth3d/assets/models")
+if(EXISTS "${DEPTH_MODEL_DIR}/depth_anything_v2_vits_q4f16.onnx" AND
+   EXISTS "${DEPTH_MODEL_DIR}/migan512_pipeline_int8.onnx")
+  # 两份模型逐条 copy（每条一个源文件、路径整体加引号）：仓库路径可能含空格
+  #（本机即 "TRAE SOLO"），把多个文件塞进同一条 copy 的参数列表容易被生成器拆错。
+  add_custom_target(depth_model_copy ALL
+    # 目标子目录不存在时 copy_if_different 不会自建，先显式创建。
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+      "$<TARGET_FILE_DIR:${BINARY_NAME}>/depth_model"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${DEPTH_MODEL_DIR}/depth_anything_v2_vits_q4f16.onnx"
+      "$<TARGET_FILE_DIR:${BINARY_NAME}>/depth_model/"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${DEPTH_MODEL_DIR}/migan512_pipeline_int8.onnx"
+      "$<TARGET_FILE_DIR:${BINARY_NAME}>/depth_model/"
+    COMMENT "复制深度模型到 exe 目录的 depth_model\\（3D 封面）")
+else()
+  message(WARNING
+    "未找到深度模型：${DEPTH_MODEL_DIR}\n"
+    "3D 封面不可用（App 内提示一次并回落平面封面），其余功能不受影响。\n"
+    "仓库正常应带这两份 .onnx（depth_anything_v2_vits_q4f16.onnx / migan512_pipeline_int8.onnx），"
+    "缺失请先 git checkout -- android/app/src/depth3d/assets/models 恢复。")
+endif()
+
 
 # === Installation ===
 # Support files are copied into place next to the executable, so that it can

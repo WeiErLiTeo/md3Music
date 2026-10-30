@@ -5,7 +5,8 @@ import 'package:md3music/core/services/media_notification_service.dart';
 /// 锁屏歌词卡片的收藏态同步协议：
 /// - `updateLockScreenFavorite` 只翻红心（独立轻量通道）；
 /// - `updateLockScreenLyricData` 整包必须带 `isFavorited`（原生首帧即需要红心态）；
-/// - 原生回传的 `widgetAction`（投屏 / 队列）要落到 `onWidgetAction` 回调。
+/// - 原生回传的 `widgetAction`（投屏 / 队列）要落到 `onWidgetAction` 回调；
+/// - 车机媒体卡片深链要落到 `onOpenCardLyric` 回调。
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -26,6 +27,7 @@ void main() {
   tearDown(() {
     messenger.setMockMethodCallHandler(channel, null);
     MediaNotificationService.onWidgetAction = null;
+    MediaNotificationService.onOpenCardLyric = null;
   });
 
   Future<void> sendMethod(String method, [Object? arguments]) async {
@@ -94,5 +96,15 @@ void main() {
     MediaNotificationService.onWidgetAction = null;
 
     await expectLater(sendMethod('widgetAction', 'openCast'), completes);
+  });
+
+  test('收到 openCardLyricView 时打开全屏歌词回调', () async {
+    var opened = false;
+    MediaNotificationService.initCallbacks();
+    MediaNotificationService.onOpenCardLyric = () => opened = true;
+
+    await sendMethod('openCardLyricView');
+
+    expect(opened, isTrue);
   });
 }

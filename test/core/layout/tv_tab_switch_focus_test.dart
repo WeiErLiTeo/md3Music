@@ -3,6 +3,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:md3music/core/build_flags.dart';
+import 'package:md3music/core/layout/responsive_layout.dart';
 import 'package:md3music/core/layout/responsive_shell.dart';
 import 'package:md3music/core/layout/tv_nav_focus_bridge.dart';
 import 'package:md3music/providers/tab_config_provider.dart';
@@ -22,6 +23,13 @@ import 'package:md3music/providers/tab_config_provider.dart';
 /// 本用例在 `MD3_TV=true` 下运行（`kTvBuild` 为 const，焦点接线整段树摇剔除）：
 /// `flutter test --dart-define=MD3_TV=true test/core/layout/tv_tab_switch_focus_test.dart`
 void main() {
+  // 双栏开关三端通用后，「双栏 tab 首挂详情面板 Navigator」这条抢焦点路径
+  // 需显式开启开关（TV 上 main.dart 同样播种默认 true）。
+  setUp(() {
+    kWindowsTwoPaneEnabled.value = true;
+  });
+  tearDown(() => kWindowsTwoPaneEnabled.value = false);
+
   // 默认 tab 集（launchpad / coverflow 均不在 kTwoPaneTabs 内）：只覆盖
   // 「tab 中央 Navigator 根路由」这条抢焦点路径。
   const List<TabItem> plainTabs = [

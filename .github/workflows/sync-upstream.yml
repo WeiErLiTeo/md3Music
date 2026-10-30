@@ -1,0 +1,363 @@
+name: Sync Upstream & Build YT3 Release
+
+# 功能说明：
+# 1. sync-upstream（每天定时 + 手动触发）：
+#    - 检测最上游仓库 zzyoxml/md3Music (rust-local-force) 是否有更新
+#    - 自动将本仓库的 rust-local-force 分支同步到与上游一致
+#    - 将 yt3 的定制改动（YT 播放器等）自动三方合并到上游最新代码上（保持 .github/workflows 不被上游覆盖）
+#    - 在本仓库内创建 sync/<版本> -> yt3 的审查 PR（绝不向上游提 PR）；如有冲突则在本仓库创建 Issue 提醒
+#
+# 2. build-yt3-release（当代码合入/推送到 yt3 分支，或手动选择立即编译时触发）：
+#    - 自动递增 versionCode 与 versionName（例如 6.2.0 -> 6.2.1+N）
+#    - 使用与上游一致的 release.keystore（SHA-256: 84ba3586...）编译 64 位 (arm64-v8a) Release 正式版 APK
+#    - 开启 R8 代码混淆 (isMinifyEnabled = true) 与资源瘦身 (isShrinkResources = true)，去除 Debug 版本
+#    - 自动发布到本仓库的 GitHub Releases 并上传构建产物
+on:
+  schedule:
+    - cron: '30 1 * * *'
+  push:
+    branches:
+      - yt3
+  workflow_dispatch:
+    inputs:
+      action:
+        description: '执行模式'
+        required: true
+        type: choice
+        options:
+          - sync_and_check
+          - build_release_now
+        default: 'sync_and_check'
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: read
+
+concurrency:
+  group: yt3-sync-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  sync-upstream:
+    name: Check & Sync Upstream (zzyoxml/md3Music)
+    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.action == 'sync_and_check') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout yt3
+        uses: actions/checkout@v4
+        with:
+          ref: yt3
+          fetch-depth: 0
+
+      - name: Fetch upstream and compare
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git remote add upstream https://github.com/zzyoxml/md3Music.git
+          git fetch upstream rust-local-force --tags
+          git fetch origin rust-local-force yt3
+
+          UPSTREAM_SHA="$(git rev-parse upstream/rust-local-force)"
+          UPSTREAM_SHORT="${UPSTREAM_SHA:0:8}"
+          UPSTREAM_VER="$(git show upstream/rust-local-force:pubspec.yaml | grep -m1 '^version:' | sed 's/^version:[[:space:]]*//' | tr -d '\r')"
+
+          echo "上游最新提交: ${UPSTREAM_SHA} (版本: ${UPSTREAM_VER})"
+
+          # 1. 保持本仓库 rust-local-force 分支与上游 100% 同步（不改 workflow 权限问题时尽力同步）
+          git push origin "refs/remotes/upstream/rust-local-force:refs/heads/rust-local-force" --force || \
+            echo "::warning::rust-local-force 包含上游 workflow 变更，跳过直接强制推送分支，继续生成 yt3 同步 PR"
+
+          # 2. 读取 .md3/upstream-base-sha 判断当前 yt3 是否已同步到该上游提交
+          BASE_SHA=""
+          if [[ -f ".md3/upstream-base-sha" ]]; then
+            BASE_SHA="$(tr -d '[:space:]' < .md3/upstream-base-sha)"
+          fi
+          if [[ -z "$BASE_SHA" ]] || ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            BASE_SHA="$(git rev-parse origin/rust-local-force)"
+          fi
+
+          if [[ "$BASE_SHA" == "$UPSTREAM_SHA" ]]; then
+            echo "yt3 已经包含上游最新代码 (${UPSTREAM_VER} @ ${UPSTREAM_SHORT})，无需同步。"
+            echo "has_update=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "检测到上游新版本/新提交：${BASE_SHA:0:8} -> ${UPSTREAM_SHORT} (${UPSTREAM_VER})"
+          echo "has_update=true" >> "$GITHUB_OUTPUT"
+          echo "upstream_sha=${UPSTREAM_SHA}" >> "$GITHUB_OUTPUT"
+          echo "upstream_short=${UPSTREAM_SHORT}" >> "$GITHUB_OUTPUT"
+          echo "upstream_ver=${UPSTREAM_VER}" >> "$GITHUB_OUTPUT"
+
+          SYNC_BRANCH="sync/upstream-${UPSTREAM_SHORT}"
+          echo "sync_branch=${SYNC_BRANCH}" >> "$GITHUB_OUTPUT"
+
+          # 如果该同步分支已存在且已有开启的 PR，直接跳过
+          EXISTING_PR="$(gh pr list --repo "${GITHUB_REPOSITORY}" --head "${SYNC_BRANCH}" --base yt3 --state open --json number --jq '.[0].number // empty')"
+          if [[ -n "$EXISTING_PR" ]]; then
+            echo "同步 PR #${EXISTING_PR} 已存在，跳过重复创建。"
+            exit 0
+          fi
+
+          # 3. 对最小挂载文件做三方合并 (current=yt3, base=BASE_SHA, other=UPSTREAM_SHA)
+          HOOK_FILES=(
+            "android/app/build.gradle.kts"
+            "lib/providers/theme_provider.dart"
+            "lib/modules/player/full_player_route.dart"
+            "lib/modules/player/player_drag_overlay.dart"
+            "lib/modules/player/car_mode_panel.dart"
+            "lib/widgets/settings_preview/lyric_effect_preview.dart"
+            "lib/modules/settings/settings_page.dart"
+            "test/modules/player/full_player_style_sync_test.dart"
+          )
+
+          # 以 origin/yt3 为父提交创建同步分支（保证 PR 历史干净，且 .github/workflows 零变动）
+          git checkout -B "${SYNC_BRANCH}" origin/yt3
+
+          # 先把整个工作区替换成 upstream/rust-local-force 的最新快照
+          git rm -rf . > /dev/null
+          git checkout upstream/rust-local-force -- .
+
+          # 恢复 .github/workflows 为 yt3 自己的版本（防止上游冲掉工作流，且避免 GITHUB_TOKEN workflows 权限报错）
+          rm -rf .github/workflows
+          git checkout origin/yt3 -- .github/workflows
+
+          # 恢复 YT 纯新增文件并更新上游基准 SHA 标记
+          git checkout origin/yt3 -- \
+            lib/modules/player/full_player_yt.dart \
+            lib/modules/player/yt/
+          mkdir -p .md3
+          printf '%s\n' "${UPSTREAM_SHA}" > .md3/upstream-base-sha
+
+          # 对 6 个最小挂载文件做三方合并 (current=yt3, base=上次上游基准 BASE_SHA, other=最新上游 UPSTREAM_SHA)
+          CONFLICT_FILES=()
+          for hf in "${HOOK_FILES[@]}"; do
+            TMP_YT="$(mktemp)"
+            TMP_BASE="$(mktemp)"
+            TMP_UP="$(mktemp)"
+            git show "origin/yt3:${hf}" > "$TMP_YT"
+            git show "${BASE_SHA}:${hf}" > "$TMP_BASE"
+            git show "upstream/rust-local-force:${hf}" > "$TMP_UP"
+
+            if git merge-file -L "yt3" -L "base" -L "upstream" "$TMP_YT" "$TMP_BASE" "$TMP_UP"; then
+              cp "$TMP_YT" "$hf"
+            else
+              cp "$TMP_YT" "$hf"
+              CONFLICT_FILES+=("$hf")
+            fi
+            rm -f "$TMP_YT" "$TMP_BASE" "$TMP_UP"
+          done
+
+          if (( ${#CONFLICT_FILES[@]} > 0 )); then
+            echo "::error::以下文件在三方合并时发生冲突: ${CONFLICT_FILES[*]}"
+            TITLE="⚠️ 上游同步冲突提醒 (${UPSTREAM_VER} @ ${UPSTREAM_SHORT})"
+            BODY="检测到上游仓库 \`zzyoxml/md3Music\` 更新至 \`${UPSTREAM_VER}\` (\`${UPSTREAM_SHA}\`)，但在自动合并到 \`yt3\` 时以下文件存在冲突：\n\n"
+            for cf in "${CONFLICT_FILES[@]}"; do
+              BODY+="- \`${cf}\`\n"
+            done
+            BODY+="\n请手动检查并处理。"
+            gh issue create --repo "${GITHUB_REPOSITORY}" --title "$TITLE" --body "$(printf '%b' "$BODY")" || true
+            exit 1
+          fi
+
+          git add -A
+          if git diff --cached --quiet; then
+            echo "合并后无文件变更。"
+            exit 0
+          fi
+
+          git commit -m "chore(sync): 同步上游 ${UPSTREAM_VER} (${UPSTREAM_SHORT}) [upstream-base:${UPSTREAM_SHORT}]"
+          git push origin "${SYNC_BRANCH}" --force
+
+          PR_URL="$(gh pr create \
+            --repo "${GITHUB_REPOSITORY}" \
+            --base yt3 \
+            --head "${SYNC_BRANCH}" \
+            --title "chore(sync): 同步上游 ${UPSTREAM_VER} (${UPSTREAM_SHORT})" \
+            --body "### 自动同步上游更新
+          - **上游版本**: \`${UPSTREAM_VER}\`
+          - **上游提交**: \`${UPSTREAM_SHA}\`
+          - **合并状态**: 6 个挂载文件与 5 个 YT 独立文件全部无冲突自动合并通过
+          - **说明**: 合并此 PR 到 \`yt3\` 后，将自动递增版本号并编译发布最新的 64 位签名 Release APK。")"
+
+          echo "已成功创建审查 PR: ${PR_URL}"
+
+  build-yt3-release:
+    name: Build & Publish YT3 64-bit Release APK
+    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/yt3' && (startsWith(github.event.head_commit.message, 'chore(sync):') || contains(github.event.head_commit.message, 'sync/upstream-') || contains(github.event.head_commit.message, '[release]'))) || (github.event_name == 'workflow_dispatch' && inputs.action == 'build_release_now') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout yt3
+        uses: actions/checkout@v4
+        with:
+          ref: yt3
+          fetch-depth: 0
+
+      - name: Bump versionName & versionCode in pubspec.yaml
+        id: bump
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          RAW_VER="$(grep -m1 '^version:' pubspec.yaml | sed 's/^version:[[:space:]]*//' | tr -d '\r')"
+          VER_NAME="${RAW_VER%+*}"
+          VER_CODE="${RAW_VER#*+}"
+          if [[ "$VER_CODE" == "$RAW_VER" || -z "$VER_CODE" ]]; then
+            VER_CODE=100
+          fi
+
+          # 解析 X.Y.Z 并自动递增修订号 Z 与 versionCode
+          IFS='.' read -r MAJOR MINOR PATCH <<<"${VER_NAME%%-*}"
+          MAJOR="${MAJOR:-6}"
+          MINOR="${MINOR:-2}"
+          PATCH="${PATCH:-0}"
+          NEW_PATCH=$(( PATCH + 1 ))
+          NEW_VER_NAME="${MAJOR}.${MINOR}.${NEW_PATCH}"
+
+          # 保证 versionCode 比仓库所有历史 tag 和当前值都大
+          MAX_TAG_CODE=$(git tag --list 'v*' | while read -r t; do
+            git show "$t:pubspec.yaml" 2>/dev/null | grep -E '^version:' | head -1 | grep -oE '\+[0-9]+' | tr -d '+' || true
+          done | sort -n | tail -1)
+          BASE_CODE="${VER_CODE}"
+          if [[ -n "$MAX_TAG_CODE" && "$MAX_TAG_CODE" -gt "$BASE_CODE" ]]; then
+            BASE_CODE="$MAX_TAG_CODE"
+          fi
+          NEW_VER_CODE=$(( BASE_CODE + 1 ))
+          FULL_VERSION="${NEW_VER_NAME}+${NEW_VER_CODE}"
+          RELEASE_TAG="v${NEW_VER_NAME}-yt.${NEW_VER_CODE}"
+
+          sed -i.bak -E "s/^version:.*/version: ${FULL_VERSION}/" pubspec.yaml
+          rm -f pubspec.yaml.bak
+
+          echo "已递增版本: ${RAW_VER} -> ${FULL_VERSION} (Tag: ${RELEASE_TAG})"
+          echo "version=${NEW_VER_NAME}" >> "$GITHUB_OUTPUT"
+          echo "version_code=${NEW_VER_CODE}" >> "$GITHUB_OUTPUT"
+          echo "full_version=${FULL_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "release_tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+
+          # 将递增后的 pubspec.yaml 推回 yt3 分支
+          git add pubspec.yaml
+          git commit -m "chore(release): bump version to ${FULL_VERSION} [skip ci]"
+          git push origin HEAD:yt3 || echo "::warning::写回版本号推送跳过，继续使用新版本号打包"
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager --install \
+            "cmdline-tools;latest" \
+            "platforms;android-36" \
+            "build-tools;36.0.0"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Download official release.keystore & configure signing
+        run: |
+          set -euo pipefail
+          # 优先从本仓库 keystore release 下载，若无则从上游 zzyoxml/md3Music 下载同一把钥匙
+          if ! curl -fL --retry 3 -o android/app/release.keystore \
+              "https://github.com/${GITHUB_REPOSITORY}/releases/download/keystore/release.keystore"; then
+            curl -fL --retry 3 -o android/app/release.keystore \
+              "https://github.com/zzyoxml/md3Music/releases/download/keystore/release.keystore"
+          fi
+
+          cat > android/keystore.properties <<EOF
+          storePassword=android
+          keyPassword=android
+          keyAlias=androiddebugkey
+          storeFile=release.keystore
+          EOF
+
+          ls -lh android/app/release.keystore
+
+      - name: Flutter pub get & Build 64-bit Release APK (R8 + ShrinkResources)
+        run: |
+          set -euo pipefail
+          flutter pub get
+          # 只编译 64 位 (android-arm64) 标准版 Release 包（build.gradle.kts 已开启 isMinifyEnabled=true 与 isShrinkResources=true）
+          flutter build apk --release --flavor standard --split-per-abi \
+            --target-platform android-arm64 \
+            --android-project-arg=md3ApplicationId=com.md3music.md3music
+
+      - name: Rename & Verify 64-bit Release APK signature
+        id: apk
+        run: |
+          set -euo pipefail
+          apk_dir="build/app/outputs/flutter-apk"
+          ver="${{ steps.bump.outputs.version }}"
+          src="${apk_dir}/app-arm64-v8a-standard-release.apk"
+          dst="${apk_dir}/MD3音乐-${ver}-YT版-64位-release.apk"
+          mv "$src" "$dst"
+
+          # 校验 ABI 仅含 arm64-v8a 且签名 SHA-256 与上游正式版一致
+          aapt2="${ANDROID_HOME}/build-tools/36.0.0/aapt2"
+          apksigner="${ANDROID_HOME}/build-tools/36.0.0/apksigner"
+          test "$("$aapt2" dump badging "$dst" | sed -n "s/^native-code: //p")" = "'arm64-v8a'"
+
+          sign_fp="$("$apksigner" verify --print-certs "$dst" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | tr -d ' :' | tr 'A-F' 'a-f')"
+          echo "APK SHA-256: ${sign_fp}"
+          test "$sign_fp" = "84ba3586aea04c54bb329cfe42eff8a42751d4135667cf633597c268e95a1b33"
+
+          echo "apk_path=${dst}" >> "$GITHUB_OUTPUT"
+          echo "apk_name=$(basename "$dst")" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Release APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.apk.outputs.apk_name }}
+          path: ${{ steps.apk.outputs.apk_path }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish to GitHub Releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.bump.outputs.release_tag }}"
+          VER="${{ steps.bump.outputs.full_version }}"
+          APK="${{ steps.apk.outputs.apk_path }}"
+
+          git tag -f "$TAG"
+          git push origin "refs/tags/${TAG}" --force
+
+          gh release create "$TAG" "$APK" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "MD3音乐 v${VER} (YouTube Music 样式 · 64位正式版)" \
+            --notes "### 构建信息
+          - **版本号**: \`${VER}\`
+          - **架构**: 仅 64 位 (\`arm64-v8a\`)
+          - **构建模式**: Release 正式版（已开启 R8 代码混淆 \`isMinifyEnabled = true\` 与资源瘦身 \`isShrinkResources = true\`）
+          - **签名指纹 (SHA-256)**: \`84:BA:35:86:AE:A0:4C:54:BB:32:9C:FE:42:EF:F8:A4:27:51:D4:13:56:67:CF:63:35:97:C2:68:E9:5A:1B:33\`（与上游正式版一致，可直接覆盖安装）"

@@ -1101,6 +1101,8 @@ class _PlaylistPageState extends State<PlaylistPage> {
         context,
         widget.playlist,
         isInMyFavorites: widget.isInMyFavorites,
+        isAlbum: widget.isAlbum,
+        albumId: widget.albumGlobalCollectionId,
       );
       if (!mounted) return;
       final all = result.songs;

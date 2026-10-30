@@ -767,6 +767,9 @@ class KugouApiClient {
   }
 
   Future<void> clearCookies() async {
+    // v34：对齐其余登录态写者（setLoginCookies/switchToUser/removeAccount 均
+    // 先 ensure）——init 读回 Keystore 在途时，同步清空会被续延的 init 覆写。
+    await _ensureInitialized();
     final oldUserid = _userid;
 
     _token = null;
@@ -807,6 +810,15 @@ class KugouApiClient {
   String? get vipToken => _vipToken;
   String? get dfid => _dfid;
   bool get isLoggedIn => _token != null && _userid != null;
+
+  /// 登录态就绪快照：`_initFromStorage` 在构造函数里异步启动（Keystore/prefs
+  /// 读取有延迟），启动恢复/连车唤醒等链路在凭证载入前同步读 [isLoggedIn]
+  /// 会误判"未登录"。需要据登录态分流的调用一律先 await 本方法。
+  Future<bool> isLoggedInWhenReady() async {
+    await _ensureInitialized();
+    return isLoggedIn;
+  }
+
   bool get hasVipToken => _vipToken != null && _vipToken!.isNotEmpty;
 
   Future<void> registerDevice() async {
@@ -5134,6 +5146,30 @@ class KugouApiClient {
     } catch (e) {
       return null;
     }
+  }
+
+  /// 分页读取专辑完整歌曲列表。专辑歌曲接口默认只返回 30 首；收藏专辑也必须
+  /// 使用 album_id 分页，不能用歌单接口的返回条数推断专辑是否完整。
+  Future<KugouAlbumSongs?> getAlbumSongsAll(String albumId) async {
+    const pageSize = 30;
+    const maxPages = 1000;
+    final songs = <KugouSongDetail>[];
+    var total = 0;
+    for (var page = 1; page <= maxPages; page++) {
+      final result = await getAlbumSongs(
+        albumId,
+        page: page,
+        pagesize: pageSize,
+      );
+      if (result == null) return null;
+      if (page == 1) total = result.total;
+      songs.addAll(result.songs);
+      if ((total > 0 && songs.length >= total) ||
+          result.songs.length < pageSize) {
+        break;
+      }
+    }
+    return KugouAlbumSongs(songs: songs, total: total);
   }
 
   Future<List<KugouSongDetail>?> getPlaylistTrackAll({

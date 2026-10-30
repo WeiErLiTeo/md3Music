@@ -743,6 +743,48 @@ class ResponsiveShellState extends State<ResponsiveShell> {
     return result;
   }
 
+  /// tv: TV 构建下双栏 tab 的宽视口（≥ [kTwoPaneForcedMinWidth]）分支。
+  ///
+  /// 与非 TV 的 DesktopTwoPane 组装差异只有两处：
+  /// 1. 详情面板额外挂 [_TvFocusRecheckObserver]——详情面板的 Navigator 与
+  ///    中央栈平级，中央观察者看不见它的 push/pop；不单独挂一个就无法在
+  ///    「点进歌单详情 → 返回」后校正焦点（2026-10-04 实测症状）。该观察者
+  ///    只触发焦点校正，不参与 _depths 的二级判定（中央栈专用语义）。
+  ///    TV 无键鼠前进历史消费方，history 不挂。
+  /// 2. 外包一层主题底色——详情面板被 ContentWidth 按 twoPaneDetailMaxWidth
+  ///    居中限宽，master/detail 分隔带与详情两侧留白都不铺底色，桌面壳层有
+  ///    自家背板而 TV 顶栏壳层没有，露出的就是纯黑（真机截图的「黑边」，
+  ///    (detailWidth-720)/2 ≈ 82dp 两条竖带）。
+  /// 窄视口分支见 [_buildTab] 内的 LayoutBuilder（绕过双栏走中央栈整屏）。
+  Widget _buildTvTwoPane(
+    BuildContext context,
+    String id,
+    Widget page,
+    Widget? persistentBar,
+  ) {
+    final detailObservers = <NavigatorObserver>[
+      _tvFocusRecheckObservers.putIfAbsent(
+        id,
+        () => _TvFocusRecheckObserver(_ensureFocusNotStuck),
+      ),
+    ];
+    return ColoredBox(
+      color: Theme.of(context).colorScheme.surface,
+      child: DesktopTwoPane(
+        responsive: true,
+        detailKey: _detailKeys.putIfAbsent(
+          id,
+          () => GlobalKey<NavigatorState>(),
+        ),
+        detailObservers: detailObservers,
+        masterFooter: persistentBar,
+        onDetailFullscreenChanged: (exclusive) =>
+            _onDetailExclusive(id, exclusive),
+        master: page,
+      ),
+    );
+  }
+
   Widget _buildTab(String id) {
     final navigator = Navigator(
       key: _navKeys.putIfAbsent(id, () => GlobalKey<NavigatorState>()),
@@ -780,24 +822,35 @@ class ResponsiveShellState extends State<ResponsiveShell> {
           // null，不会出现每 tab 一条 MiniPlayer 与顶栏重复。
           final persistentBar = widget.persistentBarBuilder?.call(id);
           if (kTwoPaneTabs.contains(id)) {
+            // tv: 窄视口（< [kTwoPaneForcedMinWidth]，低密度/高 dpr 电视可能
+            // 出现，如 1920/dpr2.5≈768）绕过双栏脚手架，与 A 类 tab 同构：
+            // 无 DetailPaneScope → AdaptiveNav.openDetail 自动落中央栈整屏
+            // 详情（手机同路径），焦点由 _TabRouteDepthObserver →
+            // _ensureFocusNotStuck 既有链路校正。同 TwoPanePage 的 TV 先例
+            // （kTvBuild 原样返回 child）。不包 ContentWidth（favorites 等
+            // 不在 kConstrainedTabs）。宽视口仍走下方双栏（≥812 由
+            // DesktopTwoPane 的 forceTwoPane 恒双栏，不存在"单栏
+            // DesktopTwoPane"中间态）。跨越阈值的 wm size/旋转会重建本 tab
+            // 子树（滚动位置丢失）——TV 分辨率运行时变化罕见，可接受。
+            if (kTvBuild) {
+              return LayoutBuilder(
+                builder: (context, constraints) =>
+                    constraints.maxWidth < kTwoPaneForcedMinWidth
+                    ? page
+                    : _buildTvTwoPane(
+                        context, id, page, persistentBar,
+                      ),
+              );
+            }
             // 桌面端（Windows 键鼠）给详情面板挂上前进历史观察者：侧键「前进」
             // 与 Alt+→ 要能重建刚「后退」掉的详情页（与 DesktopShell 同一条
             // ForwardHistory 机制）。TV / Android 不挂——记录了没有消费方，
             // 反而把已 pop 页面的 builder 闭包多留一段时间。
             final history = _forwardHistoryFor(id);
             final detailObservers = <NavigatorObserver>[
-              // tv: 详情面板的 Navigator 与中央栈平级，中央观察者看不见它的
-              // push/pop；不单独挂一个就无法在「点进歌单详情 → 返回」后校正
-              // 焦点（2026-10-04 实测症状）。该观察者只负责触发焦点校正，
-              // 不参与 _depths 的二级判定（那是中央栈专用语义）。
-              if (kTvBuild)
-                _tvFocusRecheckObservers.putIfAbsent(
-                  id,
-                  () => _TvFocusRecheckObserver(_ensureFocusNotStuck),
-                ),
               if (history != null) ForwardHistoryObserver(history: history),
             ];
-            final twoPane = DesktopTwoPane(
+            return DesktopTwoPane(
               responsive: true,
               detailKey: _detailKeys.putIfAbsent(
                 id,
@@ -810,17 +863,6 @@ class ResponsiveShellState extends State<ResponsiveShell> {
                   _onDetailExclusive(id, exclusive),
               master: page,
             );
-            // tv: 详情面板被 ContentWidth 按 twoPaneDetailMaxWidth 居中限宽，
-            // master/detail 之间的分隔带与详情两侧留白都不铺底色 —— 桌面壳层
-            // 有自家背板，TV 顶栏壳层没有，露出的就是纯黑（真机截图的「黑边」，
-            // (detailWidth-720)/2 ≈ 82dp 两条竖带）。TV 在此垫一层主题底色。
-            if (kTvBuild) {
-              return ColoredBox(
-                color: Theme.of(context).colorScheme.surface,
-                child: twoPane,
-              );
-            }
-            return twoPane;
           }
           final content = kConstrainedTabs.contains(id)
               ? ContentWidth(child: page)

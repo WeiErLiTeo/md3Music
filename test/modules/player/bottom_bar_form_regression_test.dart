@@ -457,6 +457,8 @@ void main() {
     kSecondaryPlayerEnabled.value = true;
     kSecondaryPlayerOnPrimaryPages.value = false;
     kHideNavBarOnSecondaryPages.value = true;
+    // 双栏开关三端通用后，discover tab 的双栏形态需显式开启（生产播种 true）。
+    kWindowsTwoPaneEnabled.value = true;
     BottomBarMorphRegistry.instance.clearFrozenResidentRect();
     player = _FakePlayer();
     // 生产不变量：`_updatePosition` 把 `_position` 与 `positionNotifier` 一起写
@@ -471,6 +473,7 @@ void main() {
     kSecondaryPlayerEnabled.value = true;
     kSecondaryPlayerOnPrimaryPages.value = true;
     kHideNavBarOnSecondaryPages.value = true;
+    kWindowsTwoPaneEnabled.value = false;
     player.dispose();
     carMode.dispose();
   });

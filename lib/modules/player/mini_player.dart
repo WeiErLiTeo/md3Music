@@ -1048,7 +1048,7 @@ class _MiniPlayerState extends State<MiniPlayer>
                                   // 一旦形变层真的在画，就说明它已经画在了
                                   // 本封面此刻的位置上（p≈0 时两者重合），
                                   // 淡出只会拖成一个看得见的残影。
-                                  // 若形变层没接管（例如频谱圆盘 / 车机面板），
+                                  // 若形变层没接管（例如车机面板 / 减弱动画），
                                   // 本封面保持显示，行为与改动前一致。
                                   // 必须自己订阅：外层 _buildContent 只构建一次
                                   // （被 build 里的 ValueListenableBuilder 当

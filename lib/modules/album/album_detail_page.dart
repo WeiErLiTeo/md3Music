@@ -228,7 +228,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     try {
       final api = KugouApiClient();
       final detailFuture = api.getAlbumDetail(widget.album.id);
-      final songsFuture = api.getAlbumSongs(widget.album.id);
+      final songsFuture = api.getAlbumSongsAll(widget.album.id);
 
       final results = await Future.wait([detailFuture, songsFuture]);
 

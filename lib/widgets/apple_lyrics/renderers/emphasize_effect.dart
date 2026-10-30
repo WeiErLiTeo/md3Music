@@ -26,10 +26,16 @@ class EmphasizeState {
   /// 缩放比例，1.0~1.12（含末尾字加强后可能略高）。
   final double scale;
 
-  /// 辉光强度 0~1.2（作为 textShadow 的 alpha 通道）。
+  /// 辉光强度 0~1.2（作为辉光层的整体 alpha）。
   final double glowLevel;
 
   /// 阴影模糊半径（em 单位），封顶 0.3。
+  ///
+  /// **注意**：自「辉光剖面」改造后，绘制层的模糊半径改为固定剖面
+  /// （紧 / 中 / 松三层，见 `WordRenderer` 的 `_glowRimSigmaEm` 等常量），
+  /// 不再由本值决定——单层大半径正是"方块字糊成一坨"的根因。本字段保留为
+  /// 与时长相关的**相对强度**读数（供测试与后续调参），强度差异由
+  /// [glowLevel] 体现。
   final double shadowBlurEm;
 
   /// 水平外扩位移（em 单位）：左字向左、右字向右，随凸起涨落。

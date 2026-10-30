@@ -3,6 +3,7 @@ import 'package:material_ui/material_ui.dart';
 import '../../core/build_flags.dart';
 import '../../core/utils/app_haptics.dart';
 import '../../providers/player_provider.dart';
+import '../playback_hint_pills.dart';
 import '../playback_status_feedback.dart';
 import '../player_seek_bar.dart';
 import '../player_volume_bar.dart';
@@ -166,6 +167,9 @@ class _PlayerControlDockState extends State<PlayerControlDock> {
       // 每 ~200ms 一次重建会换算成一次 scheduleFrame —— 看不见还在产帧。
       if (widget.visible) player.positionNotifier,
       player,
+      // 「音频过渡中」提示：交叉淡化起止只改这一个 notifier
+      //（见 widgets/playback_hint_pills.dart）
+      player.crossfadeActiveNotifier,
       if (!amStyle) kSeekBarWaveEnabled,
     ];
     return ListenableBuilder(
@@ -181,6 +185,9 @@ class _PlayerControlDockState extends State<PlayerControlDock> {
         activeColor: widget.skin.seekActive(colorScheme),
         inactiveColor: widget.skin.seekInactive(colorScheme),
         labelColor: widget.skin.seekLabel(colorScheme),
+        // 时间行中央的瞬时状态提示（「缓冲中」/「音频过渡中」）：居中于两个时间
+        // 数字之间；无提示时传 null，时间行（及带的 40dp 预算）保持原样。
+        labelRowHints: playerHintPillsFor(player, amStyle: amStyle),
         climaxStart: song?.climaxStart,
         climaxEnd: song?.climaxEnd,
         height: _seekHeight(widget.tier),

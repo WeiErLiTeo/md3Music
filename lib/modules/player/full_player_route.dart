@@ -334,11 +334,56 @@ double playerMiniBarHeight() {
 /// 让覆盖层从这个信号取初始下标，两个问题一起消掉。
 final ValueNotifier<int> playerTabIndex = ValueNotifier<int>(1);
 
+/// 播放页在场的**歌词指挥口**，卡片深链专用（v31 起以集合承载全部在场实例）。
+///
+/// v43（用户拍板二次修正）：车机点媒体卡片改走「AdaptiveNav.pushDetailGlobal
+/// 把播放页塞进双栏右窗格」，不再依赖本指挥口直达；守卫恢复但深链经
+/// bypassCarGuardOnce 旁路。指挥口保留用于"播放页已开着时原地切歌词"。
+///
+/// v31：单指针改**注册集合**。覆盖层这类"后注册"的实例若在覆盖后注销，
+/// 单指针会以 identical 判属把整根清空，而它先注册的"存活"路由/面板实例
+/// 的命令从此静默 no-op（深链又对存量路由不 push——症状借拖拽路径复活）。
+/// 集合模式实例死亡只摘自己的注册，存活者继续响应；发送对全部在场实例
+/// 广播，各自幂等切页（UI 更新，不创建新实例）。
+///
+/// 抽象成 `void Function()`（而不是下标）：播放页窄屏结构的实际顺序是
+/// [playlist, cover, lyrics, …]（下标 2 恰为歌词），但顺序随宽窄屏与
+/// tab 开关动态调整——歌词页下标由在场实例按实时 `_tabLayout` 解析
+/// （`lyricsIndex`，见 player_tab_layout），调用方只表达"切歌词"语义，
+/// 不写死任何下标。
+///
+/// 没有在场实例（无路由、无面板）时发送是 **no-op**——不会凭空拉起任何
+/// 页面，等下一次卡片点击再试。
+typedef void PlayerLyricsCommandHandler();
+
+final Set<PlayerLyricsCommandHandler> _lyricsCommandHandlers =
+    <PlayerLyricsCommandHandler>{};
+
+void registerPlayerLyricsCommand(PlayerLyricsCommandHandler handler) =>
+    _lyricsCommandHandlers.add(handler);
+
+void unregisterPlayerLyricsCommand(PlayerLyricsCommandHandler handler) =>
+    _lyricsCommandHandlers.remove(handler);
+
+void sendDockPlayerLyricsCommand() {
+  for (final handler
+      in List<PlayerLyricsCommandHandler>.of(_lyricsCommandHandlers)) {
+    // v32：单实例异常不阻断后续实例（现状都是 postFrame+pager 空守卫，
+    // 实害低，这里固化"注册者不得打进命令语义"的兜底）。
+    try {
+      handler();
+    } catch (_) {}
+  }
+}
+
 /// 兼容旧引用：返回 true 表示当前 FullPlayer 在栈顶。
 /// 新代码应直接监听 [playerExpansion]。
 bool get isFullPlayerOnTop => playerExpansion.value > 0.5;
 
 /// 打开 FullPlayer（**统一防重复入栈**，新代码一律走这里）。
+///
+/// v43：恢复车机忽略守卫（防双实例双动画，v21 实测帧率翻倍+发热），深链经
+/// `bypassCarGuardOnce` 旁路一次；v42 的废弃 force 参数已删除（全仓无调用点）。
 ///
 /// 此前各调用点各自判重且口径不一：多数用 `activePlayerRoute?.isCurrent == true`
 /// ——播放页已在栈中但**非栈顶**时（用户从播放页又打开了歌单/其他页面）
@@ -354,12 +399,16 @@ bool get isFullPlayerOnTop => playerExpansion.value > 0.5;
 /// [scene] 是调用方（入口控件）在点击那一刻采集的形态快照，随路由透传 ——
 /// 悬浮胶囊这类"自己不写全局锚点"的入口必须带上它，否则展开起点只能落到
 /// 全局锚点或合成兜底上（见 [PlayerMorphScene] 与 [DraggablePlayerRoute.panelAnchorFor]）。
-void openFullPlayer(BuildContext context, {PlayerMorphScene? scene}) {
-  // 车机模式：播放器已常驻在面板里，任何「打开全屏播放页」的入口都忽略。
-  // 否则会在面板之外再 push 一个播放页 —— 两个实例各自驱动歌词/进度等动画，
-  // 整页帧率翻倍。
-  // active 含自动检测：命中车机屏同样忽略。
-  if (context.read<CarModeProvider>().active) return;
+void openFullPlayer(
+  BuildContext context, {
+  PlayerMorphScene? scene,
+  bool bypassCarGuardOnce = false,
+}) {
+  // MD3Music fork v43：恢复 v21 守卫（车机面板常驻播放器 + 全屏页 = 双实例
+  // 双动画，v21 实测帧率翻倍+发热），深链经 bypassCarGuardOnce 旁路一次——
+  // 深链优先走 AdaptiveNav.pushDetailGlobal 进双栏右窗格，旁路只是无双栏
+  // 场景（手机竖屏车机模式）的兜底。
+  if (context.read<CarModeProvider>().active && !bypassCarGuardOnce) return;
 
   // rootNavigator: true —— 桌面布局下内容区是嵌套 Navigator，若走最近的
   // Navigator 会把完整播放页 push 进中央内容区（只盖住内容区、盖不住侧栏与

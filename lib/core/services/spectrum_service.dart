@@ -26,7 +26,10 @@ int kSpectrumStyle = 0;
 
 /// 频谱**圆盘**（style 0/1：圆形旋转封面 + 环形频谱柱）当前是否生效。
 ///
-/// 圆盘下封面形变必须关闭（形变层画不出圆形裁切 + 旋转），但**文字形变照旧**。
+/// 圆盘下封面**仍可做 mini→full 的连贯形变**（可见圆 = 槽位盒内缩
+/// `SpectrumArtwork.barReserveRatio`、唱片角取共享相位）。本镜像只负责「终点
+/// 形状是什么」，且必须**同步可读**：跟手覆盖层里的播放页是当场新建的，首帧就
+/// 在 0<p<1，它自己的异步偏好还没读到。
 bool get kSpectrumDiscCoverActive => kSpectrumEnabled && kSpectrumStyle < 2;
 
 /// 频谱**视觉对齐延迟**（毫秒，默认 580）。

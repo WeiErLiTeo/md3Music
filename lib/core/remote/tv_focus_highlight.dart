@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
+import '../layout/ui_density.dart';
 import 'tv_focus_frame_animation.dart';
 
 /// tv: 遥控焦点指示框（红框），**不带**调试标签。
@@ -113,6 +114,13 @@ class TvFocusHighlightState extends State<TvFocusHighlight>
     // 系统「减弱动态效果」：滑行时长归零，逐帧贴合。与 app.dart 的
     // `_reduceMotion`、PlayerCoverMorphLayer 同一口径（都读 disableAnimationsOf）。
     _motion.reducedMotion = MediaQuery.disableAnimationsOf(context);
+    // 显式依赖「显示大小」档位：换档会改 MediaQuery.size / devicePixelRatio
+    // （DisplayScaleScope 重新 applyDisplayScale），但不是窗口 metrics 变化
+    // （didChangeMetrics 不响），也不产生 FocusManager 通知。不订阅时 Ticker
+    // 静音（§10.4.6 停帧）状态下换档，红框会冻结在旧档位的矩形上，直到下次
+    // 焦点切换才恢复。这里唤醒逐帧跟随即可：静止后 10 拍自动重新停帧。
+    MediaQuery.sizeOf(context);
+    _wake();
   }
 
   /// 焦点变化 / 窗口指标变化：解除静音，重新进入逐帧跟随。
@@ -177,7 +185,7 @@ class TvFocusHighlightState extends State<TvFocusHighlight>
 
   /// 当前焦点节点的屏幕矩形（外扩 2px 后的绘制矩形）；无可画焦点时返回 null。
   Rect? _currentRect() {
-    // 取当前焦点节点的屏幕矩形；焦点在 scope 上或不存在时无矩形可画。
+    // 取当前焦点节点的矩形；焦点在 scope 上或不存在时无矩形可画。
     // （dpad 的 DpadMarks 未对外导出，这里用 Flutter 原生的 localToGlobal。）
     final node = FocusManager.instance.primaryFocus;
     if (node == null || node is FocusScopeNode) return null;
@@ -185,7 +193,18 @@ class TvFocusHighlightState extends State<TvFocusHighlight>
     if (nodeContext == null || !nodeContext.mounted) return null;
     final box = nodeContext.findRenderObject();
     if (box is! RenderBox || !box.hasSize) return null;
-    final rect = box.localToGlobal(Offset.zero) & box.size;
+    // 量到 [DisplayScaleScope] 的设计像素锚点而非 RenderView 根：本组件挂在
+    // 该 scope 的 FittedBox 之内，painter 与锚点同在设计像素空间；而
+    // localToGlobal(Offset.zero) 返回根（窗口）坐标、已含 FittedBox 的 ×s，
+    // 直接画会被再放大一次 → 落点 = 正确位置 × s（换「显示大小」档后红框
+    // 向右下/左上偏、边框随之偏大偏小）。与封面形变探针、MiniPlayer 拖拽
+    // 同一教训（见 display_space.dart）。锚点在 FittedBox 之下：焦点节点与
+    // 锚点之间的路由转场 / 滚动 / 卡片缩放等内部变换仍如实包含。
+    final anchor = DisplayScaleReference.anchorOf(context);
+    final origin = anchor is RenderBox
+        ? box.localToGlobal(Offset.zero, ancestor: anchor)
+        : box.localToGlobal(Offset.zero); // 不在 scope 内（或单测裸挂载）时回退根空间
+    final rect = origin & box.size;
     if (rect.isEmpty || !rect.isFinite) return null;
     return rect.inflate(2);
   }

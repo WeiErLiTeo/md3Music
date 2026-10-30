@@ -77,8 +77,13 @@ Map<String, dynamic> _offloadSnapshotMap() => <String, dynamic>{
 /// MP3 做过位深实测（16 支持 / 24 不支持 / 32 与 float 未知），AAC 因 configure
 /// 预算跳过实测（只有 16 支持，其余 unknown）—— 正好覆盖位深三态与「未实测」小字。
 ///
-/// [probeError] 非空时用于验证「探测失败原因」以主题 error 色展示。
-Map<String, dynamic> _decoderSnapshotMap({String? probeError}) =>
+/// [probeError] 非空时用于验证「探测失败原因」以主题 error 色展示；
+/// [allSoftware] 为 true 时 MP3 条目改软解（模拟移动平台 MediaCodec 无音频
+/// 硬解的常态设备），用于验证 header 摘要与位深文案的「全软解」分支。
+Map<String, dynamic> _decoderSnapshotMap({
+  String? probeError,
+  bool allSoftware = false,
+}) =>
     <String, dynamic>{
       'deviceKey': 'test-device-key',
       'probedAtMs': DateTime(2026, 1, 2, 10, 30, 5).millisecondsSinceEpoch,
@@ -91,28 +96,28 @@ Map<String, dynamic> _decoderSnapshotMap({String? probeError}) =>
           'codecName': 'c2.android.mp3.decoder',
           'mime': 'audio/mpeg',
           'formatLabel': 'MP3',
-          'hardware': true,
-          'softwareOnly': false,
+          'hardware': !allSoftware,
+          'softwareOnly': allSoftware,
           'sampleRates': <int>[44100, 48000],
           'maxChannels': 2,
           'bitDepths': <String, String>{
-            '16': 'supported',
-            '24': 'unsupported',
+            '16': allSoftware ? 'unknown' : 'supported',
+            '24': allSoftware ? 'unknown' : 'unsupported',
             '32': 'unknown',
             'float': 'unknown',
           },
-          'bitDepthProbed': true,
+          'bitDepthProbed': !allSoftware,
         },
         <String, dynamic>{
           'codecName': 'c2.android.aac.decoder',
           'mime': 'audio/mp4a-latm',
           'formatLabel': 'AAC',
-          'hardware': true,
-          'softwareOnly': false,
+          'hardware': !allSoftware,
+          'softwareOnly': allSoftware,
           'sampleRates': <int>[44100, 48000],
           'maxChannels': 2,
           'bitDepths': <String, String>{
-            '16': 'supported',
+            '16': allSoftware ? 'unknown' : 'supported',
             '24': 'unknown',
             '32': 'unknown',
             'float': 'unknown',
@@ -130,12 +135,14 @@ void main() {
   int probeCalls = 0;
   int decoderProbeCalls = 0;
   String? decoderProbeError;
+  bool decoderAllSoftware = false;
 
   setUp(() {
     SharedPreferences.setMockInitialValues(<String, Object>{});
     probeCalls = 0;
     decoderProbeCalls = 0;
     decoderProbeError = null;
+    decoderAllSoftware = false;
     messenger.setMockMethodCallHandler(_channel, (MethodCall call) async {
       switch (call.method) {
         case 'getStatus':
@@ -146,10 +153,16 @@ void main() {
           probeCalls++;
           return _offloadSnapshotMap();
         case 'getCachedDecoderCapabilities':
-          return _decoderSnapshotMap(probeError: decoderProbeError);
+          return _decoderSnapshotMap(
+            probeError: decoderProbeError,
+            allSoftware: decoderAllSoftware,
+          );
         case 'probeDecoderCapabilities':
           decoderProbeCalls++;
-          return _decoderSnapshotMap(probeError: decoderProbeError);
+          return _decoderSnapshotMap(
+            probeError: decoderProbeError,
+            allSoftware: decoderAllSoftware,
+          );
         case 'setEnabled':
           final Object? args = call.arguments;
           final bool enabled =
@@ -312,6 +325,35 @@ void main() {
     final ColorScheme colorScheme =
         Theme.of(tester.element(find.text('设备解码器能力'))).colorScheme;
     expect(tester.widget<Text>(errorText).style?.color, colorScheme.error);
+
+    await unmount(tester);
+  });
+
+  testWidgets('全软解设备：摘要显示格式总数并点明 DSP 原因，位深文案区分',
+      (WidgetTester tester) async {
+    // 模拟移动平台常态：MediaCodec 音频全软解（硬解在 DSP/offload 完成）。
+    decoderAllSoftware = true;
+    await AudioOffloadService.instance.reloadAllCapabilities();
+    await mount(tester);
+
+    // 收起态 header 摘要：不再显示「硬解 0 个 · 支持编码 0 种」的误导性数字，
+    // 而是给出格式总数并解释为什么没有硬解条目。
+    expect(
+      find.text('探测到 2 种编码 · 均为软解（音频硬解通常走 DSP，不经 MediaCodec）'),
+      findsOneWidget,
+    );
+    // 旧文案（可硬解路径）不应出现
+    expect(find.textContaining('硬解解码器'), findsNothing);
+
+    await expandDecoder(tester);
+
+    // 两个格式都无硬件解码器 → 位深小字统一为「无硬件解码器」文案，
+    // 「预算内跳过」只应出现在确有硬解条目的快照（其它用例已覆盖）。
+    expect(find.text('未实测（无硬件解码器，不做试配）'), findsNWidgets(2));
+    expect(find.text('未实测（configure 预算内跳过）'), findsNothing);
+    // 软解徽标两张卡各一枚
+    expect(find.text('软解'), findsNWidgets(2));
+    expect(find.text('硬解'), findsNothing);
 
     await unmount(tester);
   });

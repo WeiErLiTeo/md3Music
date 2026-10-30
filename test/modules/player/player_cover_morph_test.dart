@@ -737,13 +737,13 @@ void main() {
       expect(bus.resolveCoverEligible(expansion: 0.2, live: true), isTrue);
     });
 
-    test('封面 / 文字两路锁存相互独立：频谱圆盘下只锁文字', () {
+    test('封面 / 文字两路锁存相互独立：写真等只锁封面一路', () {
       final bus = PlayerCoverMorphBus.instance;
       bus.reset();
-      // 频谱圆盘：封面不合格（形变层画不出圆形裁切 + 旋转），文字合格
+      // 封面不合格（写真 / 车机面板等封面独有的压制），文字合格
       expect(bus.resolveCoverEligible(expansion: 0.2, live: false), isFalse);
       expect(bus.resolveTextEligible(expansion: 0.2, live: true), isTrue);
-      // 途中频谱被关掉也**不**改判封面那一路（锁存语义不变）
+      // 途中状态被翻转也**不**改判封面那一路（锁存语义不变）
       expect(bus.resolveCoverEligible(expansion: 0.7, live: true), isFalse);
       expect(bus.resolveTextEligible(expansion: 0.7, live: false), isTrue);
       // 端点复位两路都清

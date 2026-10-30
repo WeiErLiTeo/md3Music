@@ -193,6 +193,30 @@ class ForwardHistoryObserver extends NavigatorObserver {
 class AdaptiveNav {
   const AdaptiveNav._();
 
+  /// MD3Music fork v43：最近一次可见的双栏详情面板 Navigator（由
+  /// [_TwoPanePageState] initState/dispose 登记）。车机卡片深链用它把播放页
+  /// 塞进右窗格——App 层（app.dart）的 context 在壳层之上，拿不到
+  /// DetailPaneScope，只能借这条全局登记。
+  static GlobalKey<NavigatorState>? _latestDetailKey;
+
+  /// MD3Music fork v43：向最近可见的双栏详情面板 push 一个页面。
+  ///
+  /// @return true = 已进详情面板；false = 当前没有可见双栏（调用方退回根 push）。
+  static bool pushDetailGlobal(WidgetBuilder builder) {
+    final nav = _latestDetailKey?.currentState;
+    if (nav == null) return false;
+    nav.push(MaterialPageRoute<void>(builder: builder));
+    return true;
+  }
+
+  static void registerDetailKey(GlobalKey<NavigatorState> key) {
+    _latestDetailKey = key;
+  }
+
+  static void unregisterDetailKey(GlobalKey<NavigatorState> key) {
+    if (identical(_latestDetailKey, key)) _latestDetailKey = null;
+  }
+
   static Future<T?> openDetail<T>(
     BuildContext context,
     WidgetBuilder builder,
@@ -255,6 +279,20 @@ class TwoPanePage extends StatefulWidget {
 
 class _TwoPanePageState extends State<TwoPanePage> {
   final GlobalKey<NavigatorState> _detailKey = GlobalKey<NavigatorState>();
+
+  @override
+  void initState() {
+    super.initState();
+    // MD3Music fork v43：把"当前可见的双栏详情面板"登记给全局深链入口——
+    // 车机卡片深链要用它把播放页塞进右窗格（AdaptiveNav.pushDetailGlobal）。
+    AdaptiveNav.registerDetailKey(_detailKey);
+  }
+
+  @override
+  void dispose() {
+    AdaptiveNav.unregisterDetailKey(_detailKey);
+    super.dispose();
+  }
 
   Future<void> _handlePop(bool didPop) async {
     if (didPop) return;
@@ -338,6 +376,13 @@ class _DesktopTwoPaneState extends State<DesktopTwoPane> {
   bool get _usesResponsiveLayout => widget.responsive || _isWindows;
 
   // Windows 的分隔条仍可拖动；首次进入忽略旧版偏右的比例，左右各占可用区一半。
+  //
+  // TV 构建强制双栏（不随分辨率/DPI 自适应退化单栏）：TV 焦点体系（两层顶栏、
+  // TvNavFocusBridge、挂在详情面板 Navigator 上的 _TvFocusRecheckObserver）
+  // 全部以双栏 master-detail 为前提，单栏路径下焦点无法进入列表（真机实测：
+  // 我的收藏页焦点移不到歌单上）。宽度 ≥ [kTwoPaneForcedMinWidth] 才强制；
+  // 更窄的视口由壳层（ResponsiveShell._buildTab）绕过本组件改走中央栈
+  // 整屏详情，不会进到这里的窄分支。
   ({double masterLeft, double masterWidth, double detailLeft,
     double detailWidth, bool twoPane}) _geometry(
     double width, {List<Rect> obstructions = const []}
@@ -346,7 +391,11 @@ class _DesktopTwoPaneState extends State<DesktopTwoPane> {
     masterFraction: _isWindows && width > 16
         ? _masterFraction * (width - 16) / width
         : _masterFraction,
-    twoPaneEnabled: !_isWindows || kWindowsTwoPaneEnabled.value,
+    // 双栏开关三端通用（历史名 kWindowsTwoPaneEnabled 保留）：非 Windows
+    // 由 main.dart 播种默认 true，宽屏双栏行为不回退；关掉后宽屏退单栏。
+    // TV 下开关被强制 true 且设置页置灰（见 main.dart 播种），不参与判定。
+    twoPaneEnabled: kWindowsTwoPaneEnabled.value,
+    forceTwoPane: kTvBuild && width >= kTwoPaneForcedMinWidth,
     verticalObstructions: obstructions,
   );
   static const double _kMinMaster = 280.0;
@@ -559,21 +608,29 @@ class _DesktopTwoPaneState extends State<DesktopTwoPane> {
 
   @override
   Widget build(BuildContext context) {
-    if (_isWindows) {
-      return ValueListenableBuilder<bool>(
-        valueListenable: kWindowsTwoPaneEnabled,
-        builder: (context, enabled, child) => _buildLayout(context),
-      );
-    }
-    return _buildLayout(context);
+    // 双栏开关三端通用：订阅 notifier，开关翻转时双栏↔单栏即时重建
+    // （详情栈不销毁，与 Windows 同一行为）。
+    return ValueListenableBuilder<bool>(
+      valueListenable: kWindowsTwoPaneEnabled,
+      builder: (context, enabled, child) => _buildLayout(context),
+    );
   }
 
   Widget _buildLayout(BuildContext context) {
     return LayoutBuilder(
       builder: (context, c) {
         final isWindows = defaultTargetPlatform == TargetPlatform.windows;
-        final transparentWindowsBackground = isWindows &&
+        // 壁纸模式下双栏的详情面板与分隔线都必须透明：否则右侧是一条纯
+        // surface 白板、两栏之间还多一条竖线，壁纸被硬生生切断。
+        //
+        // 原先这里只看 Windows（平台判定），Android 平板开桌面布局 + 壁纸时
+        // 仍会露白/露线。改为直接看主题信号：壁纸模式在 app.dart 的
+        // `_applyBackgroundOverrides` 里把 scaffoldBackgroundColor 置为透明，
+        // 与平台无关，正好是「需要透明双栏」的唯一真值来源。
+        final transparentBackground =
             Theme.of(context).scaffoldBackgroundColor == Colors.transparent;
+        // 分隔线：Windows 恒透明（既有桌面观感）；其它平台仅壁纸模式下透明。
+        final transparentSplitter = isWindows || transparentBackground;
         _lastTotalWidth = c.maxWidth;
         final masterW =
             (_masterFraction * c.maxWidth).clamp(_kMinMaster, _kMaxMaster,
@@ -632,7 +689,7 @@ class _DesktopTwoPaneState extends State<DesktopTwoPane> {
                     child: ResizableSplitter(
                       onDelta: _onDelta,
                       onDragEnd: _persist,
-                      color: isWindows ? Colors.transparent : null,
+                      color: transparentSplitter ? Colors.transparent : null,
                     ),
                   ),
                 Positioned(
@@ -675,7 +732,7 @@ class _DesktopTwoPaneState extends State<DesktopTwoPane> {
                               builder: (_) => _ResponsiveDetailBase(
                                 emptyState: widget.emptyState ??
                                     DetailEmptyState(
-                                      color: transparentWindowsBackground
+                                      color: transparentBackground
                                           ? Colors.transparent
                                           : null,
                                     ),
@@ -702,7 +759,7 @@ class _DesktopTwoPaneState extends State<DesktopTwoPane> {
               ResizableSplitter(
                 onDelta: _onDelta,
                 onDragEnd: _persist,
-                color: isWindows ? Colors.transparent : null,
+                color: transparentSplitter ? Colors.transparent : null,
               ),
               Expanded(
                 child: Navigator(
@@ -715,7 +772,7 @@ class _DesktopTwoPaneState extends State<DesktopTwoPane> {
                     requestFocus:
                         !(kTvBuild && s.name == Navigator.defaultRouteName),
                     builder: (_) => widget.emptyState ?? DetailEmptyState(
-                      color: transparentWindowsBackground
+                      color: transparentBackground
                           ? Colors.transparent
                           : null,
                     ),

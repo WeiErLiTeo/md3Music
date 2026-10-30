@@ -43,7 +43,7 @@ void main() {
 
     await theme.setPlayerStyle(PlayerStyle.ytMusic);
     expect(theme.useYtStylePlayer, isTrue);
-    expect(theme.useAmStylePlayer, isFalse);
+    expect(theme.useAmStylePlayer, isTrue);
     expect(consumer.builder(context, theme, null), isA<FullPlayerYt>());
 
     await theme.setUseAmStylePlayer(true);

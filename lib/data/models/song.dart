@@ -54,6 +54,8 @@ class Song {
   /// SAF 扫描时的授权目录 URI；普通文件由 localPath 推导所属目录。
   final String? folderPath;
   final String? artworkUri;
+  /// SAF 本地音频的内嵌/同目录歌词（Dart File 无法直接读取 content://）。
+  final String? localLyrics;
   final bool isOnline;
   final String? albumId;
   final String? artistId;
@@ -103,6 +105,7 @@ class Song {
     this.localPath,
     this.folderPath,
     this.artworkUri,
+    this.localLyrics,
     this.isOnline = false,
     this.albumId,
     this.artistId,
@@ -150,6 +153,7 @@ class Song {
       localPath: json['localPath'] as String?,
       folderPath: json['folderPath'] as String?,
       artworkUri: json['artworkUri'] as String?,
+      localLyrics: json['localLyrics'] as String?,
       isOnline: (json['isOnline'] as bool?) ?? false,
       albumId: json['albumId'] as String?,
       artistId: json['artistId'] as String?,
@@ -181,6 +185,7 @@ class Song {
       'localPath': localPath,
       'folderPath': folderPath,
       'artworkUri': artworkUri,
+      'localLyrics': localLyrics,
       'isOnline': isOnline,
       'albumId': albumId,
       'artistId': artistId,
@@ -211,6 +216,7 @@ class Song {
     String? localPath,
     String? folderPath,
     String? artworkUri,
+    String? localLyrics,
     bool? isOnline,
     String? albumId,
     String? artistId,
@@ -240,6 +246,7 @@ class Song {
       localPath: localPath ?? this.localPath,
       folderPath: folderPath ?? this.folderPath,
       artworkUri: artworkUri ?? this.artworkUri,
+      localLyrics: localLyrics ?? this.localLyrics,
       isOnline: isOnline ?? this.isOnline,
       albumId: albumId ?? this.albumId,
       artistId: artistId ?? this.artistId,

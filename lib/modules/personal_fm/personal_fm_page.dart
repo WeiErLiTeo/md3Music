@@ -503,9 +503,8 @@ class _PersonalFmPageState extends State<PersonalFmPage> {
     final sideTracks = songs.length > 1
         ? songs.sublist(1).take(_visibleSideCount).toList()
         : const <KugouSongDetail>[];
-    final sideGutter = constraints.maxWidth > AppLayout.maxContentWidth
-        ? (constraints.maxWidth - AppLayout.maxContentWidth) / 2
-        : 0.0;
+    final sideGutter = (constraints.maxWidth - ContentWidth.resolveWidth(
+        context, constraints.maxWidth)) / 2;
 
     return Scaffold(
       appBar: ScrollAwareAppBar(

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
@@ -12,11 +13,14 @@ import 'package:m3e_core/m3e_core.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:md3music/modules/charts/charts_page.dart';
 import 'package:md3music/modules/search/explore_sections.dart';
+import 'package:md3music/modules/album/new_album_browse_page.dart';
+import 'package:md3music/modules/search/search_section_header.dart';
 import 'package:md3music/providers/device_provider.dart';
 import 'package:md3music/providers/grid_columns_provider.dart';
 import 'package:md3music/providers/kugou_provider.dart';
 import 'package:md3music/providers/theme_provider.dart';
 import 'package:md3music/services/kugou_api/kugou_api_client.dart';
+import 'package:md3music/services/kugou_api/kugou_models.dart';
 import 'package:md3music/widgets/album_card.dart';
 import 'package:md3music/widgets/playlist_cover_hero.dart';
 import 'package:provider/provider.dart';
@@ -24,12 +28,52 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../test_helpers/fake_secure_storage.dart';
 
-/// 搜索空态「探索音乐」段（改版后仅主题歌单横滑带）→ 热门歌单完整列表页。
-///
-/// 改版（五段精简为单段）后本文件只覆盖两个回归点：
+/// 三组目录数据独立于主题歌单；模拟主题返回空或一直未完成的真实故障边界。
+class _ExploreFixtureProvider extends KugouProvider {
+  _ExploreFixtureProvider({this.populated = true, this.themeGate})
+      : super(registerDeviceOnStart: false);
+
+  final bool populated;
+  final Completer<void>? themeGate;
+  int playlistCalls = 0;
+  int rankCalls = 0;
+  int albumCalls = 0;
+
+  @override
+  List<KugouThemeInfo> get themePlaylistData => const [];
+  @override
+  List<KugouPlaylistBrief> get playlistList => populated
+      ? const [KugouPlaylistBrief(id: 'p1', name: '推荐测试歌单')]
+      : const [];
+  @override
+  KugouRankList? get rankList => populated
+      ? const KugouRankList(ranks: [KugouRank(id: 'r1', name: '测试排行榜')])
+      : null;
+  @override
+  List<KugouAlbumBrief> get topAlbums => populated
+      ? const [KugouAlbumBrief(id: 'a1', name: '测试新碟')]
+      : const [];
+  @override
+  Future<void> getThemePlaylist({bool forceRefresh = false}) async {
+    if (themeGate != null) await themeGate!.future;
+  }
+  @override
+  Future<void> getPlaylist({String? categoryId, int page = 1, bool forceRefresh = false}) async { playlistCalls++; }
+  @override
+  Future<void> getRankList({bool forceRefresh = false}) async { rankCalls++; }
+  @override
+  Future<void> getTopAlbum({int page = 1, bool forceRefresh = false}) async { albumCalls++; }
+}
+
+Finder _exploreAction(String label) => find.descendant(
+      of: find.byType(SearchSectionAction),
+      matching: find.text(label),
+    );
+
+/// 搜索空态目录恢复、主题数据故障边界，以及封面转场的既有回归点：
 /// 1. [PlaylistBrowsePage] 首帧即渲染网格且卡片带歌单命名空间 Hero 端点
 ///    （框架 Hero 在转场首帧配对，浏览页先画一帧 loading 圈就会配对扑空）。
-/// 2. 段头「探索更多 ›」能推入 [PlaylistBrowsePage] 且转场零异常。
+/// 2. 三个完整浏览入口与恢复的预览内容可达，且转场零异常。
 ///
 /// 另一处硬约束：同一路由子树内 tag 必须唯一（重复 tag 在转场收集阶段抛
 /// FlutterError），服务端列表可能出现重复 gid，卡片按首次出现挂 tag。
@@ -136,6 +180,20 @@ void _mockPathProvider() {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  testWidgets('新碟区块已迁移到发现页，不再占用搜索探索区', (tester) async {
+    final kugou = _ExploreFixtureProvider();
+    addTearDown(kugou.dispose);
+    await tester.pumpWidget(_host(kugou,
+        const SingleChildScrollView(child: MusicExploreSections())));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+    await tester.pumpAndSettle();
+    expect(find.text('测试新碟'), findsNothing);
+    expect(_exploreAction('新碟上架'), findsNothing);
+    expect(_exploreAction('热门歌单'), findsOneWidget);
+    expect(_exploreAction('排行榜'), findsOneWidget);
+    expect(kugou.albumCalls, 0);
+  });
+
   late HttpClientAdapter previous;
 
   setUp(() {
@@ -192,7 +250,8 @@ void main() {
     final kugou = await seed(tester);
     addTearDown(kugou.dispose);
 
-    await tester.pumpWidget(_host(kugou, const MusicExploreSections()));
+    await tester.pumpWidget(_host(kugou,
+        const SingleChildScrollView(child: MusicExploreSections())));
     // initState 后 _ensureLoaded 补拉主题歌单，排干真实事件循环直到横滑带渲染。
     for (var i = 0; i < 20; i++) {
       await tester.runAsync(
@@ -206,7 +265,7 @@ void main() {
     expect(find.text('主题二'), findsOneWidget);
 
     // 段头双入口：「热门歌单」→ PlaylistBrowsePage。
-    await tester.tap(find.text('热门歌单'));
+    await tester.tap(_exploreAction('热门歌单'));
     await tester.pump(); // push 后一帧：转场收集扫描两端子树
     expect(tester.takeException(), isNull);
 
@@ -224,10 +283,77 @@ void main() {
     // 返回探索段，「排行榜」入口 → ChartsPage（全 App 唯一入口，回归防护）。
     await tester.pageBack();
     await tester.pumpAndSettle();
-    await tester.tap(find.text('排行榜'));
+    await tester.tap(_exploreAction('排行榜'));
     await tester.pump();
     expect(tester.takeException(), isNull);
     await tester.pumpAndSettle();
     expect(find.byType(ChartsPage), findsOneWidget);
+  });
+
+  testWidgets('主题歌单为空时仍展示推荐歌单和排行榜，复用已有缓存', (tester) async {
+    final kugou = _ExploreFixtureProvider();
+    addTearDown(kugou.dispose);
+    await tester.pumpWidget(_host(kugou,
+        const SingleChildScrollView(child: MusicExploreSections())));
+    await tester.pumpAndSettle();
+
+    expect(_exploreAction('热门歌单'), findsOneWidget);
+    expect(_exploreAction('排行榜'), findsOneWidget);
+    expect(_exploreAction('新碟上架'), findsNothing);
+    expect(find.text('推荐测试歌单'), findsOneWidget);
+    expect(find.text('测试排行榜'), findsOneWidget);
+    expect(find.text('测试新碟'), findsNothing);
+    expect([kugou.playlistCalls, kugou.rankCalls, kugou.albumCalls], [0, 0, 0]);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('主题请求未完成也立即显示两个入口，并独立补拉缺失目录', (tester) async {
+    final gate = Completer<void>();
+    final kugou = _ExploreFixtureProvider(populated: false, themeGate: gate);
+    addTearDown(kugou.dispose);
+    await tester.pumpWidget(_host(kugou,
+        const SingleChildScrollView(child: MusicExploreSections())));
+    await tester.pump();
+
+    expect(_exploreAction('热门歌单'), findsOneWidget);
+    expect(_exploreAction('排行榜'), findsOneWidget);
+    expect(_exploreAction('新碟上架'), findsNothing);
+    expect([kugou.playlistCalls, kugou.rankCalls, kugou.albumCalls], [1, 1, 0]);
+    gate.complete();
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('迁移后的新碟完整列表仍保留封面 Hero', (tester) async {
+    final kugou = _ExploreFixtureProvider();
+    addTearDown(kugou.dispose);
+    await tester.pumpWidget(_host(kugou, const NewAlbumBrowsePage()));
+    // 首帧即应有缓存封面，不依赖图片缓存/字体等真实 IO 的完成时序。
+    await tester.pump();
+
+    expect(find.byWidgetPredicate((w) => w.runtimeType.toString() == 'NewAlbumBrowsePage'), findsOneWidget);
+    expect(find.byType(AlbumCard), findsOneWidget);
+    expect(_heroTags(tester), contains(albumCoverHeroTag('a1')));
+    expect(kugou.albumCalls, 1);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('窄屏大字号下目录入口可换行且无溢出', (tester) async {
+    tester.view.physicalSize = const Size(320, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final kugou = _ExploreFixtureProvider();
+    addTearDown(kugou.dispose);
+    await tester.pumpWidget(_host(kugou,
+        MediaQuery(
+          data: const MediaQueryData(textScaler: TextScaler.linear(1.5)),
+          child: const SingleChildScrollView(child: MusicExploreSections()),
+        )));
+    await tester.pumpAndSettle();
+    expect(_exploreAction('热门歌单'), findsOneWidget);
+    expect(_exploreAction('排行榜'), findsOneWidget);
+    expect(_exploreAction('新碟上架'), findsNothing);
+    expect(tester.takeException(), isNull);
   });
 }

@@ -18,11 +18,7 @@ const _kInstruments = <int, String>{1: '吉他', 2: '尤克里里', 3: '钢琴',
 String _levelLabel(int instruments, int level) {
   switch (instruments) {
     case 1: // 吉他：1 进阶 / 2 基础 / 0 中级
-      return switch (level) {
-        1 => '进阶',
-        2 => '基础',
-        _ => '中级',
-      };
+      return switch (level) { 1 => '进阶', 2 => '基础', _ => '中级' };
     case 2: // 尤克里里/钢琴：0 基础 / 1 进阶
     case 3:
       return level == 1 ? '进阶' : '基础';
@@ -212,12 +208,9 @@ class _SongSheetViewState extends State<SongSheetView> {
           children: [
             const CircularProgressIndicator(),
             const SizedBox(height: 12),
-            Text(
-              '曲谱加载中…',
-              style: textTheme.bodySmall?.copyWith(
-                color: colorScheme.onSurfaceVariant,
-              ),
-            ),
+            Text('曲谱加载中…',
+                style: textTheme.bodySmall
+                    ?.copyWith(color: colorScheme.onSurfaceVariant)),
           ],
         ),
       );
@@ -227,12 +220,9 @@ class _SongSheetViewState extends State<SongSheetView> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(
-              _error!,
-              style: textTheme.bodyMedium?.copyWith(
-                color: colorScheme.onSurfaceVariant,
-              ),
-            ),
+            Text(_error!,
+                style: textTheme.bodyMedium
+                    ?.copyWith(color: colorScheme.onSurfaceVariant)),
             const SizedBox(height: 8),
             TextButton(onPressed: _load, child: const Text('重试')),
           ],
@@ -264,18 +254,12 @@ class _SongSheetViewState extends State<SongSheetView> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
-            Icons.library_music_outlined,
-            size: 40,
-            color: colorScheme.onSurfaceVariant,
-          ),
+          Icon(Icons.library_music_outlined,
+              size: 40, color: colorScheme.onSurfaceVariant),
           const SizedBox(height: 12),
-          Text(
-            message,
-            style: textTheme.bodySmall?.copyWith(
-              color: colorScheme.onSurfaceVariant,
-            ),
-          ),
+          Text(message,
+              style: textTheme.bodySmall
+                  ?.copyWith(color: colorScheme.onSurfaceVariant)),
         ],
       ),
     );
@@ -292,7 +276,8 @@ class _SheetTile extends StatelessWidget {
   const _SheetTile({required this.item, required this.fallbackOpernId});
 
   void _open(BuildContext context) {
-    final opernId = item.opernId.isNotEmpty ? item.opernId : fallbackOpernId;
+    final opernId =
+        item.opernId.isNotEmpty ? item.opernId : fallbackOpernId;
     openSheetRender(
       context,
       SheetRenderTarget(
@@ -334,9 +319,8 @@ class _SheetTile extends StatelessWidget {
                   const SizedBox(height: 2),
                   Text(
                     meta,
-                    style: textTheme.bodySmall?.copyWith(
-                      color: colorScheme.onSurfaceVariant,
-                    ),
+                    style: textTheme.bodySmall
+                        ?.copyWith(color: colorScheme.onSurfaceVariant),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -353,9 +337,8 @@ class _SheetTile extends StatelessWidget {
             ),
             child: Text(
               _levelLabel(item.instruments, item.opernLevel),
-              style: textTheme.labelMedium?.copyWith(
-                color: colorScheme.onPrimaryContainer,
-              ),
+              style: textTheme.labelMedium
+                  ?.copyWith(color: colorScheme.onPrimaryContainer),
             ),
           ),
           const SizedBox(width: 4),
@@ -400,15 +383,15 @@ class _InstrumentsChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final bg = selected ? colorScheme.primaryContainer : null;
-    final fg = selected
-        ? colorScheme.onPrimaryContainer
-        : colorScheme.onSurfaceVariant;
+    final fg =
+        selected ? colorScheme.onPrimaryContainer : colorScheme.onSurfaceVariant;
     final child = Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      child: Text(
-        label,
-        style: Theme.of(context).textTheme.labelLarge?.copyWith(color: fg),
-      ),
+      child: Text(label,
+          style: Theme.of(context)
+              .textTheme
+              .labelLarge
+              ?.copyWith(color: fg)),
     );
     if (kTvBuild) {
       return DpadFocusable(
@@ -519,7 +502,6 @@ class SheetRenderPage extends StatefulWidget {
 class _SheetRenderPageState extends State<SheetRenderPage> {
   late final WebViewController _controller;
   bool _loading = true;
-  bool _exiting = false;
 
   @override
   void initState() {
@@ -531,60 +513,27 @@ class _SheetRenderPageState extends State<SheetRenderPage> {
     );
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setNavigationDelegate(
-        NavigationDelegate(
-          onPageFinished: (_) {
-            // 页面是 React SPA，首屏 DOM 完成后再注入净化 CSS；SPA 内部
-            // 路由切换由 MutationObserver 兜底（CSS 规则本身常驻，双保险）。
-            _controller.runJavaScript(_kPurifyScript);
-            if (mounted) setState(() => _loading = false);
-          },
-        ),
-      )
+      ..setNavigationDelegate(NavigationDelegate(
+        onPageFinished: (_) {
+          // 页面是 React SPA，首屏 DOM 完成后再注入净化 CSS；SPA 内部
+          // 路由切换由 MutationObserver 兜底（CSS 规则本身常驻，双保险）。
+          _controller.runJavaScript(_kPurifyScript);
+          if (mounted) setState(() => _loading = false);
+        },
+      ))
       ..loadRequest(Uri.parse(target.url));
-  }
-
-  Future<void> _handleBack() async {
-    if (_exiting) return;
-    try {
-      if (await _controller.canGoBack()) {
-        await _controller.goBack();
-        return;
-      }
-    } catch (_) {}
-    if (!mounted) return;
-    setState(() => _exiting = true);
-    Navigator.of(context).pop();
   }
 
   @override
   Widget build(BuildContext context) {
-    // 禁用系统预测性返回手势直接缩放 Android WebView PlatformView（叠加在 ModalBottomSheet
-    // 之上做实时矩阵变换会导致 PlatformView 合成树卡死），改由 PopScope 接管：
-    // 网页可后退时优先后退网页，否则卸载 WebView 后平滑退出路由。
-    return PopScope(
-      canPop: false,
-      onPopInvokedWithResult: (didPop, _) {
-        if (didPop) return;
-        _handleBack();
-      },
-      child: Scaffold(
-        appBar: AppBar(
-          leading: IconButton(
-            icon: const Icon(Icons.arrow_back),
-            onPressed: _handleBack,
-          ),
-          title: Text(widget.title),
-        ),
-        body: _exiting
-            ? const SizedBox.expand()
-            : Stack(
-                children: [
-                  WebViewWidget(controller: _controller),
-                  if (_loading)
-                    const Center(child: CircularProgressIndicator()),
-                ],
-              ),
+    return Scaffold(
+      appBar: AppBar(title: Text(widget.title)),
+      body: Stack(
+        children: [
+          WebViewWidget(controller: _controller),
+          if (_loading)
+            const Center(child: CircularProgressIndicator()),
+        ],
       ),
     );
   }
@@ -642,14 +591,12 @@ class SheetCoverImage extends StatelessWidget {
   Widget build(BuildContext context) {
     final resolved = (url != null && url!.isNotEmpty) ? url! : null;
     Widget fallback() => Container(
-      color: Theme.of(context).colorScheme.surfaceContainerHighest,
-      alignment: Alignment.center,
-      child: Icon(
-        Icons.library_music_outlined,
-        size: size * 0.4,
-        color: Theme.of(context).colorScheme.onSurfaceVariant,
-      ),
-    );
+          color: Theme.of(context).colorScheme.surfaceContainerHighest,
+          alignment: Alignment.center,
+          child: Icon(Icons.library_music_outlined,
+              size: size * 0.4,
+              color: Theme.of(context).colorScheme.onSurfaceVariant),
+        );
     return ClipRRect(
       borderRadius: BorderRadius.circular(10),
       child: SizedBox(

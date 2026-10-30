@@ -9,6 +9,7 @@ class ControlledAudioService {
   final _playerState = StreamController<just_audio.PlayerState>.broadcast();
   final _playingState = StreamController<bool>.broadcast();
   final _speedState = StreamController<double>.broadcast();
+  final _crossfadingState = StreamController<bool>.broadcast();
   final _playlistWaiters = <_PlaylistWaiter>[];
   final List<Completer<void>> playlistLoads = [];
   final List<Duration?> sourceInitialPositions = [];
@@ -34,6 +35,7 @@ class ControlledAudioService {
   Stream<just_audio.SequenceState?> get sequenceStateStream =>
       const Stream.empty();
   Stream<double> get speedStream => _speedState.stream;
+  Stream<bool> get crossfadingStream => _crossfadingState.stream;
   just_audio.ProcessingState get processingState => _player.processingState;
 
   /// 硬解（audio offload）让路判定要读：测试替身固定视为「音量均衡未开启」。
@@ -146,6 +148,12 @@ class ControlledAudioService {
     just_audio.PlayerState(_player.playing, _player.processingState),
   );
 
+  /// 直接驱动平台处理态并推一次 playerState 事件（装载 / 缓冲 / 播完档位）。
+  void emitProcessingState(just_audio.ProcessingState state) {
+    _player.processingState = state;
+    _playerState.add(just_audio.PlayerState(_player.playing, state));
+  }
+
   /// 模拟平台自然播完：同步 processingState 后在 playerStateStream 上吐一次
   /// completed，走 PlayerProvider 真实的 `_handlePlaybackCompleted` 通路。
   void emitCompleted() {
@@ -160,6 +168,9 @@ class ControlledAudioService {
     _speedState.add(speed);
   }
 
+  /// 驱动交叉淡化状态流（等价生产实现里斜坡起止 / abort 的 `_setCrossfading`）。
+  void emitCrossfading(bool active) => _crossfadingState.add(active);
+
   void emitError(just_audio.PlayerException error) {
     _player.emitError(error);
   }
@@ -168,6 +179,7 @@ class ControlledAudioService {
     await _positionState.close();
     await _playingState.close();
     await _speedState.close();
+    await _crossfadingState.close();
     await _playerState.close();
     await _player.dispose();
   }

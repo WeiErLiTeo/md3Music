@@ -6,6 +6,9 @@ import 'package:m3e_core/m3e_core.dart';
 import 'package:provider/provider.dart';
 
 import '../../data/models/album.dart';
+import '../player/secondary_mini_player.dart';
+import '../../widgets/song_list_item.dart';
+import '../../providers/player_provider.dart';
 import '../../core/remote/tv_card_focus.dart';
 import '../../core/remote/tv_scroll_region.dart';
 import 'search_section_header.dart';
@@ -13,18 +16,15 @@ import '../../core/theme/app_dimens.dart';
 import '../../providers/kugou_provider.dart';
 import '../../services/kugou_api/kugou_models.dart';
 import '../../widgets/album_card.dart';
+import '../../widgets/compact_album_grid.dart';
 import '../../widgets/pinchable_grid_view.dart';
 import '../../widgets/playlist_cover_hero.dart';
 import '../playlist/playlist_page.dart';
 import '../charts/charts_page.dart';
 
-/// 搜索空态的「探索音乐」内容段（改版计划：五段精简为单段）。
-///
-/// 仅保留主题歌单横滑带；场景音乐（不可点假 Chip）/ 热门歌单 / 排行榜 /
-/// 新碟上架四段的大网格已删除。完整浏览入口收敛为段头 trailing 的两个
-/// 紧凑入口：「热门歌单」→ [PlaylistBrowsePage]、「排行榜」→ [ChartsPage]
-/// （排行榜全 App 只有这里可进，删除即成孤岛，见 2026-10-25 回归）。
-/// 复用 [KugouProvider] 已有数据与缓存，仅在数据为空时补一次请求。
+/// 搜索空态的音乐探索：主题歌单、推荐歌单与排行榜（新碟上架已移至发现页）。
+/// 浏览入口独立于主题歌单数据，避免该接口返回空或失败时整段入口消失。
+/// 复用 Provider 的缓存，只对缺失的数据独立补拉，不等待主题请求。
 class MusicExploreSections extends StatefulWidget {
   const MusicExploreSections({super.key});
 
@@ -52,6 +52,8 @@ class _MusicExploreSectionsState extends State<MusicExploreSections> {
     if (!mounted) return;
     final kugou = context.read<KugouProvider>();
     if (kugou.themePlaylistData.isEmpty) kugou.getThemePlaylist();
+    if (kugou.playlistList.isEmpty) kugou.getPlaylist();
+    if (kugou.rankList == null) kugou.getRankList();
   }
 
   @override
@@ -60,14 +62,38 @@ class _MusicExploreSectionsState extends State<MusicExploreSections> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
       children: [
+        // 入口不放进任何数据 Selector，首次打开和请求失败时也始终可见。
+        const SearchSectionHeader(title: '探索音乐'),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+          child: Wrap(
+            spacing: AppSpacing.sm,
+            children: [
+              _buildExploreEntry('热门歌单', Icons.queue_music,
+                  (_) => const PlaylistBrowsePage()),
+              _buildExploreEntry('排行榜', Icons.leaderboard,
+                  (_) => const ChartsPage()),
+            ],
+          ),
+        ),
         _buildThemeSection(),
+        _buildPlaylistSection(),
+        _buildRankSection(),
         const Gap(AppSpacing.sm),
       ],
     );
   }
 
-  /// 主题歌单：横滑方卡（展示态，无逐卡点击目标），
-  /// 完整浏览走段头 trailing「探索更多」。
+  Widget _buildExploreEntry(String label, IconData icon, WidgetBuilder page) {
+    void open() => AdaptiveNav.openDetail(context, page);
+    return TvCardFocus(
+      onSelect: open,
+      debugLabel: 'explore-entry-$label',
+      child: SearchSectionAction(icon: icon, label: label, onTap: open),
+    );
+  }
+
+  /// 主题歌单仍保留原有横滑展示；它的数据不控制其他目录的显示。
   Widget _buildThemeSection() {
     return Selector<KugouProvider, List<KugouThemeInfo>>(
       selector: (_, kugou) => kugou.themePlaylistData,
@@ -77,42 +103,6 @@ class _MusicExploreSectionsState extends State<MusicExploreSections> {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // 与搜索历史/热搜段共用同一套段落头与动作规格(见 SearchSectionHeader)。
-            SearchSectionHeader(
-              title: '探索音乐',
-              actions: [
-                TvCardFocus(
-                  onSelect: () => AdaptiveNav.openDetail(
-                    context,
-                    (_) => const PlaylistBrowsePage(),
-                  ),
-                  debugLabel: 'explore-entry-热门歌单',
-                  child: SearchSectionAction(
-                    icon: Icons.queue_music,
-                    label: '热门歌单',
-                    onTap: () => AdaptiveNav.openDetail(
-                      context,
-                      (_) => const PlaylistBrowsePage(),
-                    ),
-                  ),
-                ),
-                TvCardFocus(
-                  onSelect: () => AdaptiveNav.openDetail(
-                    context,
-                    (_) => const ChartsPage(),
-                  ),
-                  debugLabel: 'explore-entry-排行榜',
-                  child: SearchSectionAction(
-                    icon: Icons.leaderboard,
-                    label: '排行榜',
-                    onTap: () => AdaptiveNav.openDetail(
-                      context,
-                      (_) => const ChartsPage(),
-                    ),
-                  ),
-                ),
-              ],
-            ),
             SizedBox(
               height: _themeBandHeight,
               child: TvScrollRegion(
@@ -178,6 +168,90 @@ class _MusicExploreSectionsState extends State<MusicExploreSections> {
         color: cs.surfaceContainerHighest,
         child: Icon(Icons.music_note, color: cs.onSurfaceVariant),
       );
+  /// 热门歌单：2 列小封面网格（封面在左、标题在右，与每日推荐布局相似），
+  /// 最多 6 个，点击进歌单详情，「›」进浏览页。
+  Widget _buildPlaylistSection() {
+    return Selector<KugouProvider, List<KugouPlaylistBrief>>(
+      selector: (_, kugou) => kugou.playlistList,
+      builder: (context, plist, _) {
+        if (plist.isEmpty) return const SizedBox.shrink();
+        // tag 口径与 PlaylistBrowsePage 的卡片一致（同一份 playlistList）：区块小
+        // 封面 → 完整列表大封面、区块小封面 → 歌单详情页头，两段转场共用一套 tag。
+        // 重复 gid 只给首次出现挂 tag（同一路由子树重复 tag 会在转场收集阶段抛
+        // FlutterError，见 firstIndexById 的说明）。
+        final firstGid = firstIndexById(
+          [for (final p in plist) p.globalCollectionId ?? p.id],
+        );
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _ExploreSectionHeader(
+              title: '推荐歌单',
+              onMore: () => AdaptiveNav.openDetail(context,
+                (_) => const PlaylistBrowsePage(),
+              ),
+            ),
+            CompactAlbumGrid(
+              albums: [
+                for (final p in plist)
+                  Album(
+                    id: p.id,
+                    name: p.name,
+                    artist: '',
+                    artworkUri: p.coverUrl,
+                    songCount: p.songCount,
+                  ),
+              ],
+              heroTags: [
+                for (var i = 0; i < plist.length; i++)
+                  firstGid[plist[i].globalCollectionId ?? plist[i].id] == i
+                      ? playlistCoverHeroTag(
+                          plist[i].globalCollectionId ?? plist[i].id,
+                        )
+                      : null,
+              ],
+              onTap: (i) => AdaptiveNav.openDetail(context,
+                (_) => PlaylistPage(playlist: plist[i].toPlaylist()),
+              ),
+              regionKey: 'tv/explore-hot-playlists',
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// 排行榜：2 列小封面网格，最多 6 个，点击进榜单歌曲页，「›」进排行榜页。
+  Widget _buildRankSection() {
+    return Selector<KugouProvider, KugouRankList?>(
+      selector: (_, kugou) => kugou.rankList,
+      builder: (context, rankList, _) {
+        final ranks = rankList?.ranks ?? const <KugouRank>[];
+        if (ranks.isEmpty) return const SizedBox.shrink();
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _ExploreSectionHeader(
+              title: '排行榜',
+              onMore: () => AdaptiveNav.openDetail(context, (_) => const ChartsPage()),
+            ),
+            CompactAlbumGrid(
+              albums: [for (final r in ranks) r.toAlbum()],
+              onTap: (i) => AdaptiveNav.openDetail(context,
+                (_) => RankDetailPage(
+                    rankId: ranks[i].id,
+                    rankName: ranks[i].name,
+                ),
+              ),
+              regionKey: 'tv/explore-ranks',
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+
 }
 
 /// 热门歌单浏览页（从发现页迁移）：完整歌单网格，
@@ -257,4 +331,108 @@ class _PlaylistBrowsePageState extends State<PlaylistBrowsePage> {
             ),
     );
   }
+}
+
+/// 排行榜歌曲页（从发现页迁移）。
+class RankDetailPage extends StatefulWidget {
+  final String rankId;
+  final String rankName;
+  const RankDetailPage({super.key, required this.rankId, required this.rankName,
+  });
+  @override
+  State<RankDetailPage> createState() => _RankDetailPageState();
+}
+
+class _RankDetailPageState extends State<RankDetailPage> {
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await context.read<KugouProvider>().getRankSongs(rankId: widget.rankId);
+      if (mounted) setState(() => _isLoading = false);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(widget.rankName)),
+      body: SecondaryMiniPlayerHost(
+        child: _isLoading
+          ? const Center(child: M3ELoadingIndicator())
+          : Selector<KugouProvider, List<KugouSongDetail>>(
+              selector: (_, kugou) => kugou.rankSongs,
+              builder: (context, songs, _) {
+                if (songs.isEmpty) {
+                  return Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Text('暂无数据'),
+                        M3EButton(
+                          onPressed: () async {
+                            setState(() => _isLoading = true);
+                            await context.read<KugouProvider>().getRankSongs(
+                              rankId: widget.rankId,
+                              forceRefresh: true,
+                            );
+                            if (mounted) setState(() => _isLoading = false);
+                          },
+                          child: const Text('重试'),
+                        ),
+                      ],
+                    ),
+                  );
+                }
+                return TvScrollRegion(
+                  memoryKey: 'tv/browse-rank',
+                  horizontalEdge: DpadEdgeBehavior.leave,
+                  child: ListView.builder(
+                    padding: EdgeInsets.fromLTRB(
+                      AppSpacing.lg, AppSpacing.lg, AppSpacing.lg,
+                      AppSpacing.lg + MediaQuery.paddingOf(context).bottom,
+                    ),
+                    itemCount: songs.length,
+                    itemBuilder: (context, i) {
+                      final song = songs[i].toSong();
+                      return SongListItem(
+                        song: song,
+                        onTap: () =>
+                            context.read<PlayerProvider>().playOnlinePlaylist(
+                              songs.map((e) => e.toSong()).toList(),
+                              i,
+                            ),
+                        onMoreTap: () {},
+                      );
+                    },
+                  ),
+                );
+              },
+            ),
+      ),
+    );
+  }
+}
+
+
+/// 复用当前搜索页的标题样式与 TV 单停点，而不是恢复旧版独立标题控件。
+class _ExploreSectionHeader extends StatelessWidget {
+  const _ExploreSectionHeader({required this.title, required this.onMore});
+  final String title;
+  final VoidCallback onMore;
+
+  @override
+  Widget build(BuildContext context) => SearchSectionHeader(
+        title: title,
+        actions: [
+          TvCardFocus(
+            onSelect: onMore,
+            debugLabel: 'explore-more-$title',
+            child: SearchSectionAction(
+              label: '查看全部', icon: Icons.chevron_right, onTap: onMore),
+          ),
+        ],
+      );
 }

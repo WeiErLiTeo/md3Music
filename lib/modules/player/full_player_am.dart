@@ -89,6 +89,7 @@ import '../../widgets/spectrum_artwork.dart';
 import '../../widgets/spectrum_background.dart';
 import '../../utils/landscape_immersive.dart';
 import '../../widgets/player_playlist_view.dart';
+import '../../widgets/playback_hint_pills.dart';
 import '../../widgets/playback_status_feedback.dart';
 import 'car_mode_exit.dart';
 import '../../services/kugou_api/comment_reply_target.dart';
@@ -246,7 +247,7 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
   // 桌面歌词状态监听：长按歌词按钮 toggle 后同步 icon
   late final VoidCallback _onDesktopLyricChanged;
 
-  // 动态字体颜色：从专辑封面提取的主色（歌词当前行「70% 白 + 30% 提取色」混色用）
+  // 动态字体颜色：从专辑封面提取的主色（歌词当前行按「混色比例」与白色混色用）
   Color? _lyricAccentColor;
   String? _lastAccentUrl;
 
@@ -382,8 +383,8 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
   /// - 车机常驻面板：不是全屏页，没有 MiniPlayer 可对位；
   /// - 封面此刻不可见（竖屏停在歌单 / 歌词 / 评论 tab，见下）。
   ///
-  /// **刻意不含频谱圆盘**：文字块与封面形状无关，频谱圆盘开着时歌名照飞
-  /// （用户要求）。封面一侧另有 [_coverMorphEligible]，两者**故意不同源**。
+  /// **刻意不含封面形状**：文字块与封面形状无关。频谱圆盘已经不再压制封面
+  /// （见 [_coverMorphEligible]），但两者仍然**故意不同源**：写真只压封面一侧。
   ///
   /// 刻意不含「3D 深度封面 / 动态封面视频是否已就绪」：它们是挂载后才异步就绪的
   /// 位图 / 视频图层，实时求值会让形变半空中中断，加锁存又会在进入方向失效
@@ -398,16 +399,29 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
       (_tabLayout.coverIndex < 0 ||
           _tabController.index == _tabLayout.coverIndex);
 
-  /// **封面**连贯是否接管本次转场 = 结构条件 且 非写真 且 非频谱圆盘。
+  /// **封面**连贯是否接管本次转场 = 结构条件 且 非写真。
   ///
-  /// 写真与频谱圆盘（圆形裁切 + 旋转）都画不出那张平面方图，只有封面一侧退出，
-  /// 文字形变走 [_morphStructuralEligible]，不受影响（真机验收明确要求）。
+  /// 写真画不出那张平面方图（整页换成出血的写真背景），只有封面一侧退出，文字
+  /// 形变走 [_morphStructuralEligible]，不受影响（真机验收明确要求）。
   ///
-  /// 圆盘判定读 [kSpectrumDiscCoverActive] 同步镜像，保证跟手覆盖层第一帧的锁存
-  /// 就拿到真值 —— 早前直接读本页的 `_spectrumEnabled`，覆盖层首帧恒为 false，
-  /// 锁存把「频谱开着」误判成「可形变」，于是**每次上滑都会飞出方封面**。
-  bool get _coverMorphEligible =>
-      _morphStructuralEligible && !_photoWanted && !_isDiscCover;
+  /// **频谱圆盘（style 0/1）不再压制封面**：圆盘形状由槽位上报的
+  /// `settledInsetRatio` 与飞行层现算的终点唱片角（共享相位，见
+  /// `SpectrumDiscSpin`）完整描述。改动前因为它"形变层只会画方图"而整体退出，
+  /// 观感是圆盘模式下上滑完全没有封面动画（用户要求补上）。
+  ///
+  /// 圆盘判定读 [kSpectrumDiscCoverActive] 同步镜像决定**终点形状**（见
+  /// [_coverMorphSettledInset]）：跟手覆盖层第一帧就在 0<p<1，本页的异步偏好还
+  /// 没读到，形状判据必须同步可读。早前直接读本页的 `_spectrumEnabled`，覆盖层
+  /// 首帧恒为 false，锁存把「频谱开着」误判成「落方图」，于是每次上滑都飞出方封面。
+  bool get _coverMorphEligible => _morphStructuralEligible && !_photoWanted;
+
+  /// 封面形变的**终点形状**：频谱圆盘时可见圆在槽位盒内单侧内缩
+  /// [SpectrumArtwork.barReserveRatio]，其余（含 style 2 背景层）恒 0（方图）。
+  ///
+  /// 与 [_buildLandscapeArtworkContent] / [_buildArtworkView] 里 `_isDiscCover`
+  /// 的分流同源：那两处决定真身画圆盘还是方图，这里必须给出同一答案。
+  double get _coverMorphSettledInset =>
+      _isDiscCover ? SpectrumArtwork.barReserveRatio : 0.0;
 
   /// 写真封面是否生效：开关开 + 在线歌曲写真已实际取到图（hash 由
   /// [_buildFullLayout] 排期同步，关开关/本地歌会被置空）。
@@ -474,6 +488,10 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
     // 覆盖层与接管的页面路由可能短暂并存，服务侧用计数消化，勿改回布尔）。
     MusicHapticsService.instance.setPlayerPageActive(true);
     WidgetsBinding.instance.addObserver(this);
+    // MD3Music fork v31：歌词命令口改注册集合（先注册的存活实例不再被
+    // 后注册实例的注销挤掉，重放"进了但停的不是歌词页"即不会在拖拽
+    // 路径复活）。
+    registerPlayerLyricsCommand(_goDockLyrics);
     if (Platform.isWindows) {
       SettingsRepository.windowsLiveSettingsRevision.addListener(
         _reloadWindowsPlayerSettings,
@@ -760,7 +778,7 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
   ///
   ///   这里必须写**结构门**（[_morphStructuralEligible]）而不是
   ///   [_coverMorphEligible]：该信号被封面与文字两侧共用（`willDraw` /
-  ///   `textWillDraw` 都读它），写成封面那一侧会把频谱圆盘 / 写真对封面的压制
+  ///   `textWillDraw` 都读它），写成封面那一侧会把写真等封面独有的压制
   ///   **连带压掉文字连贯** —— 表现为「封面不飞了，歌名也跟着不飞了」。
   void _publishMorphSignals() {
     final i = _tabController.index;
@@ -1005,6 +1023,9 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
       TvPlayerBackFallback.instance.unregister(_tvHandleBackFallback);
     }
     PlayerZenBridge.instance.unregister(_zenToggleHandler);
+    // 与 initState 的命令口注册成对：集合 remove 只摘除自己的注册，
+    // 存活实例（路由/面板）不受影响。
+    unregisterPlayerLyricsCommand(_goDockLyrics);
     if (Platform.isWindows) {
       SettingsRepository.windowsLiveSettingsRevision.removeListener(
         _reloadWindowsPlayerSettings,
@@ -1604,6 +1625,8 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
         style: _spectrumStyle,
         barColor: _spectrumColor,
         opacity: _spectrumOpacity,
+        // 与 MiniPlayer 交接期间让位环形柱（交接后 350ms 淡入回来）。
+        morphProgress: playerExpansion,
       );
     }
     return Selector<PlayerProvider, (String?, String?)>(
@@ -2384,6 +2407,28 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
                               photoWidthFraction: 0.4,
                               opacity: photoOpacity,
                             ),
+                          ),
+                        )
+                      : const SizedBox.shrink(),
+                ),
+              ),
+            // MD3Music fork v51：宽屏写真生效时封面盒不渲染，弹幕宿主随之消失
+            // （真机实测：横屏开歌手写真无弹幕，竖屏正常——竖屏封面 tab 的
+            // 封面盒仍在）。在写真层之上补一个左栏区域（与写真
+            // photoWidthFraction 同宽）的弹幕层；写真关闭时封面盒路径自带
+            // 弹幕，两层互斥不会双份。不套 IgnorePointer：弹幕绘制层本身无
+            // 手势，右下角"发弹幕"按钮需要可点（与竖屏行为一致）。
+            if (getScreenType(MediaQuery.sizeOf(context).width) !=
+                ScreenType.compact)
+              Positioned.fill(
+                child: ListenableBuilder(
+                  listenable: _photoController,
+                  builder: (context, _) => _photoCoverActive
+                      ? FractionallySizedBox(
+                          alignment: Alignment.centerLeft,
+                          widthFactor: 0.4,
+                          child: const SongDanmakuHost(
+                            cover: SizedBox.expand(),
                           ),
                         )
                       : const SizedBox.shrink(),
@@ -3719,6 +3764,7 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
           ? 1.0
           : (playerProvider.isPlaying ? 1.0 : 0.85),
       settledAnchor: Alignment.center,
+      settledInsetRatio: _coverMorphSettledInset,
       child: AnimatedScale(
         // 频谱模式（style 0/1 圆形旋转封面）不需要封面的放大缩小动画
         scale: _isDiscCover
@@ -3753,34 +3799,39 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
 
     // 全屏写真由 _buildFullLayout 的背景层统一绘制；此处只叠加标题，避免 PageView 上下边界形成接缝。
     if (_photoCoverActive) {
-      return Stack(
-        fit: StackFit.expand,
-        children: [
-          Align(
-            alignment: Alignment.bottomCenter,
-            child: Padding(
-              padding: EdgeInsets.symmetric(
-                horizontal: horizontalPadding,
-                vertical: verticalPadding,
-              ),
-              // 标题块内部是无 mainAxisSize 的 Column（默认 max）：正常布局里它
-              // 从父 Column 拿到**无界**高度所以收成内容高；本分支经 Align 传入
-              // 有界约束会被撑满整屏、文字顶到顶上。外层再包一个 min Column 把
-              // 无界高度传进去，标题恢复按内容高并贴底。
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _buildTitleBlockMorph(
-                    playerProvider,
-                    currentSong,
-                    isExpanded: isExpanded,
-                    alignment: CrossAxisAlignment.center,
-                  ),
-                ],
+      // v44：写真背景分支也包弹幕宿主——此前此分支无封面子树、弹幕宿主未挂，
+      // 开启"歌手写真背景"时 AM 风格整页无弹幕（MD3 风格恒有，风格差异实测根因）。
+      // 弹幕滚动区锚在容器顶部 45%，写真模式下即全屏背景的上部，位置合理。
+      return _withDanmaku(
+        Stack(
+          fit: StackFit.expand,
+          children: [
+            Align(
+              alignment: Alignment.bottomCenter,
+              child: Padding(
+                padding: EdgeInsets.symmetric(
+                  horizontal: horizontalPadding,
+                  vertical: verticalPadding,
+                ),
+                // 标题块内部是无 mainAxisSize 的 Column（默认 max）：正常布局里它
+                // 从父 Column 拿到**无界**高度所以收成内容高；本分支经 Align 传入
+                // 有界约束会被撑满整屏、文字顶到顶上。外层再包一个 min Column 把
+                // 无界高度传进去，标题恢复按内容高并贴底。
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _buildTitleBlockMorph(
+                      playerProvider,
+                      currentSong,
+                      isExpanded: isExpanded,
+                      alignment: CrossAxisAlignment.center,
+                    ),
+                  ],
+                ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       );
     }
 
@@ -3837,6 +3888,7 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
                                 ? 1.0
                                 : (playerProvider.isPlaying ? 1.0 : 0.85),
                             settledAnchor: Alignment.center,
+                            settledInsetRatio: _coverMorphSettledInset,
                             child: AnimatedScale(
                               // 频谱模式（style 0/1 圆形旋转封面）不需要封面的放大缩小动画
                               scale: _isDiscCover
@@ -3855,6 +3907,8 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
                                       style: _spectrumStyle,
                                       barColor: _spectrumColor,
                                       opacity: _spectrumOpacity,
+                                      // 与 MiniPlayer 交接期间让位环形柱（交接后 350ms 淡入回来）。
+                                      morphProgress: playerExpansion,
                                     )
                                   : _buildArtworkWithDynamicCover(
                                       currentSong,
@@ -3888,6 +3942,7 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
                   // 该分支没有 AnimatedScale（不随暂停缩放）→ 稳定态恒为 1.0
                   settledScale: 1.0,
                   settledAnchor: Alignment.center,
+                  settledInsetRatio: _coverMorphSettledInset,
                   child: _isDiscCover
                       ? SpectrumArtwork(
                           artworkUri: currentSong.artworkUri,
@@ -3897,6 +3952,8 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
                           style: _spectrumStyle,
                           barColor: _spectrumColor,
                           opacity: _spectrumOpacity,
+                          // 与 MiniPlayer 交接期间让位环形柱（交接后 350ms 淡入回来）。
+                          morphProgress: playerExpansion,
                         )
                       : _buildArtworkWithDynamicCover(
                           currentSong,
@@ -4101,6 +4158,9 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
                   listenable: Listenable.merge([
                     playerProvider.positionNotifier,
                     playerProvider,
+                    // 「音频过渡中」提示：交叉淡化起止只改这一个 notifier
+                    //（见 playback_hint_pills.dart）
+                    playerProvider.crossfadeActiveNotifier,
                   ]),
                   builder: (context, _) => _buildProgressBar(
                     playerProvider,
@@ -4361,6 +4421,9 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
       labelRowBadge: widget.dockMode
           ? _buildQualityPill(playerProvider, faded: true)
           : null,
+      // 时间行中央的瞬时状态提示（「缓冲中」/「音频过渡中」）：居中于两个时间
+      // 数字之间，与徽章共用中央组；无提示时传 null，时间行保持原 14dp 定高。
+      labelRowHints: playerHintPillsFor(playerProvider, amStyle: true),
       climaxEnd: song?.climaxEnd?.toDouble(),
       onSeekStart: () {
         _wasPlayingBeforeDrag = playerProvider.isPlaying;
@@ -4775,6 +4838,15 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
   /// 导航条拖动结束：吸附到最近 tab
   void _onTabDragEnd() {
     _pagerKey.currentState?.settleNearest();
+  }
+
+  /// 卡片深链在车机模式下的落点：指挥本面板实例切到歌词页。统一 postFrame：
+  /// 命令可能在面板实例 initState 后、pager 未就绪的当帧到达，此时 goToPage
+  /// 是 no-op，落一帧等它就位再切。
+  void _goDockLyrics() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _goToTab(_tabLayout.lyricsIndex);
+    });
   }
 
   /// 程序化切页（封面页点击、歌词页点击等）。

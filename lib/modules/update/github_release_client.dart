@@ -46,7 +46,7 @@ class GithubReleaseClient implements ReleaseSource {
   static const String repo = 'md3Music';
 
   /// GitHub 要求 User-Agent 非空，显式声明产品标识避免被拒。
-  static const String userAgent = 'MD3Music-Android';
+  static const String userAgent = 'MD3Music';
 
   static final Uri apiLatestUri = Uri.parse(
     'https://api.github.com/repos/$owner/$repo/releases/latest',
@@ -63,10 +63,14 @@ class GithubReleaseClient implements ReleaseSource {
 
   @override
   Future<ReleaseInfo?> fetchLatest() async {
-    final viaApi = await _fetchViaApi();
+    final viaApi = await fetchLatestDetails();
     if (viaApi != null) return viaApi;
     return _fetchViaRedirect();
   }
+
+  /// 读取完整 Release 元数据。Windows 自动更新需要更新日志与 ZIP 资产，
+  /// 因此不使用只有 tag 的 302 回退结果。
+  Future<ReleaseInfo?> fetchLatestDetails() => _fetchViaApi();
 
   /// 主链路：GitHub REST API。
   Future<ReleaseInfo?> _fetchViaApi() async {
@@ -91,11 +95,30 @@ class GithubReleaseClient implements ReleaseSource {
         return null;
       }
       final htmlUrl = (response.data!['html_url'] as String?)?.trim();
+      final body = (response.data!['body'] as String?) ?? '';
+      final bareVersion = tagName.replaceFirst(RegExp(r'^[vV]'), '');
+      final assetName = 'md3music-windows-$bareVersion.zip';
+      final assets = response.data!['assets'];
+      Map<String, dynamic>? windowsAsset;
+      if (assets is List) {
+        for (final value in assets) {
+          if (value is Map<String, dynamic> &&
+              value['name'] == assetName) {
+            windowsAsset = value;
+            break;
+          }
+        }
+      }
+      final digest = windowsAsset?['digest'] as String?;
       return ReleaseInfo.fromTag(
         tagName: tagName,
         htmlUrl: (htmlUrl == null || htmlUrl.isEmpty)
             ? _fallbackHtmlUri.toString()
             : htmlUrl,
+        body: body,
+        windowsZipUrl: windowsAsset?['browser_download_url'] as String?,
+        windowsZipSize: windowsAsset?['size'] as int?,
+        windowsZipDigest: digest,
       );
     } catch (error) {
       debugPrint('[UpdateCheck] API 查询失败：$error');

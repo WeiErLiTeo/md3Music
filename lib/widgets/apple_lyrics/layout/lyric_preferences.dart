@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../../core/services/windows_default_font.dart';
+
 /// 歌词字体来源枚举（与全局 [FontSource] 解耦，允许歌词使用与 UI 不同的字体）。
 ///
 /// - [LyricFontSource.system]：使用手机系统字体（默认，符合"优先展示用户手机字体"需求）
@@ -227,6 +229,46 @@ class LyricPreferences extends ChangeNotifier {
   /// 1.0 = 历史行为（sigma 等于距离分级值 1~5），确保升级后视觉不变。
   static const double defaultBlurIntensity = 1.0;
 
+  // ============== 歌词动态颜色 ==============
+
+  /// 动态颜色混色比例下限。
+  ///
+  /// 0.0 = 纯白（等于关闭取色观感），用户仍可保留开关只调比例。
+  static const double minDynamicColorMixRatio = 0.0;
+
+  /// 动态颜色混色比例上限。
+  ///
+  /// 1.0 = 完全使用封面提取色（渲染侧仍会把明度抬到 ≥ 0.78 保证深色底可读）。
+  static const double maxDynamicColorMixRatio = 1.0;
+
+  /// 动态颜色混色比例默认值。
+  ///
+  /// 0.15 = 历史行为（85% 白 + 15% 封面提取色），确保升级后视觉不变。
+  static const double defaultDynamicColorMixRatio = 0.15;
+
+  /// 上方已播行是否跟随已播颜色的默认值（默认关闭 = 历史行为）。
+  static const bool defaultUseAboveLinesPlayedColor = false;
+
+  // ============== 歌词辉光强度 ==============
+
+  /// 辉光强度倍数下限。
+  ///
+  /// 0.2 时辉光只剩一层极淡的光晕，接近"关闭辉光观感"但保留开关状态，
+  /// 不会出现"开关开着却完全没效果"的死档。
+  static const double minGlowIntensity = 0.2;
+
+  /// 辉光强度倍数上限。
+  ///
+  /// 2.0 时紧贴笔画的环带 alpha 从约 0.25 提到约 0.45（实测），再高会
+  /// 让白色歌词的笔画边缘过曝、与背景对比度反转。
+  static const double maxGlowIntensity = 2.0;
+
+  /// 辉光强度倍数默认值。
+  ///
+  /// 1.0 = 历史行为（辉光剖面按 `EmphasizeEffect.glowLevel` 原样输出），
+  /// 确保升级后视觉不变。
+  static const double defaultGlowIntensity = 1.0;
+
   // ============== 按设备类型的默认值（手机 / Pad） ==============
 
   /// 按设备类型的字号默认：手机 29px，Pad 40px。
@@ -270,6 +312,7 @@ class LyricPreferences extends ChangeNotifier {
   static const String _keyUseGaussianBlur = 'lyric_use_gaussian_blur';
   static const String _keyBlurIntensity = 'lyric_blur_intensity';
   static const String _keyUseGlowEffect = 'lyric_use_glow_effect';
+  static const String _keyGlowIntensity = 'lyric_glow_intensity';
   static const String _keyUseFlowingBackground = 'lyric_use_flowing_background';
   static const String _keyFontSource = 'lyric_font_source';
   static const String _keyCustomFontPath = 'lyric_custom_font_path';
@@ -280,6 +323,10 @@ class LyricPreferences extends ChangeNotifier {
   static const String _keyLineBalance = 'lyric_line_balance';
   static const String _keyEcoMode = 'lyric_eco_mode';
   static const String _keyUseDynamicLyricColor = 'lyric_dynamic_color';
+  static const String _keyDynamicColorMixRatio =
+      'lyric_dynamic_color_mix_ratio';
+  static const String _keyAboveLinesPlayedColor =
+      'lyric_above_lines_played_color';
   static const String _keyGlowThresholdFactor = 'lyric_glow_threshold_factor';
   static const String _keyGlowThresholdMode = 'lyric_glow_threshold_mode';
   static const String _keyGlowFixedThresholdMs = 'lyric_glow_fixed_threshold_ms';
@@ -304,6 +351,8 @@ class LyricPreferences extends ChangeNotifier {
   // 歌词模糊强度倍数（默认 1.0 = 历史行为）
   double _blurIntensity = defaultBlurIntensity;
   bool _useGlowEffect = false;
+  // 辉光强度倍数（默认 1.0 = 历史行为）
+  double _glowIntensity = defaultGlowIntensity;
   bool _useFlowingBackground = false;
   bool _useDuetLayout = false;
   // 平衡行换行默认关闭：保持歌词布局的原始自动换行行为。
@@ -317,6 +366,10 @@ class LyricPreferences extends ChangeNotifier {
   bool _ecoMode = false;
   // 动态字体颜色默认关闭，仅 AM 播放器可用。
   bool _useDynamicLyricColor = false;
+  // 动态颜色混色比例（默认 0.15 = 历史行为：85% 白 + 15% 封面提取色）
+  double _dynamicColorMixRatio = defaultDynamicColorMixRatio;
+  // 当前行以上的行是否跟随当前行已播颜色（默认关闭）
+  bool _useAboveLinesPlayedColor = defaultUseAboveLinesPlayedColor;
   // 辉光触发阈值系数（默认 1.2）：触发阈值 = 歌词字长中位数 × 该系数
   double _glowThresholdFactor = defaultGlowThresholdFactor;
   // 辉光触发判定模式（默认固定时长）：adaptive = BPM/字长中位数 × 系数，fixed = 固定阈值
@@ -363,6 +416,12 @@ class LyricPreferences extends ChangeNotifier {
   double get blurIntensity => _blurIntensity;
 
   bool get useGlowEffect => _useGlowEffect;
+
+  /// 歌词辉光强度倍数（范围 [minGlowIntensity]~[maxGlowIntensity]）。
+  ///
+  /// 辉光层每帧的 alpha = `EmphasizeState.glowLevel × 本倍数`（clamp 到 1.0），
+  /// 只影响亮度、不改剖面半径，保证"贴笔画"的光形不随强度变形。
+  double get glowIntensity => _glowIntensity;
   bool get useFlowingBackground => _useFlowingBackground;
   bool get useDuetLayout => _useDuetLayout;
 
@@ -382,6 +441,19 @@ class LyricPreferences extends ChangeNotifier {
 
   /// 歌词动态字体颜色是否开启（默认关闭，仅 AM 播放器生效）。
   bool get useDynamicLyricColor => _useDynamicLyricColor;
+
+  /// 动态颜色混色比例（范围 [minDynamicColorMixRatio]~[maxDynamicColorMixRatio]）。
+  ///
+  /// 当前行歌词颜色 = 白色与封面提取色按该比例混色，再把明度抬到 ≥ 0.78
+  /// （保留色相与饱和度）保证深色背景可读。默认 0.15 = 历史观感。
+  double get dynamicColorMixRatio => _dynamicColorMixRatio;
+
+  /// 当前行以上的行是否使用与当前行已播字相同的颜色（默认关闭）。
+  ///
+  /// 开启后「已播行」不再用主题默认歌词色，而是复用当前行的高亮色
+  /// （含高斯模糊层）；颜色来源仍由 [useDynamicLyricColor] /
+  /// [customTextColor] 决定，两者都未启用时本开关无视觉变化。
+  bool get useAboveLinesPlayedColor => _useAboveLinesPlayedColor;
 
   /// 辉光触发阈值系数（范围 [minGlowThresholdFactor]~[maxGlowThresholdFactor]）。
   ///
@@ -441,18 +513,27 @@ class LyricPreferences extends ChangeNotifier {
   /// 自定义过滤正则（空串 = 内置默认模式，见 `LyricCreditFilter.defaultPattern`）。
   String get creditPattern => _creditPattern;
 
+  /// 自定义字体（[LyricFontSource.custom]）是否加载成功。
+  ///
+  /// 面板提示「已应用自定义字体 / 字体加载失败」必须用它：
+  /// [effectiveFontFamily] 在 Windows 的 system 档也非 null（内置思源黑体），
+  /// 用它判断会把「回落到默认字体」误报成「自定义字体已生效」。
+  bool get customFontLoaded => _loadedCustomFontFamily != null;
+
   /// 当前生效的 fontFamily（传给 TextPainter 的 TextStyle）：
-  /// - [LyricFontSource.system]：返回 null（让 Flutter 走系统字体链）
-  /// - [LyricFontSource.bundled]：已废弃（内置 SimHei 已移除），等同 system 返回 null
+  /// - [LyricFontSource.system]：Windows 返回内置思源黑体（与全局 UI 同族，
+  ///   否则「还原所有设置」后歌词会掉到引擎兜底字形）；其他平台返回 null，
+  ///   让 Flutter 走系统字体链
+  /// - [LyricFontSource.bundled]：已废弃（内置 SimHei 已移除），等同 system
   /// - [LyricFontSource.custom]：返回 [_loadedCustomFontFamily]，
-  ///   加载失败时为 null（实际降级为 system 行为）
+  ///   加载失败时降级为对应平台默认字体（Windows = 内置思源黑体）
   String? get effectiveFontFamily {
     switch (_fontSource) {
       case LyricFontSource.system:
       case LyricFontSource.bundled:
-        return null;
+        return WindowsDefaultFont.loadedFamily;
       case LyricFontSource.custom:
-        return _loadedCustomFontFamily;
+        return _loadedCustomFontFamily ?? WindowsDefaultFont.loadedFamily;
     }
   }
 
@@ -483,6 +564,9 @@ class LyricPreferences extends ChangeNotifier {
         (prefs.getDouble(_keyBlurIntensity) ?? defaultBlurIntensity)
             .clamp(minBlurIntensity, maxBlurIntensity);
     _useGlowEffect = prefs.getBool(_keyUseGlowEffect) ?? false;
+    _glowIntensity =
+        (prefs.getDouble(_keyGlowIntensity) ?? defaultGlowIntensity)
+            .clamp(minGlowIntensity, maxGlowIntensity);
     _useFlowingBackground = prefs.getBool(_keyUseFlowingBackground) ?? false;
     _useDuetLayout = prefs.getBool(_keyUseDuetLayout) ?? false;
     _lineBalance = prefs.getBool(_keyLineBalance) ?? false;
@@ -494,6 +578,13 @@ class LyricPreferences extends ChangeNotifier {
     _customTextColor = colorValue == null ? null : ui.Color(colorValue);
     _ecoMode = prefs.getBool(_keyEcoMode) ?? false;
     _useDynamicLyricColor = prefs.getBool(_keyUseDynamicLyricColor) ?? false;
+    _dynamicColorMixRatio =
+        (prefs.getDouble(_keyDynamicColorMixRatio) ??
+                defaultDynamicColorMixRatio)
+            .clamp(minDynamicColorMixRatio, maxDynamicColorMixRatio);
+    _useAboveLinesPlayedColor =
+        prefs.getBool(_keyAboveLinesPlayedColor) ??
+            defaultUseAboveLinesPlayedColor;
     _glowThresholdFactor =
         (prefs.getDouble(_keyGlowThresholdFactor) ?? defaultGlowThresholdFactor)
             .clamp(minGlowThresholdFactor, maxGlowThresholdFactor);
@@ -595,6 +686,16 @@ class LyricPreferences extends ChangeNotifier {
     await prefs.setBool(_keyUseGlowEffect, enabled);
   }
 
+  /// 设置辉光强度倍数并持久化。
+  Future<void> setGlowIntensity(double value) async {
+    final clamped = value.clamp(minGlowIntensity, maxGlowIntensity);
+    if (clamped == _glowIntensity) return;
+    _glowIntensity = clamped;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_keyGlowIntensity, _glowIntensity);
+  }
+
   /// 设置动态流光背景开关并持久化。
   Future<void> setUseFlowingBackground(bool enabled) async {
     if (_useFlowingBackground == enabled) return;
@@ -633,13 +734,39 @@ class LyricPreferences extends ChangeNotifier {
   }
 
   /// 设置歌词动态字体颜色开关并持久化。
-  /// 开启后当前行歌词颜色按「70% 白 + 30% 封面提取色」混色（仅 AM 播放器生效）。
+  /// 开启后当前行歌词颜色按「(1 - 比例) 白 + 比例 封面提取色」混色（仅 AM 播放器生效）。
   Future<void> setUseDynamicLyricColor(bool enabled) async {
     if (_useDynamicLyricColor == enabled) return;
     _useDynamicLyricColor = enabled;
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_keyUseDynamicLyricColor, enabled);
+  }
+
+  /// 设置动态颜色混色比例并持久化。
+  ///
+  /// 范围 [minDynamicColorMixRatio]~[maxDynamicColorMixRatio]，默认 0.15。
+  /// 同值早退（不重复落盘 / 通知）；比例变化由已订阅 [LyricPreferences] 的
+  /// 歌词视图重算当前行颜色，下一帧即生效。
+  Future<void> setDynamicColorMixRatio(double ratio) async {
+    final clamped =
+        ratio.clamp(minDynamicColorMixRatio, maxDynamicColorMixRatio);
+    if (clamped == _dynamicColorMixRatio) return;
+    _dynamicColorMixRatio = clamped;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_keyDynamicColorMixRatio, _dynamicColorMixRatio);
+  }
+
+  /// 设置「上方行使用已播颜色」开关并持久化。
+  ///
+  /// 只影响当前行以上的行（清晰层与模糊层），当前行/下方行不变。
+  Future<void> setUseAboveLinesPlayedColor(bool enabled) async {
+    if (_useAboveLinesPlayedColor == enabled) return;
+    _useAboveLinesPlayedColor = enabled;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyAboveLinesPlayedColor, enabled);
   }
 
   /// 设置辉光触发阈值系数并持久化。
@@ -936,9 +1063,12 @@ class LyricPreferences extends ChangeNotifier {
     _loadedCustomFontFamily = null;
     _ecoMode = false;
     _useDynamicLyricColor = false;
+    _dynamicColorMixRatio = defaultDynamicColorMixRatio;
+    _useAboveLinesPlayedColor = defaultUseAboveLinesPlayedColor;
     _glowThresholdFactor = defaultGlowThresholdFactor;
     _glowThresholdMode = GlowThresholdMode.fixed;
     _glowFixedThresholdMs = defaultGlowFixedThresholdMs;
+    _glowIntensity = defaultGlowIntensity;
     _inactiveScale = defaultInactiveScale;
     _alignPosition = defaultAlignPositionForCurrentPlatform;
     _cascadeMaxDelayMs = defaultCascadeMaxDelayMsForCurrentPlatform;
@@ -964,9 +1094,12 @@ class LyricPreferences extends ChangeNotifier {
     await prefs.setString(_keyDisplayMode, _displayMode.name);
     await prefs.remove(_keyEcoMode);
     await prefs.remove(_keyUseDynamicLyricColor);
+    await prefs.remove(_keyDynamicColorMixRatio);
+    await prefs.remove(_keyAboveLinesPlayedColor);
     await prefs.remove(_keyGlowThresholdFactor);
     await prefs.remove(_keyGlowThresholdMode);
     await prefs.remove(_keyGlowFixedThresholdMs);
+    await prefs.remove(_keyGlowIntensity);
     await prefs.remove(_keyInactiveScale);
     await prefs.remove(_keyAlignPosition);
     await prefs.remove(_keyCascadeMaxDelayMs);

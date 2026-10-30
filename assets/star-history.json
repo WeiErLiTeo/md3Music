@@ -230,7 +230,27 @@
   },
   {
     "date": "2026-10-26",
-    "stars": 1162,
-    "daily_growth": 15
+    "stars": 1164,
+    "daily_growth": 17
+  },
+  {
+    "date": "2026-10-27",
+    "stars": 1181,
+    "daily_growth": 17
+  },
+  {
+    "date": "2026-10-28",
+    "stars": 1195,
+    "daily_growth": 14
+  },
+  {
+    "date": "2026-10-29",
+    "stars": 1207,
+    "daily_growth": 12
+  },
+  {
+    "date": "2026-10-30",
+    "stars": 1232,
+    "daily_growth": 25
   }
 ]

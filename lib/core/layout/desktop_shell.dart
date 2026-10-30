@@ -453,19 +453,27 @@ class _DesktopSidebar extends StatelessWidget {
             ),
           ),
           Expanded(
-            child: ListView.builder(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              itemCount: railDestinations.length,
-              itemBuilder: (context, i) {
-                final selected = i == selectedIndex;
-                final dest = railDestinations[i];
-                return _SidebarItem(
-                  icon: selected ? dest.selectedIcon : dest.icon,
-                  label: dest.label,
-                  selected: selected,
-                  onTap: () => onDestinationSelected(i),
-                );
-              },
+            // 导航项整组在侧栏内**垂直居中**：侧栏顶部是 App 名称、底部紧接
+            // 迷你播放器（NowPlayingBar 在外层整宽条），若列表贴顶，下方会留下
+            // 一大段空白、整列明显偏上。Center + shrinkWrap 让这组条目居中于
+            // 「标题之下、播放条之上」的可用高度；条目多到放不下时 ListView
+            // 仍会正常滚动（shrinkWrap 被 max 高度钳制）。
+            child: Center(
+              child: ListView.builder(
+                shrinkWrap: true,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                itemCount: railDestinations.length,
+                itemBuilder: (context, i) {
+                  final selected = i == selectedIndex;
+                  final dest = railDestinations[i];
+                  return _SidebarItem(
+                    icon: selected ? dest.selectedIcon : dest.icon,
+                    label: dest.label,
+                    selected: selected,
+                    onTap: () => onDestinationSelected(i),
+                  );
+                },
+              ),
             ),
           ),
         ],

@@ -16,6 +16,7 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:md3music/core/layout/ui_density.dart';
 import 'package:md3music/core/remote/tv_focus_highlight.dart';
 
 void main() {
@@ -446,6 +447,111 @@ void main() {
     b.requestFocus();
     await tester.pump();
     expect(_frameRect(tester), target);
+  });
+
+  testWidgets('「显示大小」≠1 时红框按设计像素贴合（不偏 s 倍）', (tester) async {
+    // 复现：app.dart 真实结构 MaterialApp.builder → DisplayScaleScope → Stack
+    // （焦点内容 + TvFocusHighlight 同级）。修复前 _currentRect 用
+    // localToGlobal 量到根（窗口）坐标、已含 FittedBox ×s，画进设计像素空间
+    // 再被放大一次 → 红框落在 正确位置 × s（1.25 档：(600,400,40×40) 量成
+    // (750,500,50×50)、外扩 2 后 (748,498,50×50)）。修复后量到设计像素锚点，
+    // 逐像素贴合。DisplayScaleAnchor 第 2 帧才挂上（postFrame setState），
+    // 需多 pump 一帧再等静止。
+    final node = FocusNode();
+    addTearDown(node.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: (context, child) => DisplayScaleScope(
+          scale: 1.25,
+          child: Stack(
+            children: [
+              Positioned(
+                left: 600,
+                top: 400,
+                child: Focus(
+                  focusNode: node,
+                  autofocus: true,
+                  child: const SizedBox(width: 40, height: 40),
+                ),
+              ),
+              const Positioned.fill(child: TvFocusHighlight()),
+            ],
+          ),
+        ),
+      ),
+    );
+    // 锚点挂载帧 + 静止（>10 拍停帧阈值）。
+    await tester.pump();
+    await pumpFrames(tester, 20);
+
+    expect(
+      _frameRect(tester),
+      // 设计像素 (600,400,40×40) 外扩 2：正确落位。锚点未挂的首帧回退根
+      // 空间量到 ×1.25 的窗口坐标，第二帧起修正。
+      Rect.fromLTWH(598, 398, 44, 44),
+      reason: 's=1.25 时红框必须画在设计像素空间（修复前为 (748,498,50×50)）',
+    );
+  });
+
+  testWidgets('Ticker 静音后换「显示大小」档位必须唤醒跟随', (tester) async {
+    // 复现：换档既不产生 FocusManager 通知、也不是窗口 metrics 变化
+    // （didChangeMetrics 不响）。修复前 Ticker 静音（§10.4.6 停帧）时换档，
+    // 红框冻结在旧档位矩形上。修复后 didChangeDependencies 显式依赖
+    // MediaQuery.size，换档 → 依赖变化 → 唤醒 → 红框落到新设计空间。
+    final node = FocusNode();
+    addTearDown(node.dispose);
+
+    Widget hostAt(double scale) => MaterialApp(
+          builder: (context, child) => DisplayScaleScope(
+            scale: scale,
+            child: Stack(
+              children: [
+                Center(
+                  child: Focus(
+                    focusNode: node,
+                    autofocus: true,
+                    child: const SizedBox(width: 40, height: 40),
+                  ),
+                ),
+                const Positioned.fill(child: TvFocusHighlight()),
+              ],
+            ),
+          ),
+        );
+
+    await tester.pumpWidget(hostAt(1.25));
+    await tester.pump();
+    await pumpFrames(tester, 20);
+    expect(
+      tester.binding.hasScheduledFrame,
+      isFalse,
+      reason: '前置：静止后应已停帧',
+    );
+    final rectBefore = _frameRect(tester);
+    // 1.25 档设计视口 640×480，中心焦点 (300,220,40×40) 外扩 2。
+    expect(rectBefore, Rect.fromLTWH(298, 218, 44, 44));
+
+    // 换档 1.25 → 1.5：设计视口从 640×480 变为 533.33×400（FittedBox 仍把
+    // 设计空间铺满同一 800×600 物理窗口），Center 焦点落在设计空间中心
+    // (246.67,180,40×40) 外扩 2 —— 断言值是运行实测，偏 s² 时会量成
+    // (370,270) 附近（×1.5），一眼可辨。
+    await tester.pumpWidget(hostAt(1.5));
+    await tester.pump();
+    expect(
+      tester.binding.hasScheduledFrame,
+      isTrue,
+      reason: '换档后必须重新逐帧跟随（修复前冻结在旧档矩形）',
+    );
+    await pumpFrames(tester, 20);
+    expect(
+      _frameRect(tester),
+      rectMoreOrLessEquals(
+        Rect.fromLTWH(244.67, 178, 44, 44),
+        epsilon: 0.5,
+      ),
+      reason: '红框必须落到 1.5 档设计空间的中心矩形',
+    );
   });
 }
 

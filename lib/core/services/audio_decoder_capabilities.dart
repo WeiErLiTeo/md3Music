@@ -453,6 +453,13 @@ class AudioDecoderCapabilitySnapshot {
       .where((AudioDecoderFormatCapability f) => f.hasHardware)
       .length;
 
+  /// 探测到的格式总数（含仅软解的格式）。
+  ///
+  /// 移动平台音频解码普遍不经 MediaCodec 硬件路径（走 DSP/offload），
+  /// 大量设备 `supportedFormatCount == 0` 属正常；摘要同时展示本值，
+  /// 避免用户把「0 种」误读成「设备什么都放不了」。
+  int get formatCount => byFormat.length;
+
   @override
   String toString() =>
       'AudioDecoderCapabilitySnapshot(device=$deviceKey sdk=$sdkInt '

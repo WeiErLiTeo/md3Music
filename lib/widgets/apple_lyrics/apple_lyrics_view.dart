@@ -23,25 +23,22 @@ import 'package:material_ui/material_ui.dart';
 import 'package:flutter/scheduler.dart';
 
 import '../../core/utils/app_haptics.dart';
-
 import 'package:flutter/widgets.dart';
 
 import '../../core/build_flags.dart';
 import '../../core/services/player_frame_driver.dart';
-import '../../core/utils/lyric_line_balance.dart';
 import '../../core/utils/lyric_wrap_plan.dart';
 import 'controllers/lyric_scroll_controller.dart';
 import 'animation/spring.dart';
 import 'layout/duet_layout.dart';
 import 'layout/lyric_layout.dart';
 import 'layout/lyric_preferences.dart';
-
 import 'package:md3music/widgets/apple_lyrics/models/lyric_line.dart';
-
 import 'renderers/emphasize_effect.dart';
 import 'renderers/interlude_dots.dart';
 import 'renderers/line_renderer.dart';
 import 'renderers/word_renderer.dart';
+import 'utils/lyric_line_color.dart';
 
 /// 行形变 scale 的可读下限，保证 `fontSize × scale` 不跌破字重对应的字号下限。
 double _minLegibleLineScale(double fontSize) {
@@ -99,8 +96,9 @@ class AppleLyricsView extends StatefulWidget {
   /// 专辑封面提取色（动态字体颜色用，仅 AM 播放器传入）。
   ///
   /// 非 null 且 [LyricPreferences.useDynamicLyricColor] 开启且 [forceDarkBackground]
-  /// 为 true 时，当前行歌词颜色按「70% 白 + 30% 提取色」混色；
-  /// 非当前行保持默认白色不变。
+  /// 为 true 时，当前行歌词颜色按「白色 + 提取色 ×
+  /// [LyricPreferences.dynamicColorMixRatio]」混色（默认 15% 提取色）；
+  /// 非当前行保持默认歌词色，除非 [LyricPreferences.useAboveLinesPlayedColor] 开启。
   final Color? accentColor;
 
   /// 歌曲 BPM（节拍/分钟），可空。
@@ -375,9 +373,10 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
   /// 验证 tick 窗口外的行被钉在稳态 inactive(滚动到远处不出现未缩小行)。
   /// 列表尚未建立(首帧 tick 前)返回 NaN。
   @visibleForTesting
-  double lineScaleForTest(int i) => i >= 0 && i < _reusedPerLineScales.length
-      ? _reusedPerLineScales[i]
-      : double.nan;
+  double lineScaleForTest(int i) =>
+      i >= 0 && i < _reusedPerLineScales.length
+          ? _reusedPerLineScales[i]
+          : double.nan;
 
   /// 当前滚动弹簧位置。仅测试用：验证快速连切兜底把 posY 直接瞬移到目标。
   @visibleForTesting
@@ -409,12 +408,19 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
   int _lastInterludeCheckTimeMs = -1;
 
   // ============== 动态字体颜色（仅 AM 播放器，默认关闭） ==============
-  // 开启后当前行歌词颜色按「70% 白 + 30% 封面提取色」混色，
-  // 非当前行保持默认白色。颜色由 build 根据 accentColor 计算一次，
-  // _onTick 与 painter 每帧读取，避免每帧 Color.lerp 分配。
+  // 开启后当前行歌词颜色按「白色 + 封面提取色 × 混色比例」混色，
+  // 非当前行保持默认歌词色（除非「上方行使用已播颜色」开关开启）。
+  // 颜色由 build 根据 accentColor 计算一次，_onTick 与 painter 每帧读取，
+  // 避免每帧 Color.lerp 分配。
 
-  /// 当前行动态字体颜色（ARGB int），null 表示不使用（回退默认白色）。
+  /// 当前行动态字体颜色（ARGB int），null 表示不使用（回退默认歌词色）。
   int? _activeLineColorValue;
+
+  /// 上方行使用的颜色覆盖值（ARGB int），null 表示不覆盖。
+  ///
+  /// 仅当「上方行使用已播颜色」开关开启且 [_activeLineColorValue] 非空时
+  /// 等于 [_activeLineColorValue]，否则为 null（上方行沿用默认歌词色）。
+  int? _aboveLineColorValue;
 
   // overscan 视口缓冲行数：pad 端 15、手机端 10。在 build 中根据最短边更新
   int _overscan = 10;
@@ -549,7 +555,7 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
     // 模式仅对整首歌无逐字（LRC 逐行 / 纯文本）生效
     _cachedHasAnyWordTiming = widget.lines.any((l) => l.words.isNotEmpty);
     final result = DuetLayout.process(widget.lines, useDuet);
-    _cleanedLines = _normalizeCompoundWords(result.cleanedLines);
+    _cleanedLines = result.cleanedLines;
     _duetAlignments = result.alignments;
     // 失效行高缓存，让 _recomputeLineHeightsIfNeeded 用新的 _cleanedLines 重算
     _cachedLinesRef = null;
@@ -559,81 +565,6 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
     // 失效模糊图片缓存：对齐/文本变化后旧模糊图位置与内容均不再匹配
     _clearLineBlurCache();
     _cachedBlurLineIndex = -1;
-  }
-
-  /// 拆分 KRC 中将整句或多歌手名（含内部空格或 `/`、`\`）打包为单个 [LyricWord] 的复合词。
-  ///
-  /// KRC 开头常见 `<0,1000,0>Song - Artist` 或 `<200,800,0>ArtistA/ArtistB/ArtistC`，
-  /// 若保持单个 [LyricWord] 不拆：
-  /// 1. `LyricWrapPlanner.forLine` 只能将其视为 1 个不可再分的单元，测量出 `rowCount = 1`；
-  /// 2. 非当前行 `TextPainter.layout(maxWidth)` 却会在空格处折成 2 行，造成行高预留不足而与下一行重叠；
-  /// 3. 当前行 `WordRenderer` 无法在超宽单 word 内换行，造成右侧超出屏幕截断。
-  static List<LyricLine> _normalizeCompoundWords(List<LyricLine> lines) {
-    List<LyricLine>? out;
-    for (int i = 0; i < lines.length; i++) {
-      final line = lines[i];
-      if (line.words.isEmpty) continue;
-      bool needsSplit = false;
-      for (final w in line.words) {
-        final trimmed = w.text.trim();
-        if (trimmed.length >= 4 &&
-            (trimmed.contains(' ') ||
-                trimmed.contains('/') ||
-                trimmed.contains('\\'))) {
-          needsSplit = true;
-          break;
-        }
-      }
-      if (!needsSplit) continue;
-
-      final newWords = <LyricWord>[];
-      for (final w in line.words) {
-        final trimmed = w.text.trim();
-        if (trimmed.length < 4 ||
-            (!trimmed.contains(' ') &&
-                !trimmed.contains('/') &&
-                !trimmed.contains('\\'))) {
-          newWords.add(w);
-          continue;
-        }
-        final rawUnits = segmentLyricUnits(w.text);
-        // 将纯空白单元合并到前一个词尾，保持与标准 KRC 逐词带尾随空格一致
-        final mergedUnits = <String>[];
-        for (final u in rawUnits) {
-          if (u.trim().isEmpty && mergedUnits.isNotEmpty) {
-            mergedUnits[mergedUnits.length - 1] = mergedUnits.last + u;
-          } else {
-            mergedUnits.add(u);
-          }
-        }
-        if (mergedUnits.length <= 1) {
-          newWords.add(w);
-          continue;
-        }
-        final totalLen = w.text.length;
-        int offsetChars = 0;
-        for (int idx = 0; idx < mergedUnits.length; idx++) {
-          final piece = mergedUnits[idx];
-          final startRatio = offsetChars / totalLen;
-          final endRatio = (offsetChars + piece.length) / totalLen;
-          final pieceStart = w.startTime + (w.duration * startRatio).round();
-          final pieceEnd = idx == mergedUnits.length - 1
-              ? w.startTime + w.duration
-              : w.startTime + (w.duration * endRatio).round();
-          newWords.add(
-            LyricWord(
-              startTime: pieceStart,
-              duration: (pieceEnd - pieceStart).clamp(0, w.duration),
-              text: piece,
-            ),
-          );
-          offsetChars += piece.length;
-        }
-      }
-      out ??= List<LyricLine>.of(lines);
-      out[i] = line.copyWith(words: newWords);
-    }
-    return out ?? lines;
   }
 
   // ============== 级联错峰延迟 ==============
@@ -1722,8 +1653,7 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
       final double nowMs = _frameClockMs;
       final double lastMs = _lastLineSwitchFrameMs;
       final bool quickGap =
-          lastMs >= 0 &&
-          nowMs - lastMs >= 0 &&
+          lastMs >= 0 && nowMs - lastMs >= 0 &&
           nowMs - lastMs < _fastSwitchThresholdMs;
       _consecutiveFastSwitches = quickGap ? _consecutiveFastSwitches + 1 : 0;
       // 首次切行（lastMs < 0）计数为 0；连续 >= 2 次才启用兜底
@@ -1864,6 +1794,15 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
                 ? LyricLayout.inactiveScale
                 : LyricLayout.activeScale);
       final bool useWordRenderer = isActive && line.hasWordTiming;
+      // 行级文字颜色覆盖：当前行用高亮色；上方已播行由独立开关决定
+      // （开关关闭时 [_aboveLineColorValue] 为 null，不覆盖）。两个渲染器
+      // 都只在需要覆盖时才拿到非 null 值（LineRenderer 不再自行按 isActive 门控）。
+      final int? lineColorValue = lineColorOverrideValue(
+        activeLineColorValue: _activeLineColorValue,
+        aboveLineColorValue: _aboveLineColorValue,
+        isActive: isActive,
+        isAboveCurrent: i < _currentLineIndex,
+      );
       // 纯文本歌词无时间轴时强制关闭高斯模糊
       final bool blurActive =
           hasTimestamps && LyricPreferences.instance.useGaussianBlur;
@@ -1884,7 +1823,7 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
           scale: scale,
           blurFade: _blurFade,
           blurActive: blurActive,
-          activeColorValue: _activeLineColorValue,
+          activeColorValue: lineColorValue,
         );
         // 用平滑时间驱动逐字动画（上浮/字内渐变），避免 positionStream 5fps 卡顿
         // isPlaying 用于冻结自驱动波浪：暂停/未就绪时波浪不推进，防止辉光持续
@@ -1922,7 +1861,7 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
           scale: scale,
           blurFade: _blurFade,
           blurActive: blurActive,
-          activeColorValue: _activeLineColorValue,
+          activeColorValue: lineColorValue,
         );
         renderer.tick(dt);
         if (!renderer.isConverged) anyRendererAnimating = true;
@@ -2140,10 +2079,8 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
       // AMLL 风格级联延迟：delayMs 为逐行累积延迟，baseStepMs 为当前错峰步长。
       // 步长 / 上限 / 衰减均可由用户在设置页"歌词动画"调节（无极）。
       // 循环外读一次偏好，避免每帧重复访问。
-      final double cascadeMaxDelay =
-          LyricPreferences.instance.cascadeMaxDelayMs;
-      final double cascadeBaseStep =
-          LyricPreferences.instance.cascadeBaseStepMs;
+      final double cascadeMaxDelay = LyricPreferences.instance.cascadeMaxDelayMs;
+      final double cascadeBaseStep = LyricPreferences.instance.cascadeBaseStepMs;
       final double cascadeDecay = LyricPreferences.instance.cascadeStepDecay;
       final bool staggerFromCurrent =
           LyricPreferences.instance.staggerFromCurrentLine;
@@ -2590,31 +2527,28 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
     final shortestSide = MediaQuery.of(context).size.shortestSide;
     _overscan = shortestSide >= 600 ? 15 : 10;
     // 动态字体颜色：仅 AM 播放器（深色背景）且开关开启且提取到封面颜色时，
-    // 当前行歌词颜色 = 85% 白 + 15% 提取色；否则回退默认白色（null）。
-    // 混色后再兜底提升明度（≥0.78），保证深色背景上的可读性；
+    // 当前行歌词颜色 = 白色与提取色按「混色比例」线性混色；自定义歌词文字色
+    // 优先级更高。混色后再兜底提升明度（≥0.78），保证深色背景上的可读性；
     // 仅抬升明度、保留色相与饱和度，视觉上仍是封面色调的浅色。
     final customTextColor = LyricPreferences.instance.customTextColor;
-    if (customTextColor != null) {
-      _activeLineColorValue = customTextColor.toARGB32();
-    } else if (widget.forceDarkBackground &&
-        LyricPreferences.instance.useDynamicLyricColor &&
-        widget.accentColor != null) {
-      final mixed = Color.lerp(Colors.white, widget.accentColor!, 0.15)!;
-      final hsl = HSLColor.fromColor(mixed);
-      _activeLineColorValue = hsl
-          .withLightness(math.max(hsl.lightness, 0.78))
-          .toColor()
-          .toARGB32();
-    } else {
-      _activeLineColorValue = null;
-    }
+    _activeLineColorValue = resolveActiveLineColorValue(
+      useDynamicColor: widget.forceDarkBackground &&
+          LyricPreferences.instance.useDynamicLyricColor,
+      accentColor: widget.accentColor,
+      customTextColor: customTextColor,
+      mixRatio: LyricPreferences.instance.dynamicColorMixRatio,
+    );
+    // 上方行是否跟随已播颜色：独立开关，默认关闭（= 历史白色背景行）。
+    _aboveLineColorValue =
+        LyricPreferences.instance.useAboveLinesPlayedColor
+            ? _activeLineColorValue
+            : null;
     // 根据主题亮度设置歌词文字颜色：
     // - AM 风格（forceDarkBackground=true）→ 始终白色
     // - 深色主题 → 白色
     // - 浅色主题 → 黑色
     final isLightTheme = Theme.of(context).brightness == Brightness.light;
-    LyricLayout.textColorValue =
-        customTextColor?.toARGB32() ??
+    LyricLayout.textColorValue = customTextColor?.toARGB32() ??
         ((widget.forceDarkBackground || !isLightTheme)
             ? 0xFFFFFFFF
             : 0xFF000000);
@@ -2685,6 +2619,7 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
             blurReadyLineIndices: _lineBlurImages.keys,
             textColorValue: LyricLayout.textColorValue,
             activeLineColorValue: _activeLineColorValue,
+            aboveLineColorValue: _aboveLineColorValue,
             linesGeneration: _linesGeneration,
             lineHeightsGeneration: _lineHeightsGeneration,
             lineTopsGeneration: _lineTopsGeneration,
@@ -2730,6 +2665,7 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
           _painter!.blurReadyLineIndices = _lineBlurImages.keys;
           _painter!.textColorValue = LyricLayout.textColorValue;
           _painter!.activeLineColorValue = _activeLineColorValue;
+          _painter!.aboveLineColorValue = _aboveLineColorValue;
           _painter!.linesGeneration = _linesGeneration;
           _painter!.lineHeightsGeneration = _lineHeightsGeneration;
           _painter!.lineTopsGeneration = _lineTopsGeneration;
@@ -2750,43 +2686,43 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
           behavior: HitTestBehavior.opaque,
           onPointerSignal: _onPointerSignal,
           child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTapDown: widget.doubleTapToJump ? null : _onTapDown,
-            onTapUp: widget.doubleTapToJump ? null : _onTapUp,
-            onDoubleTapDown: widget.doubleTapToJump ? _onTapDown : null,
-            onDoubleTap: widget.doubleTapToJump ? _triggerDoubleTapSeek : null,
-            onVerticalDragUpdate: _onVerticalDragUpdate,
-            onVerticalDragEnd: _onVerticalDragEnd,
-            child: ShaderMask(
-              // 歌词界面上下边界 alpha 渐变（参数与评论区一致：24px 渐变高度），
-              // 顶部 24px alpha 0→1，底部 24px alpha 1→0，
-              // 让歌词从边界柔和淡入/淡出。
-              // P2-H 方案 A：shader 按 bounds 尺寸缓存复用，避免每次 build 重建。
-              shaderCallback: (Rect bounds) => _fadeShaderFor(bounds),
-              blendMode: BlendMode.dstIn,
-              child: useGaussian
-                  ? ClipRect(
-                      child: Builder(
-                        builder: (context) {
-                          // 视口宽必须先赋值：_buildBlurLayers 内的几何签名依赖它，
-                          // 宽度变化由签名比对自动触发模糊图重渲染（无需手动清空缓存，
-                          // 手动清空会连带丢弃仍然有效的行）。
-                          _viewportWidth = constraints.maxWidth;
-                          return Stack(
-                            children: [
-                              lyricsContent,
-                              ..._buildBlurLayers(
-                                constraints.maxHeight,
-                                mainLineHeight,
-                              ),
-                            ],
-                          );
-                        },
-                      ),
-                    )
-                  : lyricsContent,
-            ),
+          behavior: HitTestBehavior.opaque,
+          onTapDown: widget.doubleTapToJump ? null : _onTapDown,
+          onTapUp: widget.doubleTapToJump ? null : _onTapUp,
+          onDoubleTapDown: widget.doubleTapToJump ? _onTapDown : null,
+          onDoubleTap: widget.doubleTapToJump ? _triggerDoubleTapSeek : null,
+          onVerticalDragUpdate: _onVerticalDragUpdate,
+          onVerticalDragEnd: _onVerticalDragEnd,
+          child: ShaderMask(
+            // 歌词界面上下边界 alpha 渐变（参数与评论区一致：24px 渐变高度），
+            // 顶部 24px alpha 0→1，底部 24px alpha 1→0，
+            // 让歌词从边界柔和淡入/淡出。
+            // P2-H 方案 A：shader 按 bounds 尺寸缓存复用，避免每次 build 重建。
+            shaderCallback: (Rect bounds) => _fadeShaderFor(bounds),
+            blendMode: BlendMode.dstIn,
+            child: useGaussian
+                ? ClipRect(
+                    child: Builder(
+                      builder: (context) {
+                        // 视口宽必须先赋值：_buildBlurLayers 内的几何签名依赖它，
+                        // 宽度变化由签名比对自动触发模糊图重渲染（无需手动清空缓存，
+                        // 手动清空会连带丢弃仍然有效的行）。
+                        _viewportWidth = constraints.maxWidth;
+                        return Stack(
+                          children: [
+                            lyricsContent,
+                            ..._buildBlurLayers(
+                              constraints.maxHeight,
+                              mainLineHeight,
+                            ),
+                          ],
+                        );
+                      },
+                    ),
+                  )
+                : lyricsContent,
           ),
+        ),
         );
       },
     );
@@ -2909,6 +2845,26 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
           ? (widgetPivotY / imageHeight) * 2 - 1
           : 0;
 
+      // 上方已播行着色：模糊图按主题色烘焙、在合成期用 ColorFilter 整体染色
+      // （srcIn 只换 RGB、保留模糊 alpha），因此颜色变化不触发离屏重渲染，
+      // 切换开关 / 拖动混色比例都能即时生效。
+      final int? blurTintValue = lineColorOverrideValue(
+        activeLineColorValue: _activeLineColorValue,
+        aboveLineColorValue: _aboveLineColorValue,
+        isActive: false,
+        isAboveCurrent: i < _currentLineIndex,
+      );
+      Widget blurImage = RawImage(image: image, fit: BoxFit.fill);
+      if (blurTintValue != null) {
+        blurImage = ColorFiltered(
+          colorFilter: ColorFilter.mode(
+            Color(blurTintValue),
+            BlendMode.srcIn,
+          ),
+          child: blurImage,
+        );
+      }
+
       layers.add(
         Positioned(
           top: y - geom.padding,
@@ -2920,7 +2876,7 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
             child: Transform.scale(
               scale: k,
               alignment: Alignment(alignX, alignY),
-              child: RawImage(image: image, fit: BoxFit.fill),
+              child: blurImage,
             ),
           ),
         ),
@@ -3013,15 +2969,14 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
       _lineBlurPending[lineIndex] = (token, signature);
 
       (lineBlurRendererForTest ?? _renderLineBlur)(
-        lineIndex,
-        blurLevel,
-        _duetAlignmentAt(lineIndex),
-      ).then((image) {
+        lineIndex, blurLevel, _duetAlignmentAt(lineIndex),
+      ).then((
+        image,
+      ) {
         // 只允许最新请求写回；销毁或失效后仍需释放迟到的 GPU 图片。
         if (!mounted || _lineBlurPending[lineIndex]?.$1 != token) {
           image?.dispose();
-          if (kDebugMode)
-            debugPrint('[LyricRender] discard stale blur line=$lineIndex');
+          if (kDebugMode) debugPrint('[LyricRender] discard stale blur line=$lineIndex');
           return;
         }
         _lineBlurPending.remove(lineIndex);
@@ -3076,14 +3031,8 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
   /// 文字）严格一致，不会把烘焙图纵向拉伸。取同源测量而非各自按行数重算，
   /// 也消除 KRC 行（word 累加压缩高度）与非 KRC 行（TextPainter 完整行高）
   /// 两套高度模型导致的 pivot Y 偏差。
-  ({
-    double sigma,
-    double padding,
-    double blockHeight,
-    double fontSize,
-    double imageHeight,
-  })
-  _blurGeometry(int lineIndex, int blurLevel) {
+  ({double sigma, double padding, double blockHeight, double fontSize,
+    double imageHeight}) _blurGeometry(int lineIndex, int blurLevel) {
     // sigma = 距离分级值 × 用户强度倍数。
     // 倍数默认 1.0 时与历史行为完全一致（sigma = blurLevel）；
     // 上限 10 = maxBlurIntensity 2.0 × 最远分级 5。
@@ -3377,6 +3326,9 @@ class _LyricsPainter extends CustomPainter {
   Iterable<int> blurReadyLineIndices;
   int textColorValue;
   int? activeLineColorValue;
+
+  /// 上方行颜色覆盖值（ARGB），null = 不覆盖（上方行沿用 [textColorValue]）。
+  int? aboveLineColorValue;
   int linesGeneration;
   int lineHeightsGeneration;
   int lineTopsGeneration;
@@ -3419,6 +3371,7 @@ class _LyricsPainter extends CustomPainter {
     this.blurReadyLineIndices = const <int>[],
     required this.textColorValue,
     required this.activeLineColorValue,
+    required this.aboveLineColorValue,
     required this.linesGeneration,
     required this.lineHeightsGeneration,
     required this.lineTopsGeneration,
@@ -3642,6 +3595,13 @@ class _LyricsPainter extends CustomPainter {
       // 否则 → LineRenderer（整行模式：1 次 layout/帧，含非当前行的 KRC 行）
       // 性能优化：非当前行不需要逐字渐变，用 LineRenderer 大幅减少 layout 次数
       final bool useWordRenderer = isActive && line.hasWordTiming;
+      // 行级颜色覆盖：与 _onTick 同一口径（当前行高亮色 / 上方已播行开关）。
+      final int? lineColorValue = lineColorOverrideValue(
+        activeLineColorValue: activeLineColorValue,
+        aboveLineColorValue: aboveLineColorValue,
+        isActive: isActive,
+        isAboveCurrent: i < currentLineIndex,
+      );
       if (useWordRenderer) {
         // 逐字模式：当前行的 KRC 行
         final renderer = wordRenderers[i] ?? WordRenderer();
@@ -3650,7 +3610,7 @@ class _LyricsPainter extends CustomPainter {
           scale: alphaScale,
           blurFade: blurFade,
           blurActive: blurActive,
-          activeColorValue: activeLineColorValue,
+          activeColorValue: lineColorValue,
         );
         renderer.paintLine(
           canvas,
@@ -3671,7 +3631,7 @@ class _LyricsPainter extends CustomPainter {
           scale: alphaScale,
           blurFade: blurFade,
           blurActive: blurActive,
-          activeColorValue: activeLineColorValue,
+          activeColorValue: lineColorValue,
         );
         renderer.paintLine(
           canvas,

@@ -15,13 +15,14 @@ import '../../core/utils/app_haptics.dart';
 /// - 歌词当前行位置（滚动锚位）
 /// - 级联错峰上限 / 步长 / 衰减
 /// - 级联错峰起点开关（从当前行开始 / 从视口顶部开始）
-/// - 歌词效果：歌词模糊强度（需开启歌词高斯模糊）、辉光触发阈值、
-///   辉光判定方式（自适应 / 固定时长二选一）与固定时长阈值、
+/// - 歌词效果：歌词模糊强度（需开启歌词高斯模糊）、动态颜色混色比例
+///   （需开启歌词动态颜色）、辉光强度（需开启歌词辉光效果）、
+///   辉光触发阈值、辉光判定方式（自适应 / 固定时长二选一）与固定时长阈值、
 ///   字内渐变样式（经典 / 扫光二选一）
 ///
 /// AppBar 的重置按钮可**二次确认后**把本页全部参数恢复默认——
-/// 注意只重置本页 12 个参数，绝不调用 [LyricPreferences.reset]
-/// （那会把字号/行距/动态颜色等不在本页的设置一并清掉）。
+/// 注意只重置本页 14 个参数，绝不调用 [LyricPreferences.reset]
+/// （那会把字号/行距/动态颜色开关等不在本页的设置一并清掉）。
 ///
 /// 监听 [LyricPreferences] 实时刷新；拖动中只刷新标签（onChanged），
 /// 松手写入偏好（onChangeEnd），避免拖动过程反复触发歌词组件重渲染。
@@ -139,6 +140,20 @@ class LyricAnimationSettingsPage extends StatelessWidget {
                     style: TextStyle(fontWeight: FontWeight.w600),
                   ),
               ),
+              // 动态颜色混色比例：仅「歌词动态颜色」开启时显示（开关在
+              // 「播放页样式 > 歌词效果」页；AnimatedBuilder 监听 prefs，
+              // 开关变化后进本页即自动显隐）
+              if (prefs.useDynamicLyricColor)
+                _buildSliderTile<double>(
+                  prefs: prefs,
+                  title: '动态颜色混色比例',
+                  subtitle: '当前行颜色 = 白色与封面提取色的混色比例（需开启歌词动态颜色）',
+                  value: prefs.dynamicColorMixRatio,
+                  min: LyricPreferences.minDynamicColorMixRatio,
+                  max: LyricPreferences.maxDynamicColorMixRatio,
+                  label: '${(prefs.dynamicColorMixRatio * 100).round()}%',
+                  onChanged: (v) => prefs.setDynamicColorMixRatio(v),
+                ),
               // 歌词模糊强度：仅高斯模糊开启时显示（开关在播放页样式页，
               // AnimatedBuilder 监听 prefs，开关变化后进本页即自动显隐）
               if (prefs.useGaussianBlur)
@@ -151,6 +166,19 @@ class LyricAnimationSettingsPage extends StatelessWidget {
                   max: LyricPreferences.maxBlurIntensity,
                   label: prefs.blurIntensity.toStringAsFixed(1),
                   onChanged: (v) => prefs.setBlurIntensity(v),
+                ),
+              // 辉光强度：仅辉光效果开启时显示（开关在播放页样式页，
+              // AnimatedBuilder 监听 prefs，开关变化后进本页即自动显隐）
+              if (prefs.useGlowEffect)
+                _buildSliderTile<double>(
+                  prefs: prefs,
+                  title: '辉光强度',
+                  subtitle: '辉光亮度倍数，只调亮度不改光形（需开启歌词辉光效果）',
+                  value: prefs.glowIntensity,
+                  min: LyricPreferences.minGlowIntensity,
+                  max: LyricPreferences.maxGlowIntensity,
+                  label: '${(prefs.glowIntensity * 100).round()}%',
+                  onChanged: (v) => prefs.setGlowIntensity(v),
                 ),
               _buildGlowModeTile(prefs),
               // 触发阈值系数 / 固定时长滑块与判定方式一一对应：
@@ -270,8 +298,8 @@ class LyricAnimationSettingsPage extends StatelessWidget {
 
   /// 二次确认后把本页全部参数恢复默认。
   ///
-  /// **只重置本页 10 个参数**，绝不调用 [LyricPreferences.reset]
-  /// （那会把字号/行距/动态颜色等不在本页的设置一并清掉）。
+  /// **只重置本页 14 个参数**，绝不调用 [LyricPreferences.reset]
+  /// （那会把字号/行距/动态颜色开关等不在本页的设置一并清掉）。
   Future<void> _confirmResetAll(
     BuildContext context,
     LyricPreferences prefs,
@@ -283,7 +311,8 @@ class LyricAnimationSettingsPage extends StatelessWidget {
           title: const Text('恢复本页默认值'),
           content: const Text(
             '将把本页全部参数（非当前行缩放、当前行位置、已播字上浮高度、'
-            '错峰上限/步长/衰减、错峰起点开关、歌词模糊强度、辉光触发阈值、'
+            '错峰上限/步长/衰减、错峰起点开关、歌词模糊强度、'
+            '动态颜色混色比例、辉光强度、辉光触发阈值、'
             '辉光判定方式、辉光固定时长、字内渐变样式）'
             '恢复为默认值，确定继续吗？',
           ),
@@ -316,7 +345,12 @@ class LyricAnimationSettingsPage extends StatelessWidget {
     await prefs
         .setStaggerFromCurrentLine(LyricPreferences.defaultStaggerFromCurrentLine);
     await prefs.setBlurIntensity(LyricPreferences.defaultBlurIntensity);
+    // 动态颜色混色比例回到 15%（历史观感）
+    await prefs.setDynamicColorMixRatio(
+        LyricPreferences.defaultDynamicColorMixRatio);
     await prefs.setGlowThresholdFactor(LyricPreferences.defaultGlowThresholdFactor);
+    // 辉光强度回到 100%（历史观感）
+    await prefs.setGlowIntensity(LyricPreferences.defaultGlowIntensity);
     // 辉光判定方式回到固定时长（默认判定），固定时长阈值回到 1000ms
     await prefs.setGlowThresholdMode(GlowThresholdMode.fixed);
     await prefs

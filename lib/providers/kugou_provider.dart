@@ -160,6 +160,8 @@ class KugouProvider extends ChangeNotifier {
   final Set<String> _homeDiscoverSeen = <String>{};
   bool _homeDiscoverProgressLoaded = false;
   bool _homeDiscoverLoadingMore = false;
+  bool _homeDiscoverLastLoadFailed = false;
+  Future<List<KugouSongDetail>>? _homeDiscoverLoadMoreFuture;
   static const HomeDiscoverProgressStore _homeDiscoverStore =
       HomeDiscoverProgressStore();
 
@@ -454,6 +456,7 @@ class KugouProvider extends ChangeNotifier {
 
   List<KugouSongDetail> get homeDiscoverSongs => _homeDiscoverSongs;
   bool get homeDiscoverLoadingMore => _homeDiscoverLoadingMore;
+  bool get homeDiscoverLastLoadFailed => _homeDiscoverLastLoadFailed;
   List<Song> get homeDiscoverSongsAsSongs =>
       _homeDiscoverSongs.map((e) => e.toSong()).toList();
 
@@ -527,7 +530,10 @@ class KugouProvider extends ChangeNotifier {
   /// [forceRefresh] 只绕过 5 分钟 TTL，**不重置游标与 seen**：重置等于让用户
   /// 反复看见刚刷过的那几首，"刷"就没有意义了。要换一批就继续往下拉。
   Future<void> getHomeDiscover({bool forceRefresh = false}) async {
-    if (!forceRefresh && _isDataFresh('homeDiscover')) return;
+    if (!forceRefresh && _isDataFresh('homeDiscover')) {
+      await _topUpHomeDiscoverPreview();
+      return;
+    }
     _beginLoading();
     _error = null;
     try {
@@ -545,10 +551,22 @@ class KugouProvider extends ChangeNotifier {
       if (result.isEmpty) return;
       _ingestHomeDiscoverSongs(result);
       _dataTimestamps['homeDiscover'] = DateTime.now();
+      await _topUpHomeDiscoverPreview();
     } catch (e) {
       _error = e.toString();
     }
     _endLoading();
+  }
+
+  /// 上游偶尔不足 pagesize，或去重后首批少于四首时，用下一批补齐预览。
+  /// 复用分页补货器，保证 today_play_num、seen 和重复批次跳过规则一致。
+  Future<void> _topUpHomeDiscoverPreview() async {
+    final missing = homeDiscoverFirstPageSize - _homeDiscoverSongs.length;
+    if (missing <= 0 || _homeDiscoverSongs.isEmpty) return;
+    await fetchMoreHomeDiscover(
+      minCount: missing,
+      maxAttempts: homeDiscoverMaxAttempts,
+    );
   }
 
   /// 追加一批刷歌推荐，返回**真正新并进 [_homeDiscoverSongs] 的那些**。
@@ -566,9 +584,30 @@ class KugouProvider extends ChangeNotifier {
   Future<List<KugouSongDetail>> fetchMoreHomeDiscover({
     int minCount = homeDiscoverBatchSize,
     int maxAttempts = homeDiscoverMaxAttempts,
+  }) {
+    final inFlight = _homeDiscoverLoadMoreFuture;
+    if (inFlight != null) return inFlight;
+    late final Future<List<KugouSongDetail>> request;
+    request = _fetchMoreHomeDiscover(
+      minCount: minCount,
+      maxAttempts: maxAttempts,
+    ).whenComplete(() {
+      if (identical(_homeDiscoverLoadMoreFuture, request)) {
+        _homeDiscoverLoadMoreFuture = null;
+      }
+    });
+    _homeDiscoverLoadMoreFuture = request;
+    return request;
+  }
+
+  Future<List<KugouSongDetail>> _fetchMoreHomeDiscover({
+    required int minCount,
+    required int maxAttempts,
   }) async {
-    if (_homeDiscoverLoadingMore) return const [];
     _homeDiscoverLoadingMore = true;
+    final previousFailure = _homeDiscoverLastLoadFailed;
+    _homeDiscoverLastLoadFailed = false;
+    var requestFailed = false;
     // 声明在 try 之外：finally 里要靠它决定要不要通知订阅者。
     final fresh = <KugouSongDetail>[];
     try {
@@ -587,7 +626,11 @@ class KugouProvider extends ChangeNotifier {
           todayPlayNum: _homeDiscoverCursor,
           noCache: true,
         );
-        if (result == null || result.isEmpty) continue;
+        if (result == null) {
+          requestFailed = true;
+          continue;
+        }
+        if (result.isEmpty) continue;
         final added = _ingestHomeDiscoverSongs(result);
         if (added > 0) {
           fresh.addAll(
@@ -597,13 +640,20 @@ class KugouProvider extends ChangeNotifier {
         }
       }
       return fresh;
+    } catch (_) {
+      requestFailed = true;
+      return fresh;
     } finally {
       _homeDiscoverLoadingMore = false;
+      _homeDiscoverLastLoadFailed = fresh.isEmpty && requestFailed;
       // 必须自己通知：本方法不走 [_beginLoading]/[_endLoading] 计数器（它是滑动
       // 与补货的增量路径，不该把整页的 loading 指示器点亮），所以不能指望那对
       // 边沿通知顺带把新批次推给 UI。不通知的话详情页会一直停在 _hasMore 翻转
       // 之后的旧列表上——数据到了、画面没动。
-      if (fresh.isNotEmpty) notifyListeners();
+      if (fresh.isNotEmpty ||
+          previousFailure != _homeDiscoverLastLoadFailed) {
+        notifyListeners();
+      }
     }
   }
 

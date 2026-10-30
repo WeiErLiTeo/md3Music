@@ -16,6 +16,7 @@ import 'core/utils/app_haptics.dart';
 import 'core/services/desktop_lyric_service.dart';
 import 'core/services/diagnostic_logger.dart';
 import 'core/services/windows_default_font.dart';
+import 'core/services/windows_app_lifecycle.dart' as windows_lifecycle;
 import 'modules/recognition/floating_recognition_service.dart';
 import 'core/services/equalizer_service.dart';
 import 'core/services/viper_master_service.dart';
@@ -52,33 +53,10 @@ String? pendingShortcutType;
 final ValueNotifier<String?> shortcutTabRequest = ValueNotifier<String?>(null);
 
 const MethodChannel _windowsTrayChannel = MethodChannel('md3music/window_tray');
-const MethodChannel _windowsAudioChannel =
-    MethodChannel('com.ryanheise.just_audio.methods');
 bool _windowsExitInProgress = false;
 
-/// Windows「真退出」握手尾步：释放 WinRT 播放器 → 通知原生销毁窗口并退出进程。
-///
-/// 两个入口共用（防止步骤漂移）：① 托盘菜单「退出」——原生发 `requestQuit`，
-/// 此处先停本地服务再走尾步；② `app.dart::_exitApp` 的 Windows 分支——
-/// 调用前已 `stopForAppExit` 停播落盘并 `KugouApiServer.stop`，直接走尾步。
-/// `finishExit` → 原生 `SetQuitOnClose(true) + Destroy()` → `WM_DESTROY` →
-/// `PostQuitMessage`，消息循环结束、整个进程退出。
-/// 注意：Windows 上不能用 `SystemNavigator.pop` 收尾——它在引擎里只是重投一条
-/// `WM_CLOSE`，而托盘可用时原生对 `WM_CLOSE` 只做 `SW_HIDE` 藏窗
-/// （`flutter_window.cpp`），进程照常常驻。
-Future<void> finishWindowsAppExit() async {
-  // 在销毁 Flutter 引擎前关闭 WinRT MediaPlayer，避免 SMTC 窗口
-  // 在退出阶段访问已释放的资源。
-  try {
-    await _windowsAudioChannel.invokeMethod<void>(
-      'disposeAllPlayers',
-      <String, dynamic>{},
-    );
-  } catch (error, stack) {
-    DiagnosticLogger.instance.e('退出时释放 Windows 播放器失败: $error\n$stack');
-  }
-  await _windowsTrayChannel.invokeMethod<void>('finishExit');
-}
+Future<void> finishWindowsAppExit() =>
+    windows_lifecycle.finishWindowsAppExit();
 
 Future<void> main() async {
   // Zone 级兜底：任何未被 try/catch 与错误钩子接住的异步错误都记入诊断日志
@@ -206,6 +184,9 @@ Future<(bool, bool, bool, ThemeMode?)> runBootstrap() async {
     // 必须在 runApp 前：迷你条上滑展开时跟手覆盖层是当场新建的播放页，
     // 其封面连贯资格在第一帧就要读到真值，等不及各播放页自己的异步读取。
     _restoreSpectrumCoverPref(),
+    // 回填歌曲弹幕四镜像（开关/速度/颜色/只看）：宿主直读镜像，
+    // 不回填则重启后设置静默回退默认值。
+    _restoreSongDanmakuPref(),
   ]);
   markStartup('local_preferences_ready');
 
@@ -333,11 +314,18 @@ Future<(bool, bool, bool, ThemeMode?)> runBootstrap() async {
     kDesktopModeEnabled.value =
         prefs.getBool(SettingsRepository.desktopModeEnabledPreferenceKey) ??
             false;
-    if (Platform.isWindows) {
-      kWindowsTwoPaneEnabled.value =
-          prefs.getBool(SettingsRepository.windowsTwoPaneEnabledPreferenceKey) ??
-              false;
-    }
+    // 双栏开关三端通用：非 Windows（含 TV）默认 true，宽屏双栏行为不回退；
+    // Windows 默认关（上游 2026-10-24 起的口径）。与 SettingsRepository
+    // .getWindowsTwoPaneEnabled 的回退值保持一致。
+    // TV 构建强制 true（不回写 prefs）：TV 焦点体系以双栏 master-detail 为
+    // 前提，单栏下焦点无法进入列表；切回手机版不丢用户设置。
+    // 同 kSecondaryPlayerEnabled 的 TV 门控播种模式（见上方注释）。
+    kWindowsTwoPaneEnabled.value = kTvBuild
+        ? true
+        : prefs.getBool(
+              SettingsRepository.windowsTwoPaneEnabledPreferenceKey,
+            ) ??
+            !Platform.isWindows;
   } catch (_) {}
   markStartup('onboarding_state_ready');
 
@@ -464,6 +452,27 @@ Future<void> _restoreSpectrumCoverPref() async {
     await Future.wait([
       settings.getSpectrumEnabled(),
       settings.getSpectrumStyle(),
+    ]);
+  } catch (_) {}
+}
+
+/// 回填歌曲弹幕四镜像（开关 / 速度 / 颜色 / 只看弹幕）。
+/// 播放页宿主与设置页都直读静态镜像，进程重启后镜像停在默认值——四个 getter
+/// 除设置页初始化外无人调用，持久化成了只写不读（v47 独立审查发现），重启后
+/// 设置静默回退。getter 读盘即回填镜像（同 getLyricTimeOffset 口径），返回值
+/// 不需要。
+Future<void> _restoreSongDanmakuPref() async {
+  try {
+    final settings = SettingsRepository();
+    await Future.wait([
+      settings.getSongDanmakuEnabled(),
+      settings.getSongDanmakuSpeed(),
+      settings.getSongDanmakuColor(),
+      settings.getSongDanmakuReadOnly(),
+      settings.getSongDanmakuOpacity(),
+      // v54：MV 弹幕速度/颜色镜像同批回填。
+      settings.getMvDanmakuSpeed(),
+      settings.getMvDanmakuColor(),
     ]);
   } catch (_) {}
 }

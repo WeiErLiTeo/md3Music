@@ -1,11 +1,26 @@
 import 'dart:ui' as ui;
 
 import 'package:material_ui/material_ui.dart';
+import 'package:provider/provider.dart';
+
+import '../../providers/device_provider.dart';
 
 import '../theme/app_dimens.dart';
 import 'responsive_layout.dart';
 
+/// TV 构建强制双栏的宽度下限（= master 300 + 分隔条 16 + detail 496，
+/// 双栏几何 clamp 的三项之和）。低于它的视口双栏 clamp 会抛断言，
+/// 由壳层（ResponsiveShell._buildTab）绕过 DesktopTwoPane 改走
+/// 中央栈整屏详情（同 TwoPanePage 的 TV 先例）。
+const double kTwoPaneForcedMinWidth = 300 + 16 + 496;
+
 /// 局部坐标下的双栏/单栏几何。竖直铰链两侧够宽时分栏，否则用较宽一侧。
+///
+/// [forceTwoPane] 为 true 时绕过 [usesTwoPane] 宽度断点恒出双栏（TV 构建：
+/// 焦点体系以双栏 master-detail 为前提，不随分辨率/DPI 自适应退化单栏）。
+/// 几何 clamp（master ≥300 / detail ≥496）不因 force 放宽——调用方
+/// （`DesktopTwoPane._geometry`）自行保证宽度下限（[kTwoPaneForcedMinWidth]），
+/// 避免 clamp 断言崩溃。
 ({
   double masterLeft,
   double masterWidth,
@@ -17,12 +32,14 @@ resolvePaneGeometry({
   required double width,
   required double masterFraction,
   bool twoPaneEnabled = true,
+  bool forceTwoPane = false,
   List<Rect> verticalObstructions = const [],
 }) {
+  final wantsTwoPane = forceTwoPane || (twoPaneEnabled && usesTwoPane(width));
   for (final bounds in verticalObstructions) {
     if (bounds.left <= 0 || bounds.right >= width) continue;
     final rightWidth = width - bounds.right;
-    if (twoPaneEnabled && usesTwoPane(width) &&
+    if (wantsTwoPane &&
         bounds.left >= AppLayout.twoPaneMasterWidth &&
         rightWidth >= 480) {
       return (
@@ -43,7 +60,7 @@ resolvePaneGeometry({
       twoPane: false,
     );
   }
-  final twoPane = twoPaneEnabled && usesTwoPane(width);
+  final twoPane = wantsTwoPane;
   final master = twoPane
       ? (masterFraction * width).clamp(
           AppLayout.twoPaneMasterWidth,
@@ -134,7 +151,17 @@ const Set<String> kTwoPaneTabs = {
 
 const Set<String> kConstrainedTabs = {'user', 'audiobook'};
 
-/// 保持手机尺寸，只在内容过宽时居中限宽；使用局部约束，不改 MediaQuery。
+/// 手机（含横屏）保持原布局；Windows 和 Pad 才启用大屏自适应。
+bool usesLargeScreenContentLayout(BuildContext context) {
+  if (Theme.of(context).platform == TargetPlatform.windows) return true;
+  return switch (context.watch<DeviceProvider?>()?.deviceType) {
+    DeviceType.phone => false,
+    DeviceType.pad => true,
+    _ => MediaQuery.sizeOf(context).shortestSide >= compactBreakpoint,
+  };
+}
+
+/// 大屏按局部可用宽度扩展到 85%，手机保持原限宽；不改文字或全局缩放。
 class ContentWidth extends StatelessWidget {
   const ContentWidth({
     super.key,
@@ -143,14 +170,38 @@ class ContentWidth extends StatelessWidget {
   });
 
   final Widget child;
+  /// 手机原有宽度上限，也是大屏开始扩展的基准，保留调用方的窄面板配置。
   final double maxWidth;
 
+  /// 同一面板嵌套页面只留一次边距，避免 85% 逐层相乘。
+  static double resolveWidth(BuildContext context, double width, {
+    double maxWidth = AppLayout.maxContentWidth,
+  }) {
+    final adaptive = usesLargeScreenContentLayout(context);
+    if (adaptive && width.isFinite &&
+        context.dependOnInheritedWidgetOfExactType<_ContentWidthScope>() != null) {
+      return width;
+    }
+    return AppLayout.contentWidthFor(width, compactWidth: maxWidth, adaptive: adaptive);
+  }
+
   @override
-  Widget build(BuildContext context) => Align(
-    alignment: Alignment.topCenter,
-    child: ConstrainedBox(
-      constraints: BoxConstraints(maxWidth: maxWidth),
-      child: SizedBox(width: double.infinity, child: child),
-    ),
-  );
+  Widget build(BuildContext context) {
+    final adaptive = usesLargeScreenContentLayout(context);
+    return LayoutBuilder(builder: (context, constraints) => Align(
+      alignment: Alignment.topCenter,
+      child: SizedBox(
+        width: resolveWidth(context, constraints.maxWidth, maxWidth: maxWidth),
+        child: adaptive ? _ContentWidthScope(child: child) : child,
+      ),
+    ));
+  }
+}
+
+/// 标记当前内容面板已经完成大屏留白，后代不重复缩窄。
+class _ContentWidthScope extends InheritedWidget {
+  const _ContentWidthScope({required super.child});
+
+  @override
+  bool updateShouldNotify(_ContentWidthScope oldWidget) => false;
 }

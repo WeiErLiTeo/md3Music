@@ -172,7 +172,8 @@ class WordRenderer {
   int _lastTextColorValue = -1;
 
   /// 当前行专用的文字颜色（ARGB int，仅 [_isActive] 时生效）。
-  /// 动态字体颜色：由封面提取色按「70% 白 + 30% 提取色」混色得到，
+  /// 动态字体颜色：由封面提取色按混色比例与白色混色得到（比例见
+  /// `LyricPreferences.dynamicColorMixRatio`），
   /// null 表示不使用（回退到 LyricLayout.textColorValue）。
   int? _activeColorValue;
 
@@ -190,6 +191,12 @@ class WordRenderer {
   /// 渐变路径复用的 Paint 实例（避免每帧新建，减少 GC）。
   /// 渐变路径稳态下每帧只改 shader，0 次 layout。
   final Paint _gradientPaint = Paint();
+
+  /// 辉光层渐变调制复用的 Paint（`BlendMode.modulate`，与 [_gradientPaint] 同款）。
+  ///
+  /// 辉光需要像文字一样**沿字内进度逐段点亮**：精灵是纯白 alpha 贴图，
+  /// 用 4 停 / 2 停渐变 modulate 它，就能让已唱侧达到峰值、未唱侧淡出。
+  final Paint _glowRampPaint = Paint()..blendMode = BlendMode.modulate;
 
   /// 辉光层复用的 Paint 实例（避免每帧新建 Paint + ImageFilter）。
   final Paint _glowBlurPaint = Paint();
@@ -225,7 +232,21 @@ class WordRenderer {
   int _spriteEpoch = 0;
 
   /// 辉光精灵贴图复用的 Paint（透明度由 glowLevel 经 ColorFilter 驱动）。
-  final Paint _glowImagePaint = Paint();
+  ///
+  /// **必须显式设 `filterQuality`**：精灵按 1× 逻辑像素渲染，绘制时被放大到
+  /// DPR 倍（Android 典型 2.75~3.5×）。`Paint()` 默认 `FilterQuality.none`
+  /// 是最近邻，会把高斯模糊的连续 alpha 斜坡量化成 DPR 像素宽的台阶
+  /// （实测 alpha 档位 246 → 16、相邻像素跳变 255 → 73~93）。
+  final Paint _glowImagePaint = Paint()
+    ..filterQuality = FilterQuality.low;
+
+  /// 辉光强度 >100% 时的追加层：同一张精灵用 [BlendMode.plus] 再叠一次。
+  ///
+  /// 单次绘制的 alpha 封顶 1.0，光晕最亮处（笔画外沿）无法再提亮；加法叠加
+  /// 才能让"强度"在 100%~200% 区间真的有亮度增量（光晕本就是加性光）。
+  final Paint _glowPlusPaint = Paint()
+    ..filterQuality = FilterQuality.low
+    ..blendMode = BlendMode.plus;
 
   /// v7 逐字符预渲染图片缓存（wordIndex × charIndex → 纯白字形图）。
   ///
@@ -240,7 +261,12 @@ class WordRenderer {
   final Set<String> _charImagePending = <String>{};
 
   /// 字符图片绘制复用的 Paint（文字色 + alpha 经 ColorFilter 驱动）。
-  final Paint _charImagePaint = Paint();
+  ///
+  /// 采样模式同 [_glowImagePaint]：字形图按 [_charImageSupersample] 逻辑像素
+  /// 渲染，绘制时还要叠加强调凸起 `scale`（最高 1.12×），非 3.0 的 DPR 上
+  /// 必然发生重采样。默认的最近邻会让字缘只剩 16 档 alpha（锯齿）。
+  final Paint _charImagePaint = Paint()
+    ..filterQuality = FilterQuality.low;
 
   /// 整词纯白字形图缓存（Windows 专用，见 [_glyphBlitActive]）。
   ///
@@ -268,13 +294,55 @@ class WordRenderer {
   static bool debugDisableGlyphBlit = false;
 
   /// 整词字形图超采样倍数（与 [_charImageSupersample] 同口径）。
+  ///
+  /// **口径提醒：这是「逻辑像素」倍数，不是「设备像素」倍数。**
+  /// Windows 实测 DPR=1.25 → 3× 逻辑 = 2.40× 设备降采样；实测 2× 逻辑
+  /// （1.60× 设备）配合双线性降采样反而更清晰（中间 alpha 占比 29.1% vs
+  /// 20.5%，MAE 5.86 vs 6.43），显存还从 9× 降到 4×。改动前须重跑
+  /// tmp/probe_glyph_resample.dart 对照。
   static const int _wordGlyphSupersample = 3;
 
   /// 字形图绘制复用的 Paint（均匀路径按 ColorFilter 上色，渐变路径保持纯白）。
-  final Paint _wordGlyphPaint = Paint();
+  ///
+  /// **必须显式设 `filterQuality`**：图按 [_wordGlyphSupersample] 逻辑像素渲染，
+  /// 缩回原生尺寸时在 DPR≠3 的设备上必然重采样。`Paint()` 默认
+  /// `FilterQuality.none` 是最近邻，等于把 3× 超采样的抗锯齿信息整体丢掉
+  /// （实测 Windows 2.40× 降采样下 alpha 档位 228 → 16，字缘硬台阶）。
+  final Paint _wordGlyphPaint = Paint()
+    ..filterQuality = FilterQuality.low;
 
-  /// 最大辉光 blur sigma：shadowBlurEm 封顶 0.3em × 0.8 = 0.24 × fontSize。
-  static double _maxGlowSigma(double fontSize) => 0.24 * fontSize;
+  // ============== 辉光剖面（字形最亮，向外递减）==============
+  //
+  // **观感契约**：辉光应当是「字形处最亮 → 向四周单调递减」的经典外发光。
+  //
+  // 反面做法（已废弃）：挖空字形本体（`dstOut`）只留笔画外侧的光。
+  // 它看起来"贴笔画"，但亮度曲线是「字形内部 0 → 笔画边缘骤亮 → 向外递减」，
+  // 峰值不在字形上而在字形边上；文字半透明时（扫光中段 alpha 会掉到 0.4）
+  // 就露出一圈「字内暗 → 边缘亮 → 外侧又暗」的亮暗亮，越调越糟。
+  //
+  // 现做法：**不挖空**，直接把字形按多层半径模糊后叠加。高斯模糊天然满足
+  // 「中心最亮、向外递减」，与字形叠加后字形处最亮。
+  //
+  // 多层半径（紧 → 松，权重递减）：紧层负责贴轮廓的实感，松层负责扩散范围。
+  // 单层大半径会把汉字字怀（0.05~0.2em）糊满成一团，所以最内层必须够紧，
+  // 由外层补足扩散——实测 32px「日」的最内层取 0.07em 时，
+  // 沿笔画均匀度最好（cv 0.126、min/max 2.0；0.05em 时为 0.151 / 2.8）。
+  //
+  // 半径以 em 表达（随字号缩放），烘焙一次进精灵图；每帧只调颜色与 alpha。
+  static const double _glowRimSigmaEm = 0.07;
+  static const double _glowBloomSigmaEm = 0.14;
+  static const double _glowHazeSigmaEm = 0.28;
+
+  // 三层权重：不挖空后字形本体已经是满亮度，外层只需要做出可见的扩散过渡。
+  // 权重和 < 1 是刻意的——层间 source-over 叠加后中心仍会接近饱和，
+  // 但要避免外层叠太多把汉字笔画间隙糊平。
+  static const double _glowRimWeight = 1.00;
+  static const double _glowBloomWeight = 0.45;
+  static const double _glowHazeWeight = 0.20;
+
+  /// 辉光精灵外扩（px）：以最外层半径的 3σ 为准，保证光晕不被裁切。
+  static double _glowSpritePad(double fontSize) =>
+      _glowHazeSigmaEm * fontSize * 3;
 
   // ============== 渐变遮罩状态 ==============
 
@@ -393,6 +461,91 @@ class WordRenderer {
   @visibleForTesting
   int get glyphImageCountForTest =>
       _wordGlyphImages.where((ui.Image? img) => img != null).length;
+
+  /// 整词字形图绘制用的采样模式（供测试锁定"不得退回最近邻"）。
+  @visibleForTesting
+  FilterQuality get glyphFilterQualityForTest => _wordGlyphPaint.filterQuality;
+
+  /// 强调字字形图绘制用的采样模式（供测试锁定"不得退回最近邻"）。
+  @visibleForTesting
+  FilterQuality get charImageFilterQualityForTest =>
+      _charImagePaint.filterQuality;
+
+  /// 辉光精灵超采样倍数（口径同 [_wordGlyphSupersample]：逻辑像素倍数）。
+  ///
+  /// **为什么必须超采样**：辉光精灵按 1× 逻辑像素烘焙，绘制时被 DPR 放大
+  /// （Android 典型 2.75~3.5×）。高斯光晕的连续 alpha 斜坡在 1× 下先被量化成
+  /// 整数台阶，再经双线性插值放大——台阶被一起放大，肉眼就是一圈锯齿。
+  /// 实测 32px「日」的光晕过渡带相邻 alpha 跳变：1× + 硬边遮罩平均 23.5、
+  /// 最大 117、>32 的硬台阶 228 处；本组合（2× + 软遮罩）平均 9.1、最大 34、
+  /// 硬台阶 56 处（详见
+  /// `test/widgets/apple_lyrics/renderers/word_renderer_glow_alias_test.dart`）。
+  ///
+  /// 取 2× 而非 3×：辉光本身是低频信号（最小层 sigma 仅 0.05em），2× 已把台阶
+  /// 压到双线性插值可平滑的程度；3× 的显存与烘焙耗时翻 2.25 倍换来肉眼不可辨
+  /// 的提升，不划算（与字形图 3× 的取舍不同，字形是高频信号）。
+  static const int _glowSpriteSupersample = 2;
+
+  /// 辉光精灵超采样倍数（供测试断言尺寸口径）。
+  @visibleForTesting
+  static int get glowSupersampleForTest => _glowSpriteSupersample;
+
+  /// 辉光精灵绘制用的采样模式（供测试锁定"不得退回最近邻"）。
+  @visibleForTesting
+  FilterQuality get glowImageFilterQualityForTest =>
+      _glowImagePaint.filterQuality;
+
+  /// 辉光上色结果（供测试锁定"辉光颜色跟随动态混色比例"）。
+  @visibleForTesting
+  ColorFilter debugGlowTintForTest(int r, int g, int b, double alpha) =>
+      _glowTint(r, g, b, alpha);
+
+  /// 辉光层实际绘制 alpha（供测试锁定"强度倍数只调亮度、不改光形"）。
+  @visibleForTesting
+  ({double base, double extra}) debugGlowDrawAlphaForTest(double glowLevel) =>
+      _glowDrawAlpha(glowLevel);
+
+  /// 辉光精灵外扩量（px，供测试断言与绘制侧同口径）。
+  @visibleForTesting
+  double debugGlowSpritePadForTest(double fontSize) => _glowSpritePad(fontSize);
+
+  /// 辉光剖面（sigma em，由内到外；供测试锁定"最内层必须足够紧"）。
+  @visibleForTesting
+  static List<double> get glowSigmaProfileEmForTest => const <double>[
+    _glowRimSigmaEm,
+    _glowBloomSigmaEm,
+    _glowHazeSigmaEm,
+  ];
+
+  /// 辉光剖面权重（与 [glowSigmaProfileEmForTest] 同序；逐层 source-over 叠加）。
+  @visibleForTesting
+  static List<double> get glowWeightProfileForTest => const <double>[
+    _glowRimWeight,
+    _glowBloomWeight,
+    _glowHazeWeight,
+  ];
+
+  /// 已烘焙的辉光精灵图（供测试断言"换颜色不重烘焙"）。
+  @visibleForTesting
+  ui.Image? debugGlowSpriteForTest(int wordIndex, int charIndex) {
+    if (wordIndex < 0 || wordIndex >= _charGlowSprites.length) return null;
+    final List<ui.Image?> chars = _charGlowSprites[wordIndex];
+    if (charIndex < 0 || charIndex >= chars.length) return null;
+    return chars[charIndex];
+  }
+
+  /// 直接烘焙一张辉光精灵（供测试断言尺寸口径与三层剖面可渲染）。
+  @visibleForTesting
+  Future<ui.Image?> debugRenderGlowSpriteForTest({
+    required String text,
+    required double fontSize,
+    required double rowHeight,
+  }) => _renderGlowSpriteImage(
+    text,
+    fontSize,
+    _glowSpritePad(fontSize),
+    rowHeight,
+  );
 
   /// 转发 [alphaAtX] 供测试断言绘制 alpha 的连续性。
   @visibleForTesting
@@ -874,19 +1027,9 @@ class WordRenderer {
         );
       }
       _lastTextColorValue = textColorValue;
-      // P1-5：辉光精灵颜色跟随文字色（当前行渐变路径下为白色），
-      // 颜色变化（主题/动态字体色切换）时失效所有精灵缓存（逐字符）。
-      for (final charList in _charGlowSprites) {
-        for (final img in charList) {
-          img?.dispose();
-        }
-      }
-      for (int i = 0; i < _charGlowSprites.length; i++) {
-        _charGlowSprites[i] = List<ui.Image?>.filled(
-          _charGlowSprites[i].length,
-          null,
-        );
-      }
+      // 辉光精灵**不再**随颜色失效：精灵是「纯白字形 + 固定三层剖面」，
+      // 颜色由绘制期 [_glowTint] 逐帧上色。拖动「动态颜色混色比例」时
+      // textColorValue 每帧都变，若在此重建精灵会每帧 toImage（真机必掉帧）。
     }
     final int textRed = (textColorValue >> 16) & 0xFF;
     final int textGreen = (textColorValue >> 8) & 0xFF;
@@ -1596,149 +1739,20 @@ class WordRenderer {
         );
       }
 
-      // === 逐字符辉光层 ===
-      if (st.glowLevel > 0) {
-        final double blurSigma = st.shadowBlurEm * fontSize * 0.8;
-        if (blurSigma > 0) {
-          final glowRect = Rect.fromLTWH(
-            charX - blurSigma * 3,
-            charY - blurSigma * 3,
-            cw + blurSigma * 6,
-            fontSize * rowHeight + blurSigma * 6,
-          );
-          // 优先用预渲染辉光精灵贴图（透明度经 ColorFilter 跟随 glowLevel）
-          // 行盒失效检测：精灵可能是预热阶段按整行行盒（lineHeight）生成的，
-          // 若当前为换行行（rowHeight=0.8x），旧精灵字形偏下、光晕错位。
-          // 这里在绘制前主动核对行盒，不一致则释放并强制按当前 rowHeight 重生成
-          // （_requestCharGlowSprite 只在精灵为 null 时才请求，故必须在此先释放）。
-          final String glowKey = '$wordIndex:$k';
-          final double? cachedGlowRow = _glowSpriteRowHeight[glowKey];
-          if (cachedGlowRow != null &&
-              (cachedGlowRow - rowHeight).abs() > 1e-6) {
-            _glowSpriteRowHeight.remove(glowKey);
-            final old = k < glowSprites.length ? glowSprites[k] : null;
-            old?.dispose();
-            if (wordIndex < _charGlowSprites.length &&
-                k < _charGlowSprites[wordIndex].length) {
-              _charGlowSprites[wordIndex][k] = null;
-            }
-          }
-          final ui.Image? sprite = k < glowSprites.length
-              ? glowSprites[k]
-              : null;
-          // 换行行辉光诊断日志（节流：仅状态变化时打印一次，供真机抓 log 定位）
-          if ((rowHeight - lineHeight).abs() > 1e-6) {
-            final String dbg =
-                'w$wordIndex:c$k row=${rowHeight.toStringAsFixed(3)} '
-                'cached=${cachedGlowRow?.toStringAsFixed(3) ?? 'null'} '
-                'sprite=${sprite != null} y=${charY.toStringAsFixed(1)}';
-            if (dbg != _lastGlowDebug) {
-              _lastGlowDebug = dbg;
-              // ignore: avoid_print
-              if (kDebugMode) print('[GlowDbg] $dbg');
-            }
-          }
-          if (sprite != null) {
-            // 与精灵生成侧一致：上下各 3σ 余量（见 _requestCharGlowSprite 注释）
-            final double pad = _maxGlowSigma(fontSize) * 3;
-            _glowImagePaint.colorFilter = ColorFilter.matrix(<double>[
-              1,
-              0,
-              0,
-              0,
-              0,
-              0,
-              1,
-              0,
-              0,
-              0,
-              0,
-              0,
-              1,
-              0,
-              0,
-              0,
-              0,
-              0,
-              st.glowLevel.clamp(0.0, 1.0),
-              0,
-            ]);
-            canvas.drawImage(
-              sprite,
-              Offset(charX - pad, charY - pad),
-              _glowImagePaint,
-            );
-          } else {
-            // 精灵未就绪（字符激活早期，glowLevel≈0 几乎不可见）：
-            // 异步请求渲染，本帧降级 saveLayer + blur 保证视觉连续。
-            _requestCharGlowSprite(
-              wordIndex,
-              k,
-              painter.text?.toPlainText() ?? '',
-              fontSize,
-              rowHeight,
-            );
-            _glowBlurPaint.imageFilter = ImageFilter.blur(
-              sigmaX: tvBlurSigma(blurSigma),
-              sigmaY: tvBlurSigma(blurSigma),
-            );
-            _glowBlurPaint.colorFilter = ColorFilter.matrix(<double>[
-              1,
-              0,
-              0,
-              0,
-              0,
-              0,
-              1,
-              0,
-              0,
-              0,
-              0,
-              0,
-              1,
-              0,
-              0,
-              0,
-              0,
-              0,
-              st.glowLevel.clamp(0.0, 1.0),
-              0,
-            ]);
-            canvas.saveLayer(glowRect, _glowBlurPaint);
-            painter.paint(canvas, charPos);
-            canvas.restore();
-          }
-        }
-      }
-
-      // === 文字绘制 ===
-      // v7：优先用预渲染纯白字形图（3× 超采样，图片变换平滑缩放，无文字重栅格化
-      // 闪烁、无放大马赛克），经 ColorFilter.matrix 上色为文字色 + mask alpha，
-      // drawImageRect 缩放到原生字符尺寸；图片未就绪时降级 TextPainter 均匀
-      // alpha 路径（量化缓存），视觉等价。
-      //
-      // 换行行（rowHeight < lineHeight，0.8x 行盒）：字形图按 1.5 行盒生成，
-      // 直接缩放到 0.8x 行盒会把字形垂直压扁变形 → 换行行改用 TextPainter
-      // （按 rowHeight 行盒渲染），与整词路径行盒一致，避免激活/idle 切换瞬移。
-      //
-      // **方案 C：辉光字与普通字一致的渐变模型**。普通字整词路径按字左右边缘
-      // 采样行级渐变（maskX 左亮右暗，向右推进）；辉光字此前（P6）改为字符中心
-      // 采样 uniform，单字内无渐变，导致中文单字在 maskX 扫过时"整字变亮"、
-      // 渐变带凭空消失显得硬切。这里对每个字符按左右边缘采样，差异明显时
-      // saveLayer + LinearGradient modulate（与整词路径一致），恢复向右推进感。
-      final bool sameRowBox = (rowHeight - lineHeight).abs() < 1e-6;
-      final ui.Image? charImg = sameRowBox && k < charImages.length
-          ? charImages[k]
-          : null;
+      // === 逐字符渐变参数（辉光层与文字层**共用**同一份）===
+      // 必须在辉光之前算：辉光要先画（在文字下面），但它也要按同一套
+      // 字内进度前沿逐段上色，才能"跟着扫光推进"。
       final double charLeftX = wordStartX + charStartX;
       final double charRightX = charLeftX + cw;
+      final double charRectH = fontSize * rowHeight;
+      final Rect charRect = Rect.fromLTWH(charX, charY, cw, charRectH);
       double leftAlpha = charAlpha;
       double rightAlpha = charAlpha;
       // sweep：字符级用与整词路径同一套 4 停渐变（myune 逐像素斜坡的等价段）
       ({List<double> stops, List<Color> colors})? sweepRamp;
       if (useGradient && sweepMode) {
         sweepRamp = sweepRampFor(
-          rect: Rect.fromLTWH(charX, charY, cw, fontSize * rowHeight),
+          rect: charRect,
           front: sweepFrontCanvas,
           feather: sweepFeather,
           active: Color.fromRGBO(textRed, textGreen, textBlue, bright),
@@ -1763,6 +1777,132 @@ class WordRenderer {
       }
       final bool needGradient =
           sweepRamp != null || (rightAlpha - leftAlpha).abs() >= 0.01;
+
+      // === 逐字符辉光层 ===
+      // 强度 = glowLevel × 用户辉光强度倍数（glowLevel 已随字时长/末尾字加强）；
+      // 光晕剖面固定（见 [_glowRimSigmaEm]），保证方块字的字怀不被糊满。
+      if (st.glowLevel > 0) {
+        // 辉光颜色跟随当前文字色（= 动态取色混色结果），不再恒为白色。
+        final ({double base, double extra}) glowAlpha = _glowDrawAlpha(
+          st.glowLevel,
+        );
+        final ColorFilter glowTint = _glowTint(
+          textRed,
+          textGreen,
+          textBlue,
+          glowAlpha.base,
+        );
+        final double pad = _glowSpritePad(fontSize);
+        final glowRect = Rect.fromLTWH(
+          charX - pad,
+          charY - pad,
+          cw + pad * 2,
+          fontSize * rowHeight + pad * 2,
+        );
+        // 优先用预渲染辉光精灵贴图（颜色/透明度经 ColorFilter 逐帧驱动）
+        // 行盒失效检测：精灵可能是预热阶段按整行行盒（lineHeight）生成的，
+        // 若当前为换行行（rowHeight=0.8x），旧精灵字形偏下、光晕错位。
+        // 这里在绘制前主动核对行盒，不一致则释放并强制按当前 rowHeight 重生成
+        // （_requestCharGlowSprite 只在精灵为 null 时才请求，故必须在此先释放）。
+        final String glowKey = '$wordIndex:$k';
+        final double? cachedGlowRow = _glowSpriteRowHeight[glowKey];
+        if (cachedGlowRow != null &&
+            (cachedGlowRow - rowHeight).abs() > 1e-6) {
+          _glowSpriteRowHeight.remove(glowKey);
+          final old = k < glowSprites.length ? glowSprites[k] : null;
+          old?.dispose();
+          if (wordIndex < _charGlowSprites.length &&
+              k < _charGlowSprites[wordIndex].length) {
+            _charGlowSprites[wordIndex][k] = null;
+          }
+        }
+        final ui.Image? sprite = k < glowSprites.length
+            ? glowSprites[k]
+            : null;
+        // 换行行辉光诊断日志（节流：仅状态变化时打印一次，供真机抓 log 定位）
+        if ((rowHeight - lineHeight).abs() > 1e-6) {
+          final String dbg =
+              'w$wordIndex:c$k row=${rowHeight.toStringAsFixed(3)} '
+              'cached=${cachedGlowRow?.toStringAsFixed(3) ?? 'null'} '
+              'sprite=${sprite != null} y=${charY.toStringAsFixed(1)}';
+          if (dbg != _lastGlowDebug) {
+            _lastGlowDebug = dbg;
+            // ignore: avoid_print
+            if (kDebugMode) print('[GlowDbg] $dbg');
+          }
+        }
+        if (sprite != null) {
+          // 精灵按 [_glowSpriteSupersample] 超采样烘焙，这里缩回逻辑尺寸
+          // （drawImageRect + 双线性）。pad 与烘焙侧同口径。
+          final Rect srcRect = Rect.fromLTWH(
+            0,
+            0,
+            sprite.width.toDouble(),
+            sprite.height.toDouble(),
+          );
+          final Rect dstRect = Rect.fromLTWH(
+            charX - pad,
+            charY - pad,
+            sprite.width / _glowSpriteSupersample.toDouble(),
+            sprite.height / _glowSpriteSupersample.toDouble(),
+          );
+          _drawGlowSpriteWithRamp(
+            canvas: canvas,
+            sprite: sprite,
+            srcRect: srcRect,
+            dstRect: dstRect,
+            rampRect: charRect,
+            glowAlpha: glowAlpha,
+            sweepRamp: sweepRamp,
+            leftAlpha: leftAlpha,
+            rightAlpha: rightAlpha,
+            red: textRed,
+            green: textGreen,
+            blue: textBlue,
+          );
+        } else {
+          // 精灵未就绪（字符激活早期，glowLevel≈0 几乎不可见）：
+          // 异步请求渲染，本帧降级单层锐边 blur 保证视觉连续。
+          _requestCharGlowSprite(
+            wordIndex,
+            k,
+            painter.text?.toPlainText() ?? '',
+            fontSize,
+            rowHeight,
+          );
+          final double rimSigma = _glowRimSigmaEm * fontSize;
+          _glowBlurPaint.imageFilter = ImageFilter.blur(
+            sigmaX: tvBlurSigma(rimSigma),
+            sigmaY: tvBlurSigma(rimSigma),
+          );
+          _glowBlurPaint.colorFilter = glowTint;
+          canvas.saveLayer(glowRect, _glowBlurPaint);
+          painter.paint(canvas, charPos);
+          canvas.restore();
+        }
+      }
+
+      // === 文字绘制 ===
+      // v7：优先用预渲染纯白字形图（3× 超采样，图片变换平滑缩放，无文字重栅格化
+      // 闪烁、无放大马赛克），经 ColorFilter.matrix 上色为文字色 + mask alpha，
+      // drawImageRect 缩放到原生字符尺寸；图片未就绪时降级 TextPainter 均匀
+      // alpha 路径（量化缓存），视觉等价。
+      //
+      // 换行行（rowHeight < lineHeight，0.8x 行盒）：字形图按 1.5 行盒生成，
+      // 直接缩放到 0.8x 行盒会把字形垂直压扁变形 → 换行行改用 TextPainter
+      // （按 rowHeight 行盒渲染），与整词路径行盒一致，避免激活/idle 切换瞬移。
+      //
+      // **方案 C：辉光字与普通字一致的渐变模型**。普通字整词路径按字左右边缘
+      // 采样行级渐变（maskX 左亮右暗，向右推进）；辉光字此前（P6）改为字符中心
+      // 采样 uniform，单字内无渐变，导致中文单字在 maskX 扫过时"整字变亮"、
+      // 渐变带凭空消失显得硬切。这里对每个字符按左右边缘采样，差异明显时
+      // saveLayer + LinearGradient modulate（与整词路径一致），恢复向右推进感。
+      final bool sameRowBox = (rowHeight - lineHeight).abs() < 1e-6;
+      final ui.Image? charImg = sameRowBox && k < charImages.length
+          ? charImages[k]
+          : null;
+      // 渐变参数（charLeftX / charRightX / leftAlpha / rightAlpha /
+      // sweepRamp / needGradient）已在辉光层之前统一算好，此处直接复用。
       if (needGradient) {
         // 渐变路径：先画纯白字形，再 LinearGradient modulate（复用 _gradientPaint）。
         final double charH =
@@ -2016,11 +2156,147 @@ class WordRenderer {
     painter.dispose();
   }
 
-  /// P1-5 方案 1：异步渲染单个字符的最大 blur 辉光精灵图并缓存。
+  /// 辉光层实际绘制 alpha 拆分：`lit = glowLevel × 强度倍数`（上限 2.0）。
   ///
-  /// 渲染内容 = 纯白字符 + 恒定最大 blur（sigma = 0.24 × fontSize），
-  /// 与现状「当前字渐变路径（painter=plain white）下的辉光」颜色一致；
-  /// 透明度由每帧 [EmphasizeState.glowLevel] 经 ColorFilter 控制，不参与精灵内容。
+  /// - [base]：常规 source-over 的 alpha（0~1）；
+  /// - [extra]：`lit > 1` 的部分，改用 [BlendMode.plus] 追加一层——单次绘制的
+  ///   alpha 不可能超过 1，靠加法叠加才能让"更强"真的有亮度收益。
+  ///
+  /// 强度只乘亮度、不改剖面半径（[glowSigmaProfileEmForTest]），
+  /// 所以「贴笔画」的光形不会被强度调糊；见 [LyricPreferences.glowIntensity]。
+  ({double base, double extra}) _glowDrawAlpha(double glowLevel) {
+    final double lit =
+        (glowLevel * LyricPreferences.instance.glowIntensity).clamp(0.0, 2.0);
+    return (base: lit.clamp(0.0, 1.0), extra: (lit - 1.0).clamp(0.0, 1.0));
+  }
+
+  /// 辉光上色：颜色 = 当前文字色（含 alpha = [alpha]），与输入像素 RGB 无关。
+  ///
+  /// 用 [BlendMode.srcIn] 而不是矩阵乘法：源颜色整体替换为文字色、alpha 取
+  /// 光晕自身的 alpha。这样无论输入是纯白精灵还是已带文字色的 TextPainter
+  /// 降级路径，上色结果都一致（矩阵乘法会在「已着色文字」上二次相乘变暗）。
+  ///
+  /// 旧实现把 RGB 恒为 1（白）只改 alpha，导致辉光永远是白色、
+  /// 不跟随「歌词动态颜色」的混色比例。
+  ColorFilter _glowTint(int r, int g, int b, double alpha) =>
+      ColorFilter.mode(
+        Color.fromRGBO(r, g, b, alpha.clamp(0.0, 1.0)),
+        BlendMode.srcIn,
+      );
+
+  /// 按字内进度前沿**逐段**绘制辉光精灵。
+  ///
+  /// 辉光要跟着扫光推进：已唱侧达到峰值、前沿处过渡、未唱侧淡出。
+  /// 做法与文字层完全同源（[BlendMode.modulate] + [LinearGradient]）：
+  /// 1. `saveLayer(layerRect)`，在层内用纯白 Paint 画精灵（精灵本身是 alpha 贴图）；
+  /// 2. 用文字那套渐变（sweep 的 4 停 / classic 的 2 停）modulate 该层；
+  /// 3. 强度 >100% 的 `extra` 部分改用 [BlendMode.plus] 追加，**同一渐变**，
+  ///    否则两层推进位置不一致会出现重影。
+  ///
+  /// **两个 rect 必须区分开**（写错会把光晕裁成矩形硬边）：
+  /// - [layerRect] = 精灵的 `dstRect`（含左右各 `pad` 的光晕外扩）→ 这是
+  ///   `saveLayer` 的边界，必须够大，否则光晕被裁出竖直硬边；
+  /// - [rampRect] = **字符 rect**（与文字渐变同坐标系）→ 这是渐变 shader 的
+  ///   锚点，用它才能让光晕前沿与文字前沿严格对齐。
+  void _drawGlowSpriteWithRamp({
+    required Canvas canvas,
+    required ui.Image sprite,
+    required Rect srcRect,
+    required Rect dstRect,
+    required Rect rampRect,
+    required ({double base, double extra}) glowAlpha,
+    required ({List<double> stops, List<Color> colors})? sweepRamp,
+    required double leftAlpha,
+    required double rightAlpha,
+    required int red,
+    required int green,
+    required int blue,
+  }) {
+    // 辉光用文字色，alpha 取「文字在该处 alpha × 辉光强度基准」。
+    // 渐变 stops 直接沿用文字那套（sweep 4 停 / classic 两端），
+    // 因此辉光前沿与文字前沿严格同位置。
+    final List<double> stops = sweepRamp?.stops ?? const <double>[0.0, 1.0];
+
+    Color rampColor(double textAlpha, double glowBase) => Color.fromRGBO(
+      red,
+      green,
+      blue,
+      (textAlpha * glowBase).clamp(0.0, 1.0),
+    );
+
+    final List<Color> baseColors = sweepRamp == null
+        ? <Color>[
+            rampColor(leftAlpha, glowAlpha.base),
+            rampColor(rightAlpha, glowAlpha.base),
+          ]
+        : <Color>[
+            for (final Color c in sweepRamp.colors)
+              rampColor(c.a, glowAlpha.base),
+          ];
+
+    // saveLayer 用 dstRect（包容光晕）。
+    canvas.saveLayer(dstRect, Paint());
+    // 层内先贴纯白精灵（alpha 由精灵自带，颜色交给渐变）
+    _glowImagePaint.colorFilter = null;
+    canvas.drawImageRect(sprite, srcRect, dstRect, _glowImagePaint);
+    // **关键：渐变要建在 dstRect 上、并把 stops 重映射到 dstRect 坐标系**。
+    // 若直接 createShader(rampRect)，LinearGradient 在 rampRect 之外是钳制的，
+    // 而精灵在左右 pad 区仍有光晕 → 该区域拿到边缘色，形成矩形亮框。
+    _glowRampPaint.shader = LinearGradient(
+      colors: baseColors,
+      stops: _remapStopsToRect(stops: stops, rampRect: rampRect, dst: dstRect),
+    ).createShader(dstRect);
+    _glowRampPaint.blendMode = BlendMode.modulate;
+    canvas.drawRect(dstRect, _glowRampPaint);
+    canvas.restore();
+
+    // 强度 >100%：同一渐变、加法叠加（单次 alpha 封顶 1.0）。
+    if (glowAlpha.extra > 0) {
+      final List<Color> extraColors = sweepRamp == null
+          ? <Color>[
+              rampColor(leftAlpha, glowAlpha.extra),
+              rampColor(rightAlpha, glowAlpha.extra),
+            ]
+          : <Color>[
+              for (final Color c in sweepRamp.colors)
+                rampColor(c.a, glowAlpha.extra),
+            ];
+      canvas.saveLayer(dstRect, Paint());
+      _glowPlusPaint.colorFilter = null;
+      canvas.drawImageRect(sprite, srcRect, dstRect, _glowPlusPaint);
+      _glowRampPaint.shader = LinearGradient(
+        colors: extraColors,
+        stops: _remapStopsToRect(stops: stops, rampRect: rampRect, dst: dstRect),
+      ).createShader(dstRect);
+      _glowRampPaint.blendMode = BlendMode.modulate;
+      canvas.drawRect(dstRect, _glowRampPaint);
+      canvas.restore();
+    }
+  }
+
+  /// 把「相对 [rampRect] 的 stops」重映射成「相对 [dst] 的 stops」。
+  ///
+  /// 辉光的渐变 shader 建在外扩后的 `dst`（含 pad）上，但 stops 是按字符
+  /// `rampRect` 算的——直接复用会让前沿位置整体偏移 pad/宽度。
+  /// 这里按两个 rect 的左边界与宽度做线性换算，`dst` 之外的段被钳到 0/1。
+  static List<double> _remapStopsToRect({
+    required List<double> stops,
+    required Rect rampRect,
+    required Rect dst,
+  }) {
+    if (dst.width <= 0) return stops;
+    final double scale = rampRect.width / dst.width;
+    final double shift = (rampRect.left - dst.left) / dst.width;
+    return <double>[
+      for (final double s in stops) (shift + s * scale).clamp(0.0, 1.0),
+    ];
+  }
+
+  /// P1-5 方案 1：异步渲染单个字符的辉光精灵图并缓存。
+  ///
+  /// 精灵内容 = 纯白字符 + **三层高斯剖面**（见 [_glowRimSigmaEm] 等常量），
+  /// 只在行盒/字号变化时重烘焙；每帧用 [ColorFilter] 按当前文字色与
+  /// `glowLevel` 上色，因此调「动态颜色混色比例」不需要重建精灵。
   ///
   /// 幂等保护：key（wordIndex:charIndex）已在缓存或渲染中时直接返回。
   /// 异步回调用 [_spriteEpoch] 校验，renderer 已重置/切行时丢弃结果。
@@ -2072,10 +2348,10 @@ class WordRenderer {
     _glowSpritePendingRow[key] = rowHeight;
     _glowSpriteRowHeight[key] = rowHeight;
     final int epoch = _spriteEpoch;
-    final double sigma = _maxGlowSigma(fontSize);
-    // 上下各 3σ 余量：blur 光晕实际扩散约 3σ，仅留 2σ 会在换行行
-    // （0.8x 行盒，字形更靠上）把向上光晕裁切，光晕只剩下方、像垫在文字底下。
-    final double pad = sigma * 3;
+    // 外扩以最外层（薄雾层）半径的 3σ 为准：blur 光晕实际扩散约 3σ，
+    // 仅留 2σ 会在换行行（0.8x 行盒，字形更靠上）把向上光晕裁切，
+    // 光晕只剩下方、像垫在文字底下。
+    final double pad = _glowSpritePad(fontSize);
     final double wordH = fontSize * rowHeight;
     // 空字符安全保护
     if (text.isEmpty || wordH <= 0) {
@@ -2084,7 +2360,7 @@ class WordRenderer {
       return;
     }
     // 异步渲染（toImage 在光栅线程执行，回调回 UI 线程）
-    _renderGlowSpriteImage(text, fontSize, sigma, pad, rowHeight).then((image) {
+    _renderGlowSpriteImage(text, fontSize, pad, rowHeight).then((image) {
       _glowSpritePendingRow.remove(key);
       if (image == null) return;
       if (epoch != _spriteEpoch) {
@@ -2107,54 +2383,88 @@ class WordRenderer {
     });
   }
 
-  /// 渲染单张辉光精灵图（纯白字符 + blur，异步）。
+  /// 渲染单张辉光精灵图（纯白 + 三层高斯剖面，异步）。
   ///
   /// 按绘制时的行盒 [rowHeight] 渲染，与正文字形同盒顶对齐：
   /// 换行行（0.8x 行盒）用 rowHeight，非换行行等于 lineHeight，
   /// 保证光晕与文字上下完全贴合，不再需要额外垂直偏移补偿。
+  ///
+  /// **挖空字形本体**：每层先画模糊后的字形，再用 `dstOut` 扣掉未模糊的本体，
+  /// 只留笔画外侧的光。这是"沿笔画发光"而非"字后垫一块发光方块"的关键。
+  ///
+  /// **按 [_glowSpriteSupersample] 超采样烘焙**：字号、sigma、外扩、画布全部
+  /// 同乘倍数，得到一张高分辨率精灵；绘制期 `drawImageRect` 缩回逻辑尺寸，
+  /// 光晕的连续 alpha 斜坡得以保留（否则 1× 量化台阶被 DPR 放大成锯齿）。
+  ///
   /// 内部 try-catch 兜底：任何渲染失败（如 GPU 资源紧张）返回 null，
   /// 下次 _requestCharGlowSprite 会重新尝试。
   Future<ui.Image?> _renderGlowSpriteImage(
     String text,
     double fontSize,
-    double sigma,
     double pad,
     double rowHeight,
   ) async {
     try {
-      final textPainter = TextPainter(textDirection: TextDirection.ltr)
+      final double ss = _glowSpriteSupersample.toDouble();
+      final TextPainter fillPainter = TextPainter(textDirection: TextDirection.ltr)
         ..text = TextSpan(
           text: text,
           style: TextStyle(
-            // 与渐变路径 painter 一致：plain white，blur 后即白色辉光
+            // 与渐变路径 painter 一致：plain white，颜色由绘制期 ColorFilter 决定
             color: const Color.fromRGBO(255, 255, 255, 1.0),
-            fontSize: fontSize,
+            // 字号同乘倍数：字形按高分辨率栅格化，而非事后 canvas 放大
+            fontSize: fontSize * ss,
             height: rowHeight,
             fontFamily: LyricLayout.fontFamily,
             fontWeight: LyricLayout.fontWeight,
           ),
         )
         ..layout();
-      final int imgW = (textPainter.width + pad * 2).ceil();
-      final int imgH = (fontSize * rowHeight + pad * 2).ceil();
+      final int imgW = (fillPainter.width + pad * 2 * ss).ceil();
+      // 字形高度也要同乘倍数：字号已放大，行盒内容随之为 fontSize×ss×rowHeight，
+      // 漏乘会把放大后的字形底部裁掉（画布不够高 → 一条硬切线）。
+      final int imgH = (fontSize * ss * rowHeight + pad * 2 * ss).ceil();
       if (imgW <= 0 || imgH <= 0) {
-        textPainter.dispose();
+        fillPainter.dispose();
         return null;
       }
 
       final recorder = ui.PictureRecorder();
       final glowCanvas = Canvas(recorder);
-      glowCanvas.saveLayer(
-        Rect.fromLTWH(0, 0, imgW.toDouble(), imgH.toDouble()),
-        Paint()
-          ..imageFilter = ui.ImageFilter.blur(
-            sigmaX: tvBlurSigma(sigma),
-            sigmaY: tvBlurSigma(sigma),
-          ),
-      );
-      textPainter.paint(glowCanvas, Offset(pad, pad));
-      textPainter.dispose();
-      glowCanvas.restore();
+      final Rect bounds = Rect.fromLTWH(0, 0, imgW.toDouble(), imgH.toDouble());
+      final Offset at = Offset(pad * ss, pad * ss);
+      // 由紧到松：贴轮廓层 → 柔光层 → 氛围层。
+      const List<double> sigmasEm = <double>[
+        _glowRimSigmaEm,
+        _glowBloomSigmaEm,
+        _glowHazeSigmaEm,
+      ];
+      const List<double> weights = <double>[
+        _glowRimWeight,
+        _glowBloomWeight,
+        _glowHazeWeight,
+      ];
+      for (int layer = 0; layer < sigmasEm.length; layer++) {
+        // sigma 同乘倍数：光晕半径在放大后的坐标系里保持相同的"逻辑尺寸"
+        final double sigma = sigmasEm[layer] * fontSize * ss;
+        // 每层一个组：把字形按该半径模糊后按权重叠加。
+        // **不挖空**——高斯模糊天然「中心最亮、向外递减」，与字形叠加后
+        // 字形处最亮，正是需要的观感（见剖面常量的说明）。
+        glowCanvas.saveLayer(
+          bounds,
+          Paint()
+            ..imageFilter = ui.ImageFilter.blur(
+              sigmaX: tvBlurSigma(sigma),
+              sigmaY: tvBlurSigma(sigma),
+            )
+            // 用图层 alpha 作权重：逐层 source-over 叠加，内层最亮、外层衰减，
+            // 不改变 glowLevel 对整体亮度的线性控制。
+            ..color = Color.fromRGBO(255, 255, 255, weights[layer]),
+        );
+        fillPainter.paint(glowCanvas, at);
+        glowCanvas.restore();
+      }
+      fillPainter.dispose();
 
       final picture = recorder.endRecording();
       final image = await picture.toImage(imgW, imgH);

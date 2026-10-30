@@ -122,4 +122,65 @@ void main() {
       expect(prefs.getString('lyric_fill_mode'), isNull);
     });
   });
+
+  /// 动态颜色混色比例：默认 0.15（= 历史 85% 白 + 15% 主色），可调 0~1。
+  group('⑥ 动态颜色混色比例 dynamicColorMixRatio', () {
+    test('默认 0.15（等于历史观感）', () {
+      expect(LyricPreferences.instance.dynamicColorMixRatio,
+          equals(LyricPreferences.defaultDynamicColorMixRatio));
+      expect(LyricPreferences.instance.dynamicColorMixRatio, equals(0.15));
+    });
+
+    test('setter 生效并 clamp 到 [0.0, 1.0]', () async {
+      await LyricPreferences.instance.setDynamicColorMixRatio(0.4);
+      expect(LyricPreferences.instance.dynamicColorMixRatio, equals(0.4));
+
+      await LyricPreferences.instance.setDynamicColorMixRatio(99);
+      expect(LyricPreferences.instance.dynamicColorMixRatio,
+          equals(LyricPreferences.maxDynamicColorMixRatio));
+
+      await LyricPreferences.instance.setDynamicColorMixRatio(-5);
+      expect(LyricPreferences.instance.dynamicColorMixRatio,
+          equals(LyricPreferences.minDynamicColorMixRatio));
+    });
+
+    test('持久化到 lyric_dynamic_color_mix_ratio', () async {
+      await LyricPreferences.instance.setDynamicColorMixRatio(0.6);
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getDouble('lyric_dynamic_color_mix_ratio'), equals(0.6));
+    });
+
+    test('reset 后回到默认值且 key 被移除', () async {
+      await LyricPreferences.instance.setDynamicColorMixRatio(0.8);
+      await LyricPreferences.instance.reset();
+      expect(LyricPreferences.instance.dynamicColorMixRatio,
+          equals(LyricPreferences.defaultDynamicColorMixRatio));
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getDouble('lyric_dynamic_color_mix_ratio'), isNull);
+    });
+  });
+
+  /// 上方已播行跟随已播颜色：独立开关，默认关闭（= 历史白色背景行）。
+  group('⑦ 上方行使用已播颜色 useAboveLinesPlayedColor', () {
+    test('默认关闭', () {
+      expect(LyricPreferences.instance.useAboveLinesPlayedColor, isFalse);
+      expect(LyricPreferences.instance.useAboveLinesPlayedColor,
+          equals(LyricPreferences.defaultUseAboveLinesPlayedColor));
+    });
+
+    test('setter 落盘到 lyric_above_lines_played_color', () async {
+      await LyricPreferences.instance.setUseAboveLinesPlayedColor(true);
+      expect(LyricPreferences.instance.useAboveLinesPlayedColor, isTrue);
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getBool('lyric_above_lines_played_color'), isTrue);
+    });
+
+    test('reset 后回到默认关闭且 key 被移除', () async {
+      await LyricPreferences.instance.setUseAboveLinesPlayedColor(true);
+      await LyricPreferences.instance.reset();
+      expect(LyricPreferences.instance.useAboveLinesPlayedColor, isFalse);
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getBool('lyric_above_lines_played_color'), isNull);
+    });
+  });
 }

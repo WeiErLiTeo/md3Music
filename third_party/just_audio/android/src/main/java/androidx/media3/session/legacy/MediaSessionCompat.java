@@ -344,9 +344,17 @@ public class MediaSessionCompat {
   // 进度自行滚动整段 LRC，不需要推送"当前第几行"。
   static final String UCAR_LYRICS_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
   static final String UCAR_LYRICS_STATUS = "ucar.media.metadata.LYRICS_STATUS";
-  // vivomusicmix 原子随身听能力位（7|8|16：播控+歌词+进度）。字段名照抄 vivo 拼写。
+  // vivomusicmix 原子随身听能力位。字段名照抄 vivo 拼写。
+  // v45：与 LegacyConversions.VMM_SUPPORT_EVENT_VALUE 同值（两包私有互不可见，
+  // 改值必须同步）——31 + 收藏 64 + 循环 128 + 三类列表 256|512|1024 = 2015，
+  // 每一位都有对应实现（v45 起循环/收藏已接通）；不随歌词有无增删。
   static final String VMM_SUPPORT_EVENT = "vivomusicmix.media.metadata.support_event";
-  static final long VMM_SUPPORT_EVENT_VALUE = 31L;
+  // MD3Music fork v64：与 LegacyConversions.VMM_SUPPORT_EVENT_VALUE 同值（两包私有
+  // 互不可见，改值必须同步）。给满 4095（bit0~11 全开）：原子的三类列表按钮读的是
+  // 包名白名单能力值，非白名单包回退到 support_event 本身，2015 缺 32/2048 且
+  // 白名单口径为 4095 —— 统一给满，收藏❤️(64)/循环(128)/播放列表(256)/喜欢列表(512)/
+  // 本地列表(1024) 全部点亮。
+  static final long VMM_SUPPORT_EVENT_VALUE = 4095L;
   static final String VMM_ACTION_KEY = "vivomusicmix.meida.extra.key.action";
   static final String VMM_MEDIA_ID_KEY = "vivomusicmix.extra.key.meidia_id";
   static final String VMM_LYRIC_KEY = "vivomusicmix.extra.key.lyric";
@@ -415,6 +423,35 @@ public class MediaSessionCompat {
       if (impl == exclude || impl.mDestroyed) continue;
       try {
         impl.setPlaybackState(state);
+      } catch (Throwable t) {
+        // 单个 session 失败不影响其他
+      }
+    }
+  }
+
+  /// MD3Music fork（方向3·队列镜像，v36）：把队列（含标题）同步进影子会话。
+  /// 原子岛把 MediaControllerCompat 长期钉在首个会话（shadow）上：收敛保活后
+  /// 影子自身的时间线已清空，元数据/播放态有镜像而队列无人写，其列表面板恒空
+  /// （"vivo 原子岛播放列表获取不到"的根因）。形状与 mirrorPlaybackStateToShadows
+  /// 同构；标题空传不影响 getQueue 可读性。
+  public static void mirrorQueueToShadows(
+      @Nullable List<QueueItem> queue,
+      @Nullable CharSequence title,
+      @Nullable MediaSessionCompat excludeCompat) {
+    MediaSessionImplApi21 exclude = null;
+    if (excludeCompat != null
+        && excludeCompat.mImpl instanceof MediaSessionImplApi21) {
+      exclude = (MediaSessionImplApi21) excludeCompat.mImpl;
+    }
+    java.util.ArrayList<MediaSessionImplApi21> live;
+    synchronized (sVivoLrcLock) {
+      live = new java.util.ArrayList<>(sLiveApi21Impls);
+    }
+    for (MediaSessionImplApi21 impl : live) {
+      if (impl == exclude || impl.mDestroyed) continue;
+      try {
+        impl.setQueue(queue);
+        impl.setQueueTitle(title);
       } catch (Throwable t) {
         // 单个 session 失败不影响其他
       }
@@ -4287,6 +4324,8 @@ public class MediaSessionCompat {
           // 移除）。对照音哩音哩（metadata 1 bitmap + 11 键无大字符串，封面完整到达），
           // 我们的 metadata bitmap+歌词大字符串 → 原子端封面被降为 1x1 平均色（v12-v17
           // 全部实测）。歌词照走 lrc_change extras 事件（c0 控制器消费，已验证）。
+          // 车机多行歌词实测不依赖本顶层键（ef77080 顶层键关闭状态下仍常驻多行，三绿），
+          // 所以保持关闭，不要为"多行"打开它。
           if (false && wholeLrc != null && !wholeLrc.isEmpty()) {
             // v18：metadata 歌词键停用（见上方注释）。保留分支结构便于回滚。
             MediaMetadata.Builder fwkBuilder = new MediaMetadata.Builder(fwkMetadata);

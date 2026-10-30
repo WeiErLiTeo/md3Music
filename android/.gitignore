@@ -10,6 +10,3 @@ key.properties
 **/keystore.properties
 **/*.keystore
 **/*.jks
-
-# 保留固定调试证书
-!**/md3-debug.keystore

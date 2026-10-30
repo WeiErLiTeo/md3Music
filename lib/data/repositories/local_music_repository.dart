@@ -180,10 +180,9 @@ class LocalMusicRepository {
   /// 暴露为静态方法以便单测直接断言（Windows 端路径行为需要回归保护）。
   static bool isExcluded(String filePath, List<String> excludedFolders) {
     if (excludedFolders.isEmpty) return false;
-    final normalized = filePath.replaceAll('\\', '/');
+    final normalized = _normalizeComparablePath(filePath);
     for (final excluded in excludedFolders) {
-      final normalizedExcluded = excluded
-          .replaceAll('\\', '/')
+      final normalizedExcluded = _normalizeComparablePath(excluded)
           .replaceFirst(RegExp(r'/+$'), '');
       // 确保是目录级别匹配（excluded 是路径前缀，且后面跟着 / 或完全相等）
       if (normalized == normalizedExcluded ||
@@ -192,6 +191,29 @@ class LocalMusicRepository {
       }
     }
     return false;
+  }
+
+  /// 不同 SAF 授权根可能把同一个目录编码成不同 tree URI；统一按底层 document id
+  /// 比较，避免排除一个 U 盘目录后从另一授权根再次扫描进列表。
+  static String _normalizeComparablePath(String path) {
+    final normalized = path.replaceAll('\\', '/');
+    if (normalized.startsWith('storage://')) return normalized;
+    final uri = Uri.tryParse(normalized);
+    if (uri == null || uri.scheme != 'content') {
+      return normalized.replaceFirst(RegExp(r'/+$'), '');
+    }
+    final segments = uri.pathSegments;
+    final documentIndex = segments.indexOf('document');
+    final treeIndex = segments.indexOf('tree');
+    final idIndex = documentIndex >= 0 ? documentIndex + 1 : treeIndex + 1;
+    if (idIndex <= 0 || idIndex >= segments.length) return normalized;
+    final documentId = segments[idIndex];
+    final colon = documentId.indexOf(':');
+    if (colon < 0) return '${uri.authority}/$documentId';
+    final volume = documentId.substring(0, colon).toLowerCase();
+    final relative = documentId.substring(colon + 1).replaceAll('\\', '/');
+    if (volume == 'primary') return '/storage/emulated/0/$relative';
+    return 'storage://$volume/$relative'.replaceFirst(RegExp(r'/+$'), '');
   }
 
   bool _isExcluded(String filePath, List<String> excludedFolders) =>
@@ -365,6 +387,8 @@ class LocalMusicRepository {
             ),
             localPath: uri,
             folderPath: folder,
+            artworkUri: data['artworkUri'] as String?,
+            localLyrics: data['localLyrics'] as String?,
             isOnline: false,
             quality: inferQuality((data['bitrate'] as num?)?.toInt(), name),
           ));

@@ -484,7 +484,8 @@ class _AudioOffloadPageBodyState extends State<AudioOffloadPageBody> {
     buf.writeln('设备指纹: ${snap.deviceKey.isEmpty ? '未知' : snap.deviceKey}'
         '  API: ${snap.sdkInt}  探测耗时: ${snap.probeCostMs} ms');
     buf.writeln('硬解解码器: ${snap.hardwareCodecCount} 个'
-        '  支持编码: ${snap.supportedFormatCount} 种'
+        '  可硬解编码: ${snap.supportedFormatCount} 种'
+        '  全部编码: ${snap.formatCount} 种'
         '  条目: ${snap.entries.length}');
     final String probeError = (snap.probeError ?? '').trim();
     if (probeError.isNotEmpty) buf.writeln('探测失败: $probeError');

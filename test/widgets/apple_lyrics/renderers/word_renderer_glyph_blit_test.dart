@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:md3music/widgets/apple_lyrics/layout/lyric_layout.dart';
 import 'package:md3music/widgets/apple_lyrics/layout/lyric_preferences.dart';
 import 'package:md3music/widgets/apple_lyrics/models/lyric_line.dart';
 import 'package:md3music/widgets/apple_lyrics/renderers/word_renderer.dart';
@@ -45,14 +46,17 @@ void main() {
   });
 
   /// 渲染一行到图片（带深色底，便于统计差异像素）。
-  Future<Uint8List> renderPixels(WordRenderer renderer) async {
+  Future<Uint8List> renderPixels(
+    WordRenderer renderer, {
+    LyricLine? target,
+  }) async {
     final ui.PictureRecorder recorder = ui.PictureRecorder();
     final ui.Canvas canvas = ui.Canvas(recorder);
     canvas.drawRect(
       const ui.Rect.fromLTWH(0, 0, 400, 120),
       ui.Paint()..color = const ui.Color(0xFF000000),
     );
-    renderer.paintLine(canvas, ui.Offset.zero, line, 24);
+    renderer.paintLine(canvas, ui.Offset.zero, target ?? line, 24);
     final ui.Picture picture = recorder.endRecording();
     final ui.Image image = await picture.toImage(400, 120);
     picture.dispose();
@@ -134,5 +138,59 @@ void main() {
       greaterThan(0),
       reason: '字形图路径下 0.3px 位移必须产生画面变化（否则又退回整像素台阶）',
     );
+  });
+
+  group('离屏位图重采样必须用非最近邻采样', () {
+    // 背景：`Paint()` 默认 filterQuality = none（最近邻）。本仓三张离屏位图
+    // （整词字形图 / 强调字图 / 辉光精灵）都是「超采样或按逻辑像素渲染，
+    // 绘制时缩放到设备像素」，最近邻会把抗锯齿信息整体丢掉。
+    // 真机 Windows 光栅器实测（tmp/glyph_resample_probe.txt）：
+    //   - Windows 3× 字形图 2.40× 降采样：alpha 档位 228 → 16，中间 alpha 20.5% → 10.9%
+    //   - Android 光晕 3× 放大：相邻像素跳变 255 → 73~93，alpha 档位 246 → 16
+    // 因此这三个 Paint 一旦被改回默认值，画面会立刻退化成硬边台阶。
+    test('三个 Paint 的 filterQuality 均不为 none', () {
+      final WordRenderer renderer = WordRenderer();
+      expect(
+        renderer.glyphFilterQualityForTest,
+        isNot(FilterQuality.none),
+        reason: '整词字形图（Windows 上浮路径）不得退回最近邻采样',
+      );
+      expect(
+        renderer.charImageFilterQualityForTest,
+        isNot(FilterQuality.none),
+        reason: '强调字字形图不得退回最近邻采样',
+      );
+      expect(
+        renderer.glowImageFilterQualityForTest,
+        isNot(FilterQuality.none),
+        reason: '辉光精灵（1× 逻辑像素放大到 DPR 倍）不得退回最近邻采样',
+      );
+    });
+
+    test('强调字路径绘制一帧后采样模式仍成立（Android 辉光场景）', () async {
+      // 强调字：字时长 >= 阈值（默认 fixed 1000ms）+ CJK 内容
+      const LyricLine glowLine = LyricLine(
+        startTime: 0,
+        duration: 4000,
+        text: '华',
+        words: [LyricWord(startTime: 0, duration: 2000, text: '华')],
+      );
+      final WordRenderer renderer = WordRenderer();
+      renderer.setLineState(isActive: true, scale: LyricLayout.activeScale);
+      await renderPixels(renderer, target: glowLine);
+      // 推进到该字演唱中段，激活逐字符辉光/字形图路径
+      for (int i = 0; i < 30; i++) {
+        renderer.tick(0.016, 800);
+        await renderPixels(renderer, target: glowLine);
+      }
+      expect(
+        renderer.charImageFilterQualityForTest,
+        isNot(FilterQuality.none),
+      );
+      expect(
+        renderer.glowImageFilterQualityForTest,
+        isNot(FilterQuality.none),
+      );
+    });
   });
 }

@@ -290,8 +290,25 @@ public final class UsbAudioSinkController {
 
     private static volatile StallRecoveryListener stallRecoveryListener = null;
 
-    public static void setStallRecoveryListener(@Nullable StallRecoveryListener l) {
+    /** MD3Music fork: 最近一次注册监听器的 AudioPlayer（identity 比对）。
+     *  静态监听捕获的是"播放中的活跃实例"，跨fade 重建后新实例覆盖注册；
+     *  清除必须按 owner 对账，否则旧实例 dispose 会摘掉新实例的监听。 */
+    private static volatile Object stallRecoveryOwner = null;
+
+    public static void setStallRecoveryListener(@Nullable StallRecoveryListener l,
+                                                @Nullable Object owner) {
         stallRecoveryListener = l;
+        stallRecoveryOwner = owner;
+    }
+
+    /** MD3Music fork: 按 owner identity 释放静态监听。原先监听器滞留最后
+     *  一个已 dispose 的 AudioPlayer（内含 context 引用），停在终局位置时
+     *  整实例泄漏永不释放；dispose 侧调用本方法收尾。 */
+    public static void clearStallRecoveryListenerIfCurrent(@Nullable Object owner) {
+        if (stallRecoveryOwner == owner) {
+            stallRecoveryListener = null;
+            stallRecoveryOwner = null;
+        }
     }
 
     /** 停喂判定阈值（ms）：最后一次入队后静默超过该值视为停喂。 */
@@ -355,6 +372,12 @@ public final class UsbAudioSinkController {
                     for (UsbInterceptAudioSink s : liveSinks) s.probeNoDataStall();
                 },
                 FIRST_DATA_WATCHDOG_PERIOD_MS, FIRST_DATA_WATCHDOG_PERIOD_MS, TimeUnit.MILLISECONDS);
+    }
+
+    private static synchronized void maybeCancelFirstDataWatchdog() {
+        if (!liveSinks.isEmpty() || firstDataWatchdogFuture == null) return;
+        firstDataWatchdogFuture.cancel(false);
+        firstDataWatchdogFuture = null;
     }
 
     // ── 异步 USB 流重建（P0-4 修复，2026-09-12） ─────────────────────────────
@@ -1280,6 +1303,7 @@ public final class UsbAudioSinkController {
             stopStreamingThread();
             super.release();
             liveSinks.remove(this);
+            maybeCancelFirstDataWatchdog();
         }
 
         @Override public void setVolume(float volume) {

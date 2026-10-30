@@ -86,6 +86,42 @@ double coverMorphLocalRadius(
 double coverMorphTilt(double t) =>
     kCoverMorphTilt * math.sin(math.pi * t.clamp(0.0, 1.0));
 
+/// 把角度差归一到 `(-π, π]`（相位回绕用）。
+///
+/// **为什么要它**：圆盘封面的旋转相位是 `[0, 2π)` 的值，每转完一圈就回绕到 0。
+/// 直接对 `终值 − 起值` 求插值，回绕那一帧会出现"差 2π"的假跳变；而逐帧对
+/// 插值结果取最短路径又会在「差值恰好跨过 π」那一帧把整张封面拧 180°
+/// （`start + delta × t` 里 delta 从 +π 翻到 −π，非端点帧差了 `2π × t`）。
+/// 正确做法是**对差值本身做连续跟踪**（见 `player_cover_morph_layer.dart` 的
+/// `_spinDeltaFor`）：首帧取本函数的结果，之后每帧
+/// `delta += wrapPi(raw − delta)`，于是 delta 连续演化、永不跳变。
+///
+/// 非有限值按 0 处理（`clamp` 对 NaN 比较不出大小，会原样返回 NaN）。
+double coverMorphWrapPi(double delta) {
+  if (!delta.isFinite) return 0.0;
+  const double tau = 2 * math.pi;
+  double d = delta % tau;
+  if (d > math.pi) d -= tau;
+  if (d <= -math.pi) d += tau;
+  return d;
+}
+
+/// 本帧的封面旋转角：`起点角 + 连续差 × 进度`。
+///
+/// [delta] 必须是**已展开**的终值差（可跨圈，见 [coverMorphWrapPi]），不是
+/// `wrapPi` 过的裸差。两端严格落在端点上：`t=0` 与源形态当前角逐值相等，
+/// `t=1` 与目的形态同相（差整数圈 = 视觉等价）。
+double coverMorphFlightAngle({
+  required double start,
+  required double delta,
+  required double t,
+}) {
+  final double s = start.isFinite ? start : 0.0;
+  final double d = delta.isFinite ? delta : 0.0;
+  final double e = t.isFinite ? t.clamp(0.0, 1.0) : 0.0;
+  return s + d * e;
+}
+
 /// ── 文字侧的档位（第五轮，治 `textLayout`）────────────────────────────────
 ///
 /// **要治的是什么**：真机仪表 v3 定案，转场期每帧 3~5.6ms 的 UI 成本全在形变层
@@ -274,15 +310,29 @@ class PlayerCoverMorphBus {
   /// FullPlayer 封面「页面归位」后的屏幕矩形。
   Rect? settledRect;
 
+  /// 终点**可见封面**相对 [settledRect] 的单侧内缩比例（`0..0.45`）。
+  ///
+  /// 方形封面路径恒 0（可见封面就是整个槽位盒）；频谱圆盘（style 0/1）传
+  /// `SpectrumArtwork.barReserveRatio`（0.12）—— 真身把可见圆画在槽位盒**居中**
+  /// 且四周各留 12% 给环形频谱柱，故终点矩形 = 盒矩形 deflate(边长 × 比例)，
+  /// 终点圆角 = 该矩形边长 / 2（正圆）。
+  ///
+  /// **由槽位上报而不是形变层自己判断**：形变层拿到的只有矩形，无法知道这一页
+  /// 此刻画的是方图还是圆盘；槽位是唯一知道「自己包着什么」的地方（与
+  /// `settledArtworkScale` / `settledArtworkAnchor` 同一口径）。
+  double settledInsetRatio = 0.0;
+
   /// 页面本地 → 屏幕的缩放比（`DisplayScaleScope` 非 1.0 档位时 ≠ 1）。
   double pageToScreen = 1.0;
 
   /// 页面本帧施加的位移（页面本地坐标），由路由过渡 / 拖拽覆盖层在 build 阶段写入。
   Offset pageOffset = Offset.zero;
 
-  /// **封面**形变是否可用。频谱圆盘 / 写真 / 3D 深度封面 / 动态封面 /
-  /// 车机常驻面板为 false，此时封面一侧完全不介入，行为与改动前完全一致。
-  /// 文字一侧另有 [textEligible]（与本字段**故意不同源**）。
+  /// **封面**形变是否可用。写真 / 车机常驻面板为 false，此时封面一侧完全不介入，
+  /// 行为与改动前完全一致。文字一侧另有 [textEligible]（与本字段**故意不同源**）。
+  ///
+  /// **频谱圆盘（style 0/1）不再压制封面**：圆盘形状（居中内缩 + 正圆 + 唱片角）
+  /// 由 [settledInsetRatio] 与飞行层现算的终点角完整描述，形变层画得出它。
   bool eligible = false;
 
   /// 形变层画什么（与两端保持同一套参数，保证交接处像素级对齐）。
@@ -421,7 +471,7 @@ class PlayerCoverMorphBus {
   /// 本次转场是否接管文字块。
   ///
   /// 与封面的 [eligible] **不同源**（各自锁存，见 [latchedTextEligible]）：
-  /// 频谱圆盘 / 写真只压封面一侧，文字照飞。分开存只是为了让「槽位隐藏条件」与
+  /// 写真等只压封面一侧，文字照飞。分开存只是为了让「槽位隐藏条件」与
   /// 「形变层绘制条件」逐字一致，不会出现某一侧被判据差异漏掉而留出空洞。
   bool textEligible = false;
 
@@ -500,10 +550,12 @@ class PlayerCoverMorphBus {
 
   /// 本次转场**锁存**的文字侧资格。
   ///
-  /// **刻意与 [latchedCoverEligible] 分成两路**：频谱圆盘（圆形裁切 + 旋转，
-  /// 形变层还原不出）与写真封面只抑制**封面**一侧，文字形变照旧（用户要求）。
-  /// 共用一个锁存时「先到者胜」会把某一侧的答案强加给另一侧 —— 表现为
-  /// 圆盘开着时歌名跟着飞、封面也跟着飞（本该只飞歌名）。
+  /// **刻意与 [latchedCoverEligible] 分成两路**：写真封面 / 车机面板只抑制
+  /// **封面**一侧，文字形变照旧（用户要求）。共用一个锁存时「先到者胜」会把某一侧
+  /// 的答案强加给另一侧 —— 表现为「封面不飞、歌名也跟着不飞」。
+  ///
+  /// **频谱圆盘不在任一压制名单里**（它现在两侧都飞）：形状由 [settledInsetRatio]
+  /// 与终点角描述，文字本来就与封面形状无关。
   bool? latchedTextEligible;
 
   /// 解析本次转场的**封面**形变资格：**在转场起点锁存，全程不再改变**。
@@ -524,7 +576,8 @@ class PlayerCoverMorphBus {
   ///
   /// **资格必须是同步可读的**：跟手覆盖层里的播放页是当场新建的，首帧就在
   /// 0<p<1，此时它自己的异步偏好（频谱开关）必然还是默认值。判据里凡是异步
-  /// 状态，一律先落成全局镜像（见 `kSpectrumDiscCoverActive`）。
+  /// 状态，一律先落成全局镜像（见 `kSpectrumDiscCoverActive`）——本字段现在只装
+  /// 结构条件，但**终点形状**（[settledInsetRatio]）仍要靠那份镜像同步求值。
   bool resolveCoverEligible({required double expansion, required bool live}) {
     if (expansion <= 0.0 || expansion >= 1.0) {
       latchedCoverEligible = null;
@@ -647,6 +700,9 @@ class PlayerCoverMorphBus {
   ///
   /// [logicalSize] 是探针子树的**布局**尺寸（页面本地坐标）；[measured] 是同一次
   /// paint 量到的屏幕矩形。缩放比由二者相除得出。
+  ///
+  /// [settledInsetRatio] 是终点可见封面相对该矩形的单侧内缩比例（频谱圆盘 0.12，
+  /// 其余 0，口径见 [PlayerCoverMorphBus.settledInsetRatio]）。
   void publishFull({
     required Rect measured,
     required Size logicalSize,
@@ -660,6 +716,7 @@ class PlayerCoverMorphBus {
     required bool eligible,
     required double settledArtworkScale,
     required Alignment settledArtworkAnchor,
+    double settledInsetRatio = 0.0,
   }) {
     final scale = (logicalSize.width <= 0 || measured.width <= 0)
         ? 1.0
@@ -669,9 +726,12 @@ class PlayerCoverMorphBus {
       pageOffset: pageOffset,
       pageToScreen: scale,
     );
+    final double inset = settledInsetRatio.isFinite
+        ? settledInsetRatio.clamp(0.0, 0.45)
+        : 0.0;
     // 归位矩形在一次转场里是常量（页面布局不变，只有 dy 在动），所以逐帧
-    // publishFull 通常不会触发 _bump；只有真正变化（切歌 / 转屏 / 资格翻转）
-    // 才通知形变层，避免播放页每次重绘都空转重建一次形变层。
+    // publishFull 通常不会触发 _bump；只有真正变化（切歌 / 转屏 / 资格翻转 /
+    // 方图↔圆盘切换）才通知形变层，避免播放页每次重绘都空转重建一次形变层。
     // 与参数同名的字段必须保留 `this.` 前缀以便区分；未遮蔽的去掉以免
     // 触发 unnecessary_this。
     final changed =
@@ -685,7 +745,8 @@ class PlayerCoverMorphBus {
         shadowColor != this.shadowColor ||
         eligible != this.eligible ||
         settledArtworkScale != this.settledArtworkScale ||
-        settledArtworkAnchor != this.settledArtworkAnchor;
+        settledArtworkAnchor != this.settledArtworkAnchor ||
+        inset != this.settledInsetRatio;
     settledRect = settled;
     pageToScreen = scale;
     this.songId = songId;
@@ -697,6 +758,7 @@ class PlayerCoverMorphBus {
     this.eligible = eligible;
     this.settledArtworkScale = settledArtworkScale;
     this.settledArtworkAnchor = settledArtworkAnchor;
+    this.settledInsetRatio = inset;
     if (changed) _bump();
   }
 
@@ -718,6 +780,7 @@ class PlayerCoverMorphBus {
     songId = null;
     settledArtworkScale = 1.0;
     settledArtworkAnchor = Alignment.center;
+    settledInsetRatio = 0.0;
     latchedCoverEligible = null;
     latchedTextEligible = null;
     // 本段飞行的三个瞬时状态：复位后下一个用例从「不在转场中」开始。
@@ -746,7 +809,7 @@ class PlayerCoverMorphBus {
 /// 封面此刻是否真的可见（形变资格里**与「哪个 FullPlayer 实例」无关**的那部分）。
 ///
 /// **只装「结构门」**（车机面板 + 当前 tab 是否含封面），**不装封面独有的压制项**
-/// （频谱圆盘 / 写真）：本信号被封面与文字两侧共用（[PlayerCoverMorphBus.willDraw]
+/// （写真）：本信号被封面与文字两侧共用（[PlayerCoverMorphBus.willDraw]
 /// 与 `textWillDraw` 都读它），把封面那一侧的答案写进来会把文字连贯一起掐掉。
 /// 封面独有的压制走各自锁存的 `eligible` / `textEligible`。
 ///

@@ -103,7 +103,9 @@ bool isPadLayout(BuildContext context) {
 /// `_MainLayout` 监听它触发整棵子树重建（与 `kCoverFlowImmersive` 同模式）。
 final ValueNotifier<bool> kDesktopModeEnabled = ValueNotifier<bool>(false);
 
-/// Windows 内容双栏开关；关闭不影响侧栏导航，也不改变 Android 布局。
+/// 内容双栏（master-detail）开关；关闭不影响侧栏导航。历史名
+/// [kWindowsTwoPaneEnabled] 保留：开关现已三端通用（设置页「启用双栏布局」），
+/// 非 Windows 由 main.dart 播种默认 true（宽屏双栏行为不回退），Windows 默认关。
 final ValueNotifier<bool> kWindowsTwoPaneEnabled = ValueNotifier<bool>(false);
 
 /// 播放器形态总开关（SecondaryMiniPlayerHost 渲染悬浮条还是底部常驻条）。

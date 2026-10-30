@@ -454,7 +454,7 @@ double capsuleChromeOpacity(double expansion) =>
 ///
 /// 判据与常驻条封面（`mini_player.dart` 的 `coverLayerWillDraw`）及播放页
 /// `PlayerCoverSlot` 同源：`expansion > 0` 且形变层真的在画时二进制让位
-/// （`Opacity 0`），形变层不接管（频谱圆盘 / 写真 / 系统减弱动画）时保持可见。
+/// （`Opacity 0`），形变层不接管（写真 / 车机面板 / 系统减弱动画）时保持可见。
 /// 额外的 [invisibleAt] 项保证**远端端点**（`playerExpansion == 1`）整条不可见：
 /// 该进度下展开面板已铺满、胶囊在其之下，但裸露的封面仍要收干净。
 double capsuleCoverOpacity(

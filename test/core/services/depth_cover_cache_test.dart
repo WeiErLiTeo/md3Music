@@ -99,6 +99,64 @@ void main() {
     expect(r3!['inpaint'], 'migan');
   });
 
+  // ── 多层路径的修补底板（「图片修补没生效」的修复配套）──────────────────────
+  //
+  // Windows 多层渲染必须画 `bg_fill.png` 才能看到修补；旧缓存（无底板）必须
+  // 自动视为未命中，否则用户会一直看旧的重影画面。Android 的 Kotlin generate
+  // 不产底板，**不能**照搬这条要求（否则它的多层回退永远不命中、反复重生成）。
+  group('修补底板 bg_fill.png', () {
+    Directory seedLayers(String key) {
+      final dir = Directory('${tmpDir.path}${Platform.pathSeparator}$key')
+        ..createSync(recursive: true);
+      for (var i = 0; i < 3; i++) {
+        File('${dir.path}${Platform.pathSeparator}layer$i.png')
+            .writeAsBytesSync([1]);
+      }
+      return dir;
+    }
+
+    test('getLayerBackground：没有底板返回 null', () async {
+      final c = DepthCoverCache(baseDirOverride: tmpDir.path);
+      seedLayers('np');
+      expect(await c.getLayerBackground('np'), isNull);
+    });
+
+    test('getLayerBackground：有底板返回绝对路径', () async {
+      final c = DepthCoverCache(baseDirOverride: tmpDir.path);
+      final dir = seedLayers('wp');
+      // 缓存内部统一用 Platform.pathSeparator，断言也得按平台拼（Windows 是 \）
+      final plate = '${dir.path}${Platform.pathSeparator}bg_fill.png';
+      File(plate).writeAsBytesSync([9]);
+      expect(await c.getLayerBackground('wp'), plate);
+    });
+
+    test('requireLayerBackground=true 且缺底板 → 未命中（自愈旧的坏/缺缓存）',
+        () async {
+      final c = DepthCoverCache(baseDirOverride: tmpDir.path)
+        ..requireLayerBackground = true;
+      seedLayers('old');
+      expect(await c.getCachedLayers('old'), isNull,
+          reason: '三层齐全但没有底板 → 视为未命中，重新生成才看得到修补');
+    });
+
+    test('requireLayerBackground=true 且底板齐全 → 命中', () async {
+      final c = DepthCoverCache(baseDirOverride: tmpDir.path)
+        ..requireLayerBackground = true;
+      final dir = seedLayers('new');
+      File('${dir.path}${Platform.pathSeparator}bg_fill.png')
+          .writeAsBytesSync([9]);
+      expect(await c.getCachedLayers('new'), isNotNull);
+    });
+
+    test('requireLayerBackground=false（Android 语义）→ 三层即命中', () async {
+      final c = DepthCoverCache(baseDirOverride: tmpDir.path)
+        ..requireLayerBackground = false;
+      seedLayers('android');
+      expect(await c.getCachedLayers('android'), isNotNull,
+          reason: 'Kotlin generate 不产底板，不能因此判未命中');
+    });
+  });
+
   test('cacheSizeBytes 统计全部文件；clearCache 清空但保留根目录', () async {
     final c = DepthCoverCache(baseDirOverride: tmpDir.path);
     final dir = Directory('${tmpDir.path}/kz')..createSync(recursive: true);
