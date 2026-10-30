@@ -23,7 +23,11 @@ import '../../../widgets/depth_cover_host.dart';
 import '../../../widgets/dynamic_cover_view.dart';
 import '../../../widgets/marquee_text.dart';
 import '../../../widgets/player_artwork_image.dart'
-    show isPlayerArtworkReady, preloadPlayerArtwork;
+    show
+        PlayerArtworkImage,
+        isPlayerArtworkReady,
+        preloadPlayerArtwork,
+        prewarmPlayerArtworkTexture;
 import '../../../widgets/player_seek_bar.dart';
 import '../../settings/equalizer_settings_page.dart';
 import '../../sheet/song_sheet_sheet.dart';
@@ -95,6 +99,10 @@ class _YtMainViewState extends State<YtMainView>
   String? _lastSongId;
   int? _lastPagerIndex;
   int _coverFlipDirection = 1;
+  bool _suppressCoverFlip = false;
+  Timer? _neighborPrewarmTimer;
+  double _lastMeasuredCoverSide = 300.0;
+  double _lastDpr = 2.75;
 
   /// 拖动进度条前是否正在播放（修复点击/拖动时间轴导致歌曲暂停的 Bug）
   bool _wasPlayingBeforeDrag = false;
@@ -140,6 +148,7 @@ class _YtMainViewState extends State<YtMainView>
       );
     }
     _syncSongCapabilities(widget.song);
+    _scheduleNeighborPrewarm(delay: const Duration(milliseconds: 360));
   }
 
   @override
@@ -174,6 +183,7 @@ class _YtMainViewState extends State<YtMainView>
 
   @override
   void dispose() {
+    _neighborPrewarmTimer?.cancel();
     _songSwitchDeferTimer?.cancel();
     _disposeVideoController(resumeAudio: false);
     _internalQueueController?.dispose();
@@ -545,22 +555,18 @@ class _YtMainViewState extends State<YtMainView>
       }
       final pager = _coverPagerKey.currentState;
       if (pager != null && pager.hasPendingCommit) {
+        // 手指横滑已将相邻封面推入视口中央：用 rebase 无缝归位，本次切歌不再叠加 3D 翻转
+        _suppressCoverFlip = true;
         pager.rebase(slideDirection);
-      } else if (slideDirection != 0) {
-        pager?.playChange(slideDirection);
       } else {
+        // 按钮切歌 / 自动切歌：保持 pager 静止归零，统一由 CoverFlipCrossfade 执行 3D 翻转动画，
+        // 避免横向滑动与 3D 翻转同时叠加导致掉帧
+        _suppressCoverFlip = false;
         pager?.resetToIdle();
       }
-      final playlist = player.playlist;
-      final idx = player.currentIndex;
-      if (idx > 0) {
-        final prevResolved = YtMoreMenu.resolveMatchedSong(playlist[idx - 1]);
-        preloadPlayerArtwork(prevResolved.artworkUri);
-      }
-      if (idx < playlist.length - 1) {
-        final nextResolved = YtMoreMenu.resolveMatchedSong(playlist[idx + 1]);
-        preloadPlayerArtwork(nextResolved.artworkUri);
-      }
+      // 错峰后移邻居预热：避开当前 300ms 翻转动画窗口，提前将前后曲目的 1080p 封面
+      // 按同键 ResizeImage 档位解码并预上传 GPU 纹理，下次切歌直接 0ms 内存命中
+      _scheduleNeighborPrewarm();
     } else if (_isVideoMode && player.isPlaying) {
       final switchAt = _lastSongSwitchAt;
       final isJustSwitched =
@@ -575,6 +581,34 @@ class _YtMainViewState extends State<YtMainView>
         _exitVideoMode(resumeAudio: false);
       }
     }
+  }
+
+  /// 错峰预热相邻曲目封面（400p 背景图 + 1080p 主封面同键 ResizeImage 解码与 GPU 纹理上传）
+  void _scheduleNeighborPrewarm({
+    Duration delay = const Duration(milliseconds: 520),
+  }) {
+    _neighborPrewarmTimer?.cancel();
+    _neighborPrewarmTimer = Timer(delay, () {
+      if (!mounted) return;
+      final player = _playerProvider;
+      if (player == null || player.playlist.length < 2) return;
+      final side = _lastMeasuredCoverSide > 0 ? _lastMeasuredCoverSide : 300.0;
+      final dpr = _lastDpr > 0 ? _lastDpr : 2.75;
+      for (final delta in const <int>[-1, 1, 2]) {
+        final neighbor = _pagerNeighborSong(player, delta);
+        if (neighbor == null) continue;
+        final base = YtMoreMenu.resolveMatchedSongBase(neighbor);
+        preloadPlayerArtwork(base.artworkUri);
+        final resolved = YtMoreMenu.resolveMatchedSong(neighbor);
+        unawaited(
+          prewarmPlayerArtworkTexture(
+            artworkUri: resolved.artworkUri,
+            settledLogicalWidth: side,
+            devicePixelRatio: dpr,
+          ),
+        );
+      }
+    });
   }
 
   Song? _pagerNeighborSong(PlayerProvider player, int delta) {
@@ -853,8 +887,12 @@ class _YtMainViewState extends State<YtMainView>
           );
 
     final resolvedSong = YtMoreMenu.resolveMatchedSong(song);
-    final safeTop = MediaQuery.paddingOf(context).top;
-    final safeBottom = MediaQuery.paddingOf(context).bottom;
+    final mediaPadding = MediaQuery.paddingOf(context);
+    final safeTop = mediaPadding.top;
+    final safeBottom = mediaPadding.bottom;
+    final safeLeft = mediaPadding.left;
+    final safeRight = mediaPadding.right;
+    _lastDpr = MediaQuery.devicePixelRatioOf(context);
 
     return LayoutBuilder(
       builder: (context, outerConstraints) {
@@ -872,6 +910,8 @@ class _YtMainViewState extends State<YtMainView>
             screenH: screenH,
             safeTop: safeTop,
             safeBottom: safeBottom,
+            safeLeft: safeLeft,
+            safeRight: safeRight,
           );
         }
 
@@ -903,6 +943,7 @@ class _YtMainViewState extends State<YtMainView>
         final double normalCoverTop = safeTop + topBarH + coverTopGap;
 
         if (normalCoverSide > 0) {
+          _lastMeasuredCoverSide = normalCoverSide;
           widget.onCoverRectMeasured?.call(
             Rect.fromLTWH(
               normalCoverLeft,
@@ -1012,7 +1053,7 @@ class _YtMainViewState extends State<YtMainView>
     );
   }
 
-  /// 横屏模式布局：左栏封面/MV + 右栏歌曲信息与控制区
+  /// 横屏模式布局：左栏封面/MV（位置偏上对齐视觉重心）+ 右栏紧凑对齐控制区
   Widget _buildLandscapeLayout({
     required BuildContext context,
     required Song resolvedSong,
@@ -1022,16 +1063,37 @@ class _YtMainViewState extends State<YtMainView>
     required double screenH,
     required double safeTop,
     required double safeBottom,
+    required double safeLeft,
+    required double safeRight,
   }) {
-    final availH = math.max(180.0, screenH - safeTop - safeBottom);
-    final leftW = screenW * 0.45;
-    final coverSide = math.min(leftW - 40.0, availH - 68.0).clamp(120.0, 340.0);
-    final coverLeft = (leftW - coverSide) / 2.0;
-    final coverTop = safeTop + 48.0 + (availH - 48.0 - coverSide) / 2.0;
+    final padLeft = math.max(16.0, safeLeft + 10.0);
+    final padRight = math.max(20.0, safeRight + 14.0);
+    final padTop = math.max(6.0, safeTop);
+    final padBottom = math.max(8.0, safeBottom + 4.0);
+    final availW = math.max(320.0, screenW - padLeft - padRight);
+    final availH = math.max(180.0, screenH - padTop - padBottom);
 
+    // 视频模式下给左栏留更宽比例以舒展 16:9 画面，音频封面模式保持均衡分栏
+    final leftColW = availW * (_isVideoMode ? 0.48 : 0.44);
+    const double topBarH = 44.0;
+    final bodyH = math.max(120.0, availH - topBarH);
+    final coverSide = math
+        .min(leftColW - 20.0, bodyH - 12.0)
+        .clamp(116.0, 320.0);
+
+    // 封面与 MV 统一向上微调，抵消顶部切换栏占高，使视觉重心落在屏幕黄金中轴偏上处
+    const double coverAlignY = -0.16;
+    const double mvAlignY = -0.34;
+    final coverLeft = padLeft + (leftColW - coverSide) / 2.0;
+    final coverTop =
+        padTop + topBarH + (bodyH - coverSide) * ((1.0 + coverAlignY) / 2.0);
+
+    _lastMeasuredCoverSide = coverSide;
     widget.onCoverRectMeasured?.call(
       Rect.fromLTWH(coverLeft, coverTop, coverSide, coverSide),
     );
+
+    final bool isCompactHeight = availH < 330.0;
 
     return Stack(
       fit: StackFit.expand,
@@ -1044,31 +1106,41 @@ class _YtMainViewState extends State<YtMainView>
           ),
         Padding(
           padding: EdgeInsets.only(
-            top: safeTop,
-            bottom: safeBottom,
-            left: 12,
-            right: 16,
+            top: padTop,
+            bottom: padBottom,
+            left: padLeft,
+            right: padRight,
           ),
           child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // 左栏：顶栏切换器 + 封面 / MV
+              // 左栏：顶栏切换器 + 位置偏上的封面 / 16:9 MV 卡片
               SizedBox(
-                width: leftW - 12,
+                width: leftColW,
                 child: Column(
                   children: [
                     SizedBox(
-                      height: 48,
+                      height: topBarH,
                       child: _buildTopBar(context, resolvedSong),
                     ),
                     Expanded(
-                      child: Center(
+                      child: Align(
+                        alignment: Alignment(
+                          0.0,
+                          _isVideoMode ? mvAlignY : coverAlignY,
+                        ),
                         child: _isVideoMode
-                            ? AspectRatio(
-                                aspectRatio: 16 / 9,
-                                child: _buildInlineMvPlayer(
-                                  context,
-                                  resolvedSong,
-                                  12.0,
+                            ? Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6.0,
+                                ),
+                                child: AspectRatio(
+                                  aspectRatio: 16 / 9,
+                                  child: _buildInlineMvPlayer(
+                                    context,
+                                    resolvedSong,
+                                    14.0,
+                                  ),
                                 ),
                               )
                             : _buildCover(
@@ -1082,28 +1154,55 @@ class _YtMainViewState extends State<YtMainView>
                   ],
                 ),
               ),
-              const SizedBox(width: 16),
-              // 右栏：歌名、胶囊栏、进度条、五键控制栏、底部接下来播放把手
+              const SizedBox(width: 20),
+              // 右栏：左对齐歌名/歌手 + 胶囊操作栏 + 进度条 + 紧凑五键控制栏 + 底部胶囊队列入口
               Expanded(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 4),
-                      child: _buildTitleAndArtist(context, resolvedSong),
-                    ),
-                    _buildCapsuleRow(
-                      context,
-                      resolvedSong,
-                      isFavorited,
-                      isOnline,
-                      horizontalPadding: 4,
-                    ),
-                    _buildSeekBar(context, resolvedSong),
-                    _buildTransportControls(context),
-                    _buildBottomQueueHandle(context, resolvedSong, 0),
-                  ],
+                child: Padding(
+                  padding: EdgeInsets.only(
+                    top: isCompactHeight ? 4.0 : 12.0,
+                    bottom: isCompactHeight ? 2.0 : 6.0,
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Spacer(flex: 1),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        child: _buildTitleAndArtist(context, resolvedSong),
+                      ),
+                      const Spacer(flex: 2),
+                      _buildCapsuleRow(
+                        context,
+                        resolvedSong,
+                        isFavorited,
+                        isOnline,
+                        horizontalPadding: 8,
+                      ),
+                      const Spacer(flex: 2),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 2),
+                        child: _buildSeekBar(context, resolvedSong),
+                      ),
+                      const Spacer(flex: 2),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        child: _buildTransportControls(
+                          context,
+                          compact: true,
+                        ),
+                      ),
+                      const Spacer(flex: 3),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        child: _buildBottomQueueHandle(
+                          context,
+                          resolvedSong,
+                          0,
+                          landscapeCard: true,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ],
@@ -1120,6 +1219,7 @@ class _YtMainViewState extends State<YtMainView>
     final vSize = initialized ? ctrl.value.size : Size.zero;
     final vW = vSize.width > 0 ? vSize.width : 160.0;
     final vH = vSize.height > 0 ? vSize.height : 90.0;
+    final baseSong = YtMoreMenu.resolveMatchedSongBase(resolvedSong);
 
     return RepaintBoundary(
       child: ImageFiltered(
@@ -1131,9 +1231,10 @@ class _YtMainViewState extends State<YtMainView>
         child: Stack(
           fit: StackFit.expand,
           children: [
-            DepthCoverHost(
-              artworkUri: resolvedSong.artworkUri,
-              fallbackFilePath: resolvedSong.localPath,
+            PlayerArtworkImage(
+              artworkUri: baseSong.artworkUri,
+              fallbackFilePath: baseSong.localPath,
+              isFill: true,
               fit: BoxFit.cover,
               iconSize: 48,
               backgroundColor: Colors.transparent,
@@ -1301,7 +1402,7 @@ class _YtMainViewState extends State<YtMainView>
     );
   }
 
-  /// 原地内嵌 MV 视频播放器（上下边缘拓宽 ShaderMask 羽化消除横线，画面 100% 纯净无浮动按钮遮挡）
+  /// 原地内嵌 MV 视频播放器（竖屏无界模式用上下 ShaderMask 羽化消除横线，横屏卡片模式保留完整圆角与轻边框）
   Widget _buildInlineMvPlayer(
     BuildContext context,
     Song resolvedSong,
@@ -1312,8 +1413,9 @@ class _YtMainViewState extends State<YtMainView>
     final aspect = initialized && ctrl.value.aspectRatio > 0
         ? ctrl.value.aspectRatio
         : 16 / 9;
+    final bool isCardMode = borderRadius > 0.5;
 
-    return ClipRRect(
+    Widget content = ClipRRect(
       borderRadius: BorderRadius.circular(borderRadius),
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
@@ -1321,27 +1423,32 @@ class _YtMainViewState extends State<YtMainView>
         child: Stack(
           fit: StackFit.expand,
           children: [
-            // 中央 16:9 完整主视频画面：上下边缘使用宽幅 ShaderMask Alpha 羽化过渡，彻底消除两条硬横线
+            if (isCardMode) const ColoredBox(color: Color(0x66000000)),
             if (initialized)
               Center(
-                child: ShaderMask(
-                  shaderCallback: (rect) => const LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    stops: [0.0, 0.11, 0.89, 1.0],
-                    colors: [
-                      Colors.transparent,
-                      Colors.black,
-                      Colors.black,
-                      Colors.transparent,
-                    ],
-                  ).createShader(rect),
-                  blendMode: BlendMode.dstIn,
-                  child: AspectRatio(
-                    aspectRatio: aspect,
-                    child: VideoPlayer(ctrl),
-                  ),
-                ),
+                child: isCardMode
+                    ? AspectRatio(
+                        aspectRatio: aspect,
+                        child: VideoPlayer(ctrl),
+                      )
+                    : ShaderMask(
+                        shaderCallback: (rect) => const LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          stops: [0.0, 0.11, 0.89, 1.0],
+                          colors: [
+                            Colors.transparent,
+                            Colors.black,
+                            Colors.black,
+                            Colors.transparent,
+                          ],
+                        ).createShader(rect),
+                        blendMode: BlendMode.dstIn,
+                        child: AspectRatio(
+                          aspectRatio: aspect,
+                          child: VideoPlayer(ctrl),
+                        ),
+                      ),
               ),
             if (_videoLoading)
               const Center(
@@ -1386,14 +1493,35 @@ class _YtMainViewState extends State<YtMainView>
         ),
       ),
     );
+
+    if (!isCardMode) return content;
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(borderRadius),
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.12),
+          width: 0.8,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.42),
+            blurRadius: 20,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: content,
+    );
   }
 
   Widget _buildPagerPage(Song? neighborSong) {
     if (neighborSong == null) return const SizedBox.shrink();
     final resolved = YtMoreMenu.resolveMatchedSong(neighborSong);
-    return DepthCoverHost(
+    return PlayerArtworkImage(
       artworkUri: resolved.artworkUri,
       fallbackFilePath: resolved.localPath,
+      isFill: true,
       fit: BoxFit.cover,
       iconSize: 48,
       backgroundColor: Colors.white12,
@@ -1414,6 +1542,7 @@ class _YtMainViewState extends State<YtMainView>
       version: resolvedSong.artworkUri,
       fallbackFilePath: resolvedSong.localPath,
       iconSize: 48,
+      enabled: !_suppressCoverFlip,
       radius: borderRadius,
       direction: _coverFlipDirection,
       readinessProbe: (uri, width, dpr) => isPlayerArtworkReady(
@@ -2005,7 +2134,14 @@ class _YtMainViewState extends State<YtMainView>
     );
   }
 
-  Widget _buildTransportControls(BuildContext context) {
+  Widget _buildTransportControls(BuildContext context, {bool compact = false}) {
+    final double circleSize = compact ? 62 : 78;
+    final double playIconSize = compact ? 32 : 38;
+    final double skipIconSize = compact ? 38 : 44;
+    final double skipBoxSize = compact ? 44 : 48;
+    final double modeIconSize = compact ? 26 : 30;
+    final double modeBoxSize = compact ? 38 : 42;
+
     return Selector<
       PlayerProvider,
       ({bool isPlaying, bool shuffleEnabled, AppLoopMode loopMode})
@@ -2027,8 +2163,8 @@ class _YtMainViewState extends State<YtMainView>
 
         Widget playPauseCircle(bool isPlayingNow) {
           return Container(
-            width: 78,
-            height: 78,
+            width: circleSize,
+            height: circleSize,
             decoration: const BoxDecoration(
               color: Colors.white,
               shape: BoxShape.circle,
@@ -2036,7 +2172,7 @@ class _YtMainViewState extends State<YtMainView>
             alignment: Alignment.center,
             child: PlayPauseMorphIcon(
               isPlaying: isPlayingNow,
-              size: 38,
+              size: playIconSize,
               color: Colors.black,
             ),
           );
@@ -2048,14 +2184,17 @@ class _YtMainViewState extends State<YtMainView>
           children: [
             IconButton(
               padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 42, minHeight: 42),
+              constraints: BoxConstraints(
+                minWidth: modeBoxSize,
+                minHeight: modeBoxSize,
+              ),
               tooltip: state.shuffleEnabled ? '随机播放：已开启' : '随机播放：已关闭',
               icon: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Icon(
                     Icons.shuffle_rounded,
-                    size: 30,
+                    size: modeIconSize,
                     color: state.shuffleEnabled ? Colors.white : Colors.white60,
                   ),
                   const SizedBox(height: 2),
@@ -2090,10 +2229,13 @@ class _YtMainViewState extends State<YtMainView>
             ),
             IconButton(
               padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
-              icon: const Icon(
+              constraints: BoxConstraints(
+                minWidth: skipBoxSize,
+                minHeight: skipBoxSize,
+              ),
+              icon: Icon(
                 Icons.skip_previous_rounded,
-                size: 44,
+                size: skipIconSize,
                 color: Colors.white,
               ),
               onPressed: () {
@@ -2138,10 +2280,13 @@ class _YtMainViewState extends State<YtMainView>
             ),
             IconButton(
               padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
-              icon: const Icon(
+              constraints: BoxConstraints(
+                minWidth: skipBoxSize,
+                minHeight: skipBoxSize,
+              ),
+              icon: Icon(
                 Icons.skip_next_rounded,
-                size: 44,
+                size: skipIconSize,
                 color: Colors.white,
               ),
               onPressed: () {
@@ -2154,7 +2299,10 @@ class _YtMainViewState extends State<YtMainView>
             ),
             IconButton(
               padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 42, minHeight: 42),
+              constraints: BoxConstraints(
+                minWidth: modeBoxSize,
+                minHeight: modeBoxSize,
+              ),
               tooltip: switch (loopMode) {
                 AppLoopMode.off => '循环关闭',
                 AppLoopMode.all => '列表循环',
@@ -2165,7 +2313,7 @@ class _YtMainViewState extends State<YtMainView>
                 children: [
                   Icon(
                     loopIcon,
-                    size: 30,
+                    size: modeIconSize,
                     color: loopMode != AppLoopMode.off
                         ? Colors.white
                         : Colors.white60,
@@ -2208,11 +2356,61 @@ class _YtMainViewState extends State<YtMainView>
   Widget _buildBottomQueueHandle(
     BuildContext context,
     Song currentSong,
-    double safeBottom,
-  ) {
+    double safeBottom, {
+    bool landscapeCard = false,
+  }) {
     return Selector<PlayerProvider, String>(
       selector: (_, p) => (_pagerNeighborSong(p, 1) ?? currentSong).displayName,
       builder: (context, nextTitle, _) {
+        if (landscapeCard) {
+          return GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _openQueue,
+            onVerticalDragUpdate: _onQueueDragUpdate,
+            onVerticalDragEnd: _onQueueDragEnd,
+            child: Container(
+              height: 40,
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.10),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.08),
+                  width: 0.6,
+                ),
+              ),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.queue_music_rounded,
+                    size: 18,
+                    color: Colors.white70,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '接下来播放 · $nextTitle',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  const Icon(
+                    Icons.keyboard_arrow_up_rounded,
+                    size: 20,
+                    color: Colors.white54,
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+
         return GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: _openQueue,

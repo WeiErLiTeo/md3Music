@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:dynamic_color/dynamic_color.dart';
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:material_ui/material_ui.dart';
 import 'package:material_color_utilities/material_color_utilities.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -66,7 +67,8 @@ class ThemeProvider extends ChangeNotifier {
   late final Future<void> windowsSettingsReady;
   Color? _manualSeedColor;
   bool _useOledBlack = false;
-  double _displayScale = kDefaultDisplayScale;
+  double _displayScale =
+      defaultDisplayScaleForPlatform(defaultTargetPlatform);
   // 底部导航栏文字显示行为（默认始终不显示）
   NavigationDestinationLabelBehavior _navLabelBehavior =
       NavigationDestinationLabelBehavior.alwaysHide;
@@ -106,7 +108,7 @@ class ThemeProvider extends ChangeNotifier {
   Color? get systemSeedColor => _systemSeedColor;
   bool get useCoverSeedColor => _useCoverSeedColor;
   Color? get coverSeedColor => _coverSeedColor;
-  bool get useAmStylePlayer => _playerStyle == PlayerStyle.appleMusic;
+  bool get useAmStylePlayer => _playerStyle != PlayerStyle.md3;
   bool get useYtStylePlayer => _playerStyle == PlayerStyle.ytMusic;
   PlayerStyle get playerStyle => _playerStyle;
   Color? get manualSeedColor => _manualSeedColor;
@@ -532,13 +534,14 @@ class ThemeProvider extends ChangeNotifier {
     await SettingsRepository().setEmphasizedTypographyEnabled(enabled);
   }
 
-  /// 加载「显示大小」档位，默认 [kDefaultDisplayScale]（设备真实 dp）。
+  /// 加载「显示大小」档位；各平台默认 1.00x，保留用户手动保存的档位。
   ///
   /// 顺带清掉旧键 `ui_scale`：那是已删除的逐元素缩放实现留下的，值域 0.5~5.0，
-  /// 沿用会让存了 3.0 的用户拿到 131dp 宽的视口。不做值迁移，一律从 1.00 起。
+  /// 沿用会让存了 3.0 的用户拿到 131dp 宽的视口。不迁移旧值，使用平台默认档位。
   Future<void> _loadDisplayScale() async {
     final prefs = await SharedPreferences.getInstance();
-    _displayScale = (prefs.getDouble(_displayScaleKey) ?? kDefaultDisplayScale)
+    _displayScale = (prefs.getDouble(_displayScaleKey) ??
+            defaultDisplayScaleForPlatform(defaultTargetPlatform))
         .clamp(kMinDisplayScale, kMaxDisplayScale);
     notifyListeners();
     await prefs.remove(_legacyUiScaleKey);

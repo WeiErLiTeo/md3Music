@@ -12,12 +12,14 @@ import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
-
+import '../update/update_web_links.dart';
 import '../../core/services/usb_audio_service.dart';
+import '../../core/services/windows_app_lifecycle.dart';
 
 import '../../core/build_flags.dart';
 import '../../core/platform_capabilities.dart';
 import '../../core/layout/page_title_alignment.dart';
+import '../../core/layout/page_layout.dart';
 import '../../core/layout/ui_density.dart';
 import '../../core/remote/remote_slider.dart';
 import '../../core/services/audio_service_io.dart';
@@ -93,6 +95,8 @@ import '../../core/layout/adaptive_navigator.dart' show DetailEmptyState;
 import 'home_tab_manager.dart';
 import 'mcp_agent_section.dart';
 import 'settings_search_index.g.dart';
+import '../update/windows_update_dialog.dart';
+import '../update/windows_update_service.dart';
 
 /// CI compile-time version injection via --dart-define=APP_VERSION=X
 /// Fallback display when runtime PackageInfo read fails.
@@ -175,6 +179,7 @@ class _SettingsPageState extends State<SettingsPage>
   bool _isRestarting = false;
   // 诊断日志导出进行中（关于区块显示加载态，防重复点击）
   bool _isExportingLogs = false;
+  bool _isCheckingWindowsUpdate = false;
   bool _isResettingSettings = false;
   bool _useDynamicColor = false;
   // 封面动态取色开关（与系统主题色独立、可叠加；开启时封面优先）
@@ -190,6 +195,8 @@ class _SettingsPageState extends State<SettingsPage>
   bool _useDuetLayout = false;
   bool _lyricEcoMode = false;
   bool _lyricDynamicColor = false;
+  // 当前行以上的行是否跟随已播颜色（独立开关，默认关闭）
+  bool _lyricAboveLinesPlayedColor = false;
   // 平衡行换行：AM / MD 各一套独立偏好（key 不同，互不影响）
   bool _lyricLineBalanceAm = false;
   bool _lyricLineBalanceMd3 = false;
@@ -253,6 +260,7 @@ class _SettingsPageState extends State<SettingsPage>
   bool _mvAudioFallbackEnabled = false;
   // 记忆播放状态开关（默认开启）：冷启动恢复上次播放的歌曲与进度
   bool _restoreMemoryEnabled = true;
+  int _idleKeepaliveStopMinutes = 10;
   // 启动时自动播放（默认关闭）。后两项仅在它打开时才有意义，故一并收在这里。
   // 音源下拉直接用 StartupAutoPlaySource.values，保证与启动流程的解析口径
   // 只有一份来源；持久化走它的 value 字符串。
@@ -340,8 +348,7 @@ class _SettingsPageState extends State<SettingsPage>
   /// MV 弹幕开关（设置页与播放页浮层按钮共用同一个持久化 key）。
   bool _mvDanmakuEnabled = false;
 
-  /// 歌曲弹幕开关（播放页弹幕层总开关，默认关闭）。
-  bool _songDanmakuEnabled = false;
+  // v46：歌曲弹幕开关改读静态镜像（ValueListenableBuilder），本地字段退场。
 
   /// AM 横屏播放页右栏左右边缘渐隐遮罩开关（默认开启）。
   bool _amLandscapeEdgeFade = true;
@@ -463,9 +470,8 @@ class _SettingsPageState extends State<SettingsPage>
     }
     // 桌面歌词状态变化（设置页开关 / 播放器长按 / 通知栏按钮）→ 刷新 UI
     DesktopLyricService.instance.addListener(_onDesktopLyricChanged);
-    if (Platform.isWindows) {
-      kWindowsTwoPaneEnabled.addListener(_onWindowsLayoutChanged);
-    }
+    // 双栏开关三端通用；设置页双列形态跟随开关重建。
+    kWindowsTwoPaneEnabled.addListener(_onWindowsLayoutChanged);
   }
 
   @override
@@ -500,9 +506,7 @@ class _SettingsPageState extends State<SettingsPage>
       LyriconProviderService.instance.removeListener(_onLyriconStateChanged);
     }
     DesktopLyricService.instance.removeListener(_onDesktopLyricChanged);
-    if (Platform.isWindows) {
-      kWindowsTwoPaneEnabled.removeListener(_onWindowsLayoutChanged);
-    }
+    kWindowsTwoPaneEnabled.removeListener(_onWindowsLayoutChanged);
     if (_holdsCarModePanelSuppression) {
       releaseCarModePanel();
       _holdsCarModePanelSuppression = false;
@@ -864,7 +868,8 @@ class _SettingsPageState extends State<SettingsPage>
         .getLandscapeImmersiveEnabled();
     final landscapeDetachedControls = await _settingsRepository
         .getLandscapeDetachedControls();
-    final symmetricWidePane = await _settingsRepository.getSymmetricWidePane();
+    final symmetricWidePane = await _settingsRepository
+        .getSymmetricWidePane();
     final widePaneMargin = await _settingsRepository.getWidePaneMargin();
     final widePaneIgnoreCutout = await _settingsRepository
         .getWidePaneIgnoreCutout();
@@ -877,6 +882,8 @@ class _SettingsPageState extends State<SettingsPage>
         .getMvAudioFallbackEnabled();
     final restoreMemoryEnabled = await _settingsRepository
         .getRestoreMemoryEnabled();
+    final idleKeepaliveStopMinutes = await _settingsRepository
+        .getIdleKeepaliveStopMinutes();
     final startupAutoPlayEnabled = await _settingsRepository
         .getStartupAutoPlayEnabled();
     final startupAutoPlaySource = await _settingsRepository
@@ -889,8 +896,7 @@ class _SettingsPageState extends State<SettingsPage>
         .getAutoMatchOnlineInfo();
     final mvDanmakuEnabled = await _settingsRepository.getMvDanmakuEnabled();
     final mvDanmakuOpacity = await _settingsRepository.getMvDanmakuOpacity();
-    final songDanmakuEnabled = await _settingsRepository
-        .getSongDanmakuEnabled();
+    await _settingsRepository.getSongDanmakuEnabled();
     final amLandscapeEdgeFade = await _settingsRepository
         .getAmLandscapeEdgeFade();
     final updateReminderEnabled = await _settingsRepository
@@ -972,6 +978,8 @@ class _SettingsPageState extends State<SettingsPage>
       _useDuetLayout = LyricPreferences.instance.useDuetLayout;
       _lyricEcoMode = LyricPreferences.instance.ecoMode;
       _lyricDynamicColor = LyricPreferences.instance.useDynamicLyricColor;
+      _lyricAboveLinesPlayedColor =
+          LyricPreferences.instance.useAboveLinesPlayedColor;
       _lyricLineBalanceAm = LyricPreferences.instance.lineBalance;
       _lyricLineBalanceMd3 = Md3LyricPreferences.instance.lineBalance;
       _hideLyricCredits = LyricPreferences.instance.hideLyricCredits;
@@ -1015,6 +1023,7 @@ class _SettingsPageState extends State<SettingsPage>
       _showQualityDowngradeToast = showQualityDowngradeToast;
       _mvAudioFallbackEnabled = mvAudioFallbackEnabled;
       _restoreMemoryEnabled = restoreMemoryEnabled;
+      _idleKeepaliveStopMinutes = idleKeepaliveStopMinutes;
       _startupAutoPlayEnabled = startupAutoPlayEnabled;
       _startupAutoPlaySource = startupAutoPlaySource;
       _startupAutoPlayOpenPage = startupAutoPlayOpenPage;
@@ -1022,8 +1031,11 @@ class _SettingsPageState extends State<SettingsPage>
       _autoMatchOnlineInfo = autoMatchOnlineInfo;
       _mvDanmakuEnabled = mvDanmakuEnabled;
       _mvDanmakuOpacity = mvDanmakuOpacity;
-      _songDanmakuEnabled = songDanmakuEnabled;
       _amLandscapeEdgeFade = amLandscapeEdgeFade;
+      // v46：歌曲弹幕开关已改 ValueListenableBuilder（读静态镜像），
+      // getSongDanmakuEnabled() 的调用保留在上方——它负责启动时把盘上的值
+      // 回填进静态镜像（song_danmaku_host 读镜像而非盘）。
+      // 本地歌曲弹幕开关字段随之退场。
       // 启动时把音量均衡设置同步给播放器（当前曲目若已加载会自动重算）
       AudioService().setVolumeNormalization(
         enabled: volumeNormalizationEnabled,
@@ -1098,14 +1110,10 @@ class _SettingsPageState extends State<SettingsPage>
       if (mounted) setState(() => _legacyAppIconEnabled = value);
     } on PlatformException catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-        SnackBar(content: Text('切换应用图标失败：${error.message ?? error.code}')),
-      );
+      showToast('切换应用图标失败：${error.message ?? error.code}');
     } on MissingPluginException {
       if (!mounted) return;
-      ScaffoldMessenger.maybeOf(
-        context,
-      )?.showSnackBar(const SnackBar(content: Text('当前 Android 构建不支持切换应用图标')));
+      showToast('当前 Android 构建不支持切换应用图标');
     }
   }
 
@@ -1193,9 +1201,7 @@ class _SettingsPageState extends State<SettingsPage>
         // 页面切换过渡：先淡出旧层 → 切换内容 → 再淡入新层（严格串行）。
         // 淡入方向按层级方向区分：下钻自右侧推进、返回自左侧退回。
         //
-        // 大屏「重组而非拉伸」：设置项是单栏内容，宽屏下约束到
-        // [AppLayout.maxContentWidth] 并居中，多余宽度留白，避免整行 ListTile
-        // 被无脑拉长（手机 <840dp 不触发，等同全宽，无回归）。
+        // 大屏由 ContentWidth 按局部面板宽度自适应留白；手机（含横屏）沿用原限宽。
         body: Platform.isWindows && _windowsSettingsLoading
             ? const Center(child: CircularProgressIndicator())
             : Platform.isWindows && _windowsSettingsReadFailed
@@ -1214,7 +1220,7 @@ class _SettingsPageState extends State<SettingsPage>
 
   /// 是否使用 Pad 双列布局（build 内求值一次，两个 body 方法共用）。
   bool get _useTwoPane =>
-      (!Platform.isWindows || kWindowsTwoPaneEnabled.value) &&
+      kWindowsTwoPaneEnabled.value &&
       settingsUseTwoPaneLayout(
         padLayout: isPadLayout(context),
         width: MediaQuery.sizeOf(context).width,
@@ -1244,8 +1250,7 @@ class _SettingsPageState extends State<SettingsPage>
     SettingsCategory? category,
   ) {
     return Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: AppLayout.maxContentWidth),
+      child: ContentWidth(
         child: _transitioned(
           level == SettingsLevel.overview
               ? ListView(
@@ -1739,21 +1744,14 @@ class _SettingsPageState extends State<SettingsPage>
     ColorScheme colorScheme, {
     required bool first,
   }) {
-    final playerStyle = context.select<ThemeProvider, PlayerStyle>(
-      (p) => p.playerStyle,
-    );
-    final isDisabledInYt =
-        playerStyle == PlayerStyle.ytMusic &&
-        (subpage.title == '顶栏与横屏布局' || subpage.title == '音乐频谱');
     return Padding(
       padding: EdgeInsets.only(top: first ? AppSpacing.sm : 0),
       child: _buildNavEntryTile(
         icon: subpage.icon,
         title: subpage.title,
-        subtitle: isDisabledInYt ? 'YouTube 样式下暂不支持' : subpage.description,
+        subtitle: subpage.description,
         colorScheme: colorScheme,
-        enabled: !isDisabledInYt,
-        onTap: isDisabledInYt ? null : () => _openSubpage(subpage.title),
+        onTap: () => _openSubpage(subpage.title),
       ),
     );
   }
@@ -1765,36 +1763,32 @@ class _SettingsPageState extends State<SettingsPage>
     required String title,
     required String? subtitle,
     required ColorScheme colorScheme,
-    required VoidCallback? onTap,
-    bool enabled = true,
+    required VoidCallback onTap,
   }) {
-    final disabledColor = colorScheme.onSurface.withValues(alpha: 0.38);
     return ListTile(
-      enabled: enabled,
       contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
       minVerticalPadding: AppSpacing.md,
-      leading: Icon(icon, color: enabled ? colorScheme.primary : disabledColor),
+      leading: Icon(icon, color: colorScheme.primary),
       title: Text(
         title,
-        style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-          fontWeight: FontWeight.w600,
-          color: enabled ? null : disabledColor,
-        ),
+        style: Theme.of(
+          context,
+        ).textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w600),
       ),
       subtitle: subtitle == null
           ? null
           : Text(
               subtitle,
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: enabled ? colorScheme.onSurfaceVariant : disabledColor,
+                color: colorScheme.onSurfaceVariant,
               ),
             ),
       trailing: Icon(
         Icons.chevron_right,
         size: 20,
-        color: enabled ? colorScheme.onSurfaceVariant : disabledColor,
+        color: colorScheme.onSurfaceVariant,
       ),
-      onTap: enabled ? onTap : null,
+      onTap: onTap,
     );
   }
 
@@ -1938,8 +1932,9 @@ class _SettingsPageState extends State<SettingsPage>
           child: Center(
             child: Text(
               '未找到「${_searchQuery.trim()}」相关设置',
-              style: Theme.of(context).textTheme.bodyMedium
-                  ?.copyWith(color: colorScheme.onSurfaceVariant),
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
             ),
           ),
         ),
@@ -2200,8 +2195,9 @@ class _SettingsPageState extends State<SettingsPage>
               alignment: Alignment.centerLeft,
               child: Text(
                 _getLyriconStateText(),
-                style: Theme.of(context).textTheme.bodySmall
-                    ?.copyWith(color: colorScheme.onSurfaceVariant),
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                ),
               ),
             ),
           ),
@@ -2679,8 +2675,9 @@ class _SettingsPageState extends State<SettingsPage>
               children: [
                 Text(
                   '底部面板与屏幕下缘留出的空隙，用于避开车联 dock 栏；0 为不避让',
-                  style: Theme.of(context).textTheme.bodySmall
-                      ?.copyWith(color: colorScheme.onSurfaceVariant),
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: colorScheme.onSurfaceVariant,
+                  ),
                 ),
                 const SizedBox(height: 4),
                 Row(
@@ -2774,8 +2771,9 @@ class _SettingsPageState extends State<SettingsPage>
             ),
             child: Text(
               '开启车机模式或检测到车机屏幕后生效',
-              style: Theme.of(context).textTheme.bodySmall
-                  ?.copyWith(color: colorScheme.onSurfaceVariant),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
             ),
           )
         else
@@ -3011,7 +3009,7 @@ class _SettingsPageState extends State<SettingsPage>
             NavigationDestinationLabelBehavior.alwaysHide,
           ].indexOf(context.watch<ThemeProvider>().navLabelBehavior),
           hideNavBarOnSecondary: kHideNavBarOnSecondaryPages.value,
-          showWindowsTwoPanePreview: Platform.isWindows,
+          showWindowsTwoPanePreview: true,
         ),
         const Gap(AppSpacing.sm),
         _buildGroupLabel('底部导航栏', colorScheme, first: true),
@@ -3084,26 +3082,30 @@ class _SettingsPageState extends State<SettingsPage>
             },
           ),
         ),
-        // ⑥ 悬浮播放器：形态总开关 + 两项从属设置，就地成组
-        if (Platform.isWindows)
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // search: 双栏 单栏 分栏 左右各半 50% 布局
-              ValueListenableBuilder<bool>(
-                valueListenable: kWindowsTwoPaneEnabled,
-                builder: (context, enabled, _) => SwitchListTile(
-                  title: const Text('启用双栏布局'),
-                  subtitle: const Text('宽窗口下左右各占 50%；关闭后使用单栏内容'),
-                  value: enabled,
-                  onChanged: (value) async {
+        // ⑥ 双栏布局：三端通用开关（安卓端常驻显示，TV 亦显示）
+        // search: 双栏 单栏 分栏 左右各半 50% 布局
+        // TV 构建置灰恒开：main.dart 播种强制 true，notifier 读数恒为开；
+        // 不写持久化也不写 notifier（同悬浮迷你播放器的 TV 门控模式），
+        // 切回手机版不丢用户设置。TV 宽屏（≥812dp）焦点体系以双栏为前提
+        // （单栏 DesktopTwoPane 下焦点无法进入列表），不允许关闭；更窄的
+        // 视口由壳层自动绕过双栏走中央栈整屏详情（焦点可用），见
+        // ResponsiveShell._buildTab。
+        ValueListenableBuilder<bool>(
+          valueListenable: kWindowsTwoPaneEnabled,
+          builder: (context, enabled, _) => SwitchListTile(
+            title: const Text('启用双栏布局'),
+            subtitle: kTvBuild
+                ? const Text('宽窗口下左右各占 50%；TV 宽屏恒为双栏，不可关闭')
+                : const Text('宽窗口下左右各占 50%；关闭后使用单栏内容'),
+            value: enabled,
+            onChanged: kTvBuild
+                ? null
+                : (value) async {
                     await _settingsRepository.setWindowsTwoPaneEnabled(value);
                     kWindowsTwoPaneEnabled.value = value;
                   },
-                ),
-              ),
-            ],
           ),
+        ),
         _buildGroupLabel('悬浮播放器', colorScheme),
         // search: 悬浮播放器 悬浮迷你播放器 迷你播放器 二级页面 播放栏 圆盘 浮动 关闭 secondary mini player
         // 总开关 value 直读全局判定源 kSecondaryPlayerEnabled（唯一真值，取代旧的
@@ -3586,6 +3588,21 @@ class _SettingsPageState extends State<SettingsPage>
           ),
           child: _buildStyleCards(colorScheme),
         ),
+        // tv: 两张风格卡是 GestureDetector 手写卡片，不自带焦点停点，遥控器
+        // 落不上去（真机反馈「这里遥控器点不到」）。TV 构建在卡片下方补一个
+        // 普通开关作为唯一可达入口：关 = MD3Music、开 = Apple Music。
+        // 只在 TV 包编译（kTvBuild 为 const，其它构建零改动）。
+        if (kTvBuild)
+          SwitchListTile(
+            title: const Text('Apple Music 播放页'),
+            subtitle: const Text('关闭使用 MD3Music 播放页，开启使用 Apple Music 播放页'),
+            value: _useAmStylePlayer,
+            onChanged: (v) {
+              AppHaptics.lightImpact(HapticCategory.control);
+              setState(() => _useAmStylePlayer = v);
+              context.read<ThemeProvider>().setUseAmStylePlayer(v);
+            },
+          ),
       ],
     );
   }
@@ -3601,6 +3618,8 @@ class _SettingsPageState extends State<SettingsPage>
         // 必须挂在非 tile 节点上：生成器遇到 search-item 注释所在的 tile 会
         // 走手写分支、跳过该 tile 的标题自动收集（丢「歌词动画」自身条目）。
         // search-item: 歌词模糊强度 | 歌词 模糊 强度 程度 高斯模糊
+        // search-item: 动态颜色混色比例 | 动态颜色 混色 比例 取色 封面 高亮 已播
+        // search-item: 辉光强度 | 辉光 发光 强度 亮度
         // search-item: 辉光触发阈值 | 辉光 发光 阈值 灵敏度
         // search-item: 辉光判定方式 | 辉光 判定 触发方式 固定时长 自适应 灵敏度
         // search-item: 辉光固定时长 | 辉光 固定 阈值 时长 毫秒
@@ -3682,9 +3701,7 @@ class _SettingsPageState extends State<SettingsPage>
         // search: 边距 宽屏 内衬 横屏 播放页 无边距
         SwitchListTile(
           title: const Text('自定义宽屏边距'),
-          subtitle: const Text(
-            '关闭时按屏宽自动适配；开启后用固定边距，0 为最小边距（挖孔机型仍保留挖孔避让），此时可再设置忽略挖孔避让',
-          ),
+          subtitle: const Text('关闭时按屏宽自动适配；开启后用固定边距，0 为最小边距（挖孔机型仍保留挖孔避让），此时可再设置忽略挖孔避让'),
           value: _customWidePaneMargin,
           onChanged: (value) {
             AppHaptics.lightImpact(HapticCategory.control);
@@ -3721,14 +3738,16 @@ class _SettingsPageState extends State<SettingsPage>
               children: [
                 Text(
                   '宽屏左栏与屏幕边缘的固定距离，支持 0.5dp 这类半 dp 微调；0 为最小边距（挖孔机型会在此外再让出挖孔宽度）',
-                  style: Theme.of(context).textTheme.bodySmall
-                      ?.copyWith(color: colorScheme.onSurfaceVariant),
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: colorScheme.onSurfaceVariant,
+                  ),
                 ),
                 // 生效口径回显：滑条只在开关开启时出现，故此处恒为「固定」口径
                 Text(
                   '当前生效：固定 ${_formatWidePaneMargin(_widePaneMargin)}',
-                  style: Theme.of(context).textTheme.bodySmall
-                      ?.copyWith(color: colorScheme.onSurfaceVariant),
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: colorScheme.onSurfaceVariant,
+                  ),
                 ),
                 const SizedBox(height: 4),
                 Row(
@@ -3750,7 +3769,8 @@ class _SettingsPageState extends State<SettingsPage>
                                   ? '最小'
                                   : _formatWidePaneMargin(_widePaneMargin),
                               onChanged: _onWidePaneMarginDrag,
-                              onChangeEnd: (value) => _persistWidePaneMargin(),
+                              onChangeEnd: (value) =>
+                                  _persistWidePaneMargin(),
                             )
                           : M3ESlider(
                               decoration: const M3ESliderDecoration(
@@ -3790,10 +3810,9 @@ class _SettingsPageState extends State<SettingsPage>
                               controller: _widePaneMarginController,
                               autofocus: true,
                               // 数字键盘 + 小数点，匹配 0–48、最多 1 位小数的口径
-                              keyboardType:
-                                  const TextInputType.numberWithOptions(
-                                    decimal: true,
-                                  ),
+                              keyboardType: const TextInputType.numberWithOptions(
+                                decimal: true,
+                              ),
                               inputFormatters: [
                                 // 只放行数字与至多一位小数（两位整数已覆盖 0–48）
                                 FilteringTextInputFormatter.allow(
@@ -3831,13 +3850,11 @@ class _SettingsPageState extends State<SettingsPage>
                                   child: Text(
                                     _widePaneMargin <= 0
                                         ? '最小'
-                                        : _formatWidePaneMargin(
-                                            _widePaneMargin,
-                                          ),
+                                        : _formatWidePaneMargin(_widePaneMargin),
                                     textAlign: TextAlign.end,
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .bodyMedium,
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.bodyMedium,
                                   ),
                                 ),
                               ),
@@ -3857,7 +3874,9 @@ class _SettingsPageState extends State<SettingsPage>
         if (_customWidePaneMargin)
           SwitchListTile(
             title: const Text('忽略挖孔避让'),
-            subtitle: const Text('宽屏内容真贴边，歌词、返回键等可能被挖孔/刘海或状态栏遮挡；关闭即恢复避让'),
+            subtitle: const Text(
+              '宽屏内容真贴边，歌词、返回键等可能被挖孔/刘海或状态栏遮挡；关闭即恢复避让',
+            ),
             value: _widePaneIgnoreCutout,
             onChanged: (value) {
               AppHaptics.lightImpact(HapticCategory.control);
@@ -4092,16 +4111,8 @@ class _SettingsPageState extends State<SettingsPage>
     );
   }
 
-  /// 「歌词效果」三级子页：AM / YT 歌词的对唱 / 取色 / 模糊 / 辉光 / 省电模式。
+  /// 「歌词效果」三级子页：AM 歌词的对唱 / 取色 / 模糊 / 辉光 / 省电模式。
   Widget _buildLyricEffectSubpage(ColorScheme colorScheme) {
-    final playerStyle = context.watch<ThemeProvider>().playerStyle;
-    final isYtStyle = playerStyle == PlayerStyle.ytMusic;
-    final isAmStyle = playerStyle == PlayerStyle.appleMusic;
-    final supportsAdvancedLyrics = isAmStyle || isYtStyle;
-    final styleSubtitle = isYtStyle
-        ? '当前：YouTube Music 风格'
-        : (isAmStyle ? '当前：Apple Music 风格' : '当前：Material 风格');
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -4110,16 +4121,13 @@ class _SettingsPageState extends State<SettingsPage>
         // 「辉光」「模糊」「平衡换行」具体指什么。控件在下方实时驱动上方画面。
         // 真值源与播放页同一份（LyricPreferences / Md3LyricPreferences），
         // 不另存状态，故不会出现「演示一套、播放页另一套」。
-        LyricEffectPreview(
-          isAmStyle: supportsAdvancedLyrics,
-          styleSubtitle: styleSubtitle,
-        ),
+        LyricEffectPreview(isAmStyle: _useAmStylePlayer),
         const Gap(AppSpacing.sm),
         // search: 对唱 男女
         SwitchListTile(
           title: const Text('男女对唱歌词优化'),
           value: _useDuetLayout,
-          onChanged: supportsAdvancedLyrics
+          onChanged: _useAmStylePlayer
               ? (v) {
                   AppHaptics.lightImpact(HapticCategory.control);
                   setState(() => _useDuetLayout = v);
@@ -4127,16 +4135,36 @@ class _SettingsPageState extends State<SettingsPage>
                 }
               : null,
         ),
-        // 歌词动态字体颜色：当前行按「85% 白 + 15% 封面提取色」混色（仅 AM 播放器）
+        // 歌词动态字体颜色：当前行按「(1-比例) 白 + 比例 封面提取色」混色
+        // （仅 AM 播放器；比例在「歌词动画」页调节）
         // search: 动态颜色 混色
         SwitchListTile(
           title: const Text('歌词动态颜色'),
           value: _lyricDynamicColor,
-          onChanged: supportsAdvancedLyrics
+          onChanged: _useAmStylePlayer
               ? (v) {
                   AppHaptics.lightImpact(HapticCategory.control);
                   setState(() => _lyricDynamicColor = v);
                   LyricPreferences.instance.setUseDynamicLyricColor(v);
+                }
+              : null,
+        ),
+        // 上方已播行跟随已播颜色：当前行以上的行（清晰层 + 模糊层）改用
+        // 当前行已播字的高亮色。独立开关，颜色来源仍是「歌词动态颜色」
+        // 或自定义歌词文字色；两者都没启用时本开关无视觉变化。
+        // search: 上方 已播 已唱 模糊层 高亮
+        SwitchListTile(
+          title: const Text('上方行使用已播颜色'),
+          subtitle: const Text(
+            '当前行以上的歌词行（含模糊层）使用已播颜色；'
+            '需开启歌词动态颜色或设置歌词文字颜色',
+          ),
+          value: _lyricAboveLinesPlayedColor,
+          onChanged: _useAmStylePlayer
+              ? (v) {
+                  AppHaptics.lightImpact(HapticCategory.control);
+                  setState(() => _lyricAboveLinesPlayedColor = v);
+                  LyricPreferences.instance.setUseAboveLinesPlayedColor(v);
                 }
               : null,
         ),
@@ -4146,7 +4174,7 @@ class _SettingsPageState extends State<SettingsPage>
           // 标题说明了是什么，副标题只留影响决策的功耗代价
           subtitle: const Text('高功耗'),
           value: _useGaussianBlur,
-          onChanged: supportsAdvancedLyrics
+          onChanged: _useAmStylePlayer
               ? (v) {
                   AppHaptics.lightImpact(HapticCategory.control);
                   setState(() => _useGaussianBlur = v);
@@ -4158,7 +4186,7 @@ class _SettingsPageState extends State<SettingsPage>
         SwitchListTile(
           title: const Text('歌词辉光效果'),
           value: _useGlowEffect,
-          onChanged: supportsAdvancedLyrics
+          onChanged: _useAmStylePlayer
               ? (v) {
                   AppHaptics.lightImpact(HapticCategory.control);
                   setState(() => _useGlowEffect = v);
@@ -4171,10 +4199,10 @@ class _SettingsPageState extends State<SettingsPage>
         // 两套播放器各一个开关：两套歌词的换行实现不同，问题不共用。
         // search: 平衡 平衡行 换行 断行 折行
         SwitchListTile(
-          title: const Text('平衡行换行（Apple / YT 风格）'),
+          title: const Text('平衡行换行（Apple 风格）'),
           subtitle: const Text('长歌词换行时让每行长度更均匀'),
           value: _lyricLineBalanceAm,
-          onChanged: supportsAdvancedLyrics
+          onChanged: _useAmStylePlayer
               ? (v) {
                   AppHaptics.lightImpact(HapticCategory.control);
                   setState(() => _lyricLineBalanceAm = v);
@@ -4187,7 +4215,7 @@ class _SettingsPageState extends State<SettingsPage>
           title: const Text('平衡行换行（Material 风格）'),
           subtitle: const Text('长歌词换行时让每行长度更均匀'),
           value: _lyricLineBalanceMd3,
-          onChanged: supportsAdvancedLyrics
+          onChanged: _useAmStylePlayer
               ? null
               : (v) {
                   AppHaptics.lightImpact(HapticCategory.control);
@@ -4195,13 +4223,13 @@ class _SettingsPageState extends State<SettingsPage>
                   Md3LyricPreferences.instance.setLineBalance(v);
                 },
         ),
-        // 歌词省电模式：AM / YT 播放器歌词界面锁定 60fps，上下滑动歌词时临时解锁。
+        // 歌词省电模式：AM 播放器歌词界面锁定 60fps，上下滑动歌词时临时解锁。
         // 排在特效末尾：它是上面几项高功耗特效的性能兜底。
         // search: 省电 限帧
         SwitchListTile(
           title: const Text('歌词省电模式'),
           value: _lyricEcoMode,
-          onChanged: supportsAdvancedLyrics
+          onChanged: _useAmStylePlayer
               ? (v) {
                   AppHaptics.lightImpact(HapticCategory.control);
                   setState(() => _lyricEcoMode = v);
@@ -4323,8 +4351,7 @@ class _SettingsPageState extends State<SettingsPage>
           title: const Text('背景动态流光'),
           subtitle: const Text('高功耗；随音乐频谱律动，与频谱背景同时开启会叠加开销'),
           value: _useFlowingBackground,
-          onChanged:
-              context.watch<ThemeProvider>().playerStyle != PlayerStyle.md3
+          onChanged: _useAmStylePlayer
               ? (v) {
                   AppHaptics.lightImpact(HapticCategory.control);
                   setState(() => _useFlowingBackground = v);
@@ -4332,11 +4359,10 @@ class _SettingsPageState extends State<SettingsPage>
                 }
               : null,
         ),
-        // 播放页背景模糊：仅 AM / YT 风格 + 动态流光关闭时渲染此模糊层，
+        // 播放页背景模糊：仅 AM 风格 + 动态流光关闭时渲染此模糊层，
         // 两种条件任一不满足即隐藏（流光开启时滑块无意义）
         // search: 模糊 背景 播放器 毛玻璃 封面
-        if (context.watch<ThemeProvider>().playerStyle != PlayerStyle.md3 &&
-            !_useFlowingBackground)
+        if (_useAmStylePlayer && !_useFlowingBackground)
           ListTile(
             title: const Text('播放页背景模糊'),
             // tv: TV 构建换 RemoteSlider（P-C）
@@ -4655,9 +4681,7 @@ class _SettingsPageState extends State<SettingsPage>
               ),
             ),
         // 背景层参数：仅 style=2 时显示
-        if (_spectrumEnabled &&
-            _spectrumStyle == 2 &&
-            supportsMusicSpectrum) ...[
+        if (_spectrumEnabled && _spectrumStyle == 2 && supportsMusicSpectrum) ...[
           // search: 频谱 透明度
           ListTile(
             title: const Text('频谱背景透明度'),
@@ -4951,8 +4975,9 @@ class _SettingsPageState extends State<SettingsPage>
               const Gap(AppSpacing.xs),
               Text(
                 '分别设置 WiFi 与移动网络下的播放音质，随当前网络自动生效',
-                style: Theme.of(context).textTheme.bodySmall
-                    ?.copyWith(color: colorScheme.onSurfaceVariant),
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                ),
               ),
               const Gap(AppSpacing.lg),
               Text('WiFi 网络下', style: Theme.of(context).textTheme.bodyMedium),
@@ -5046,8 +5071,9 @@ class _SettingsPageState extends State<SettingsPage>
                 leading: Icon(
                   Icons.graphic_eq,
                   color: effectsDisabled
-                      ? Theme.of(context).colorScheme.onSurface
-                            .withValues(alpha: 0.38)
+                      ? Theme.of(
+                          context,
+                        ).colorScheme.onSurface.withValues(alpha: 0.38)
                       : (eq.enabled
                             ? Theme.of(context).colorScheme.primary
                             : null),
@@ -5088,8 +5114,9 @@ class _SettingsPageState extends State<SettingsPage>
             leading: Icon(
               Icons.spatial_audio_off,
               color: _disableSystemAudioEffects
-                  ? Theme.of(context).colorScheme.onSurface
-                        .withValues(alpha: 0.38)
+                  ? Theme.of(
+                      context,
+                    ).colorScheme.onSurface.withValues(alpha: 0.38)
                   : null,
             ),
             title: const Text('音效库'),
@@ -5218,6 +5245,54 @@ class _SettingsPageState extends State<SettingsPage>
             setState(() => _restoreMemoryEnabled = value);
             context.read<PlayerProvider>().setRestoreMemoryEnabled(value);
           },
+        ),
+        // search: 暂停 保活 后台 耗电 省电 停止通知 恢复播放
+        // 下拉框不能放 trailing：TvDropdownMenu 是字段式控件，会给自身撑出
+        // 接近整行的宽度，把 ListTile 的 title 挤到只剩一两字宽（真机表现为
+        // 标题逐字竖排、压住说明与下拉框）。与「轮播间隔」同款做法——控件下沉
+        // 到 subtitle，标题与说明保持整行宽度。
+        ListTile(
+          title: const Text('暂停后自动停止保活'),
+          subtitle: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('暂停达到所选时间后移除后台保活通知以省电；重新播放、小组件、线控耳机均可正常恢复播放'),
+              const Gap(AppSpacing.sm),
+              TvDropdownMenu<int>(
+                items: [
+                  for (final minutes in const [0, 5, 10, 15])
+                    M3EDropdownItem(
+                      label: minutes == 0 ? '关闭' : '$minutes 分钟',
+                      value: minutes,
+                      selected: _idleKeepaliveStopMinutes == minutes,
+                    ),
+                ],
+                singleSelect: true,
+                showChipAnimation: false,
+                fieldStyle: M3EDropdownFieldStyle(
+                  hintText: '选择暂停时长',
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.md,
+                    vertical: AppSpacing.sm,
+                  ),
+                  selectedTextStyle: Theme.of(context).textTheme.bodyMedium,
+                ),
+                onSelectionChanged: (selected) async {
+                  if (selected.isEmpty) return;
+                  final minutes = selected.first.value;
+                  final playerProvider = context.read<PlayerProvider>();
+                  setState(() => _idleKeepaliveStopMinutes = minutes);
+                  await _settingsRepository.setIdleKeepaliveStopMinutes(
+                    minutes,
+                  );
+                  if (mounted) {
+                    playerProvider.refreshIdleKeepaliveStopTimer();
+                  }
+                },
+              ),
+            ],
+          ),
         ),
         // search: 自动播放 启动 开机 冷启动 一进来 就播
         SwitchListTile(
@@ -5462,8 +5537,9 @@ class _SettingsPageState extends State<SettingsPage>
               const Gap(AppSpacing.sm),
               Text(
                 _audioFocusModeDescription(_audioFocusInterruptionMode),
-                style: Theme.of(context).textTheme.bodySmall
-                    ?.copyWith(color: colorScheme.onSurfaceVariant),
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                ),
               ),
             ],
           ),
@@ -5598,24 +5674,9 @@ class _SettingsPageState extends State<SettingsPage>
             await _settingsRepository.setMvDanmakuEnabled(v);
           },
         ),
-        // 歌曲弹幕：控制是否在播放页叠加弹幕层（TV 无文本输入能力，不编入 TV 包）
-        // search: 歌曲 弹幕 播放页 封面 滚动
-        if (!kTvBuild)
-          SwitchListTile(
-            secondary: Icon(
-              Icons.subtitles_outlined,
-              color: colorScheme.primary,
-            ),
-            title: const Text('显示歌曲弹幕'),
-            subtitle: const Text('在播放页叠加歌曲弹幕'),
-            value: _songDanmakuEnabled,
-            onChanged: (v) async {
-              AppHaptics.lightImpact(HapticCategory.control);
-              setState(() => _songDanmakuEnabled = v);
-              await _settingsRepository.setSongDanmakuEnabled(v);
-            },
-          ),
-        // MV 弹幕透明度：弹幕关闭时不显示（无可调对象）
+        // MV 弹幕透明度：弹幕关闭时不显示（无可调对象）。
+        // v53：从歌曲弹幕组后面挪到 MV 开关紧后——MV 的开关与设置连续，
+        // 不被歌曲弹幕组隔开（用户反馈的分组调整）。
         if (_mvDanmakuEnabled)
           // search: 弹幕透明度 弹幕 浓度
           ListTile(
@@ -5630,8 +5691,7 @@ class _SettingsPageState extends State<SettingsPage>
                     divisions: 9,
                     label: '${(_mvDanmakuOpacity * 100).round()}%',
                     onChanged: (v) => setState(() => _mvDanmakuOpacity = v),
-                    onChangeEnd: (v) =>
-                        _settingsRepository.setMvDanmakuOpacity(v),
+                    onChangeEnd: (v) => _settingsRepository.setMvDanmakuOpacity(v),
                   )
                 : M3ESlider(
                     decoration: const M3ESliderDecoration(
@@ -5644,10 +5704,154 @@ class _SettingsPageState extends State<SettingsPage>
                     label: '${(_mvDanmakuOpacity * 100).round()}%',
                     // 拖动只改本地状态；松手才落盘，避免拖动过程中反复写 SharedPreferences
                     onChanged: (v) => setState(() => _mvDanmakuOpacity = v),
-                    onChangeEnd: (v) =>
-                        _settingsRepository.setMvDanmakuOpacity(v),
+                    onChangeEnd: (v) => _settingsRepository.setMvDanmakuOpacity(v),
                   ),
             trailing: _statusText('${(_mvDanmakuOpacity * 100).round()}%'),
+          ),
+        // v54：MV 弹幕速度与颜色（默认随机，与歌曲弹幕组同模式同口径）。
+        if (_mvDanmakuEnabled)
+          // search: MV 弹幕 速度 快慢 滚动 倍率
+          ValueListenableBuilder<double>(
+            valueListenable: SettingsRepository.mvDanmakuSpeed,
+            builder: (context, speed, _) => ListTile(
+              leading:
+                  Icon(Icons.speed_outlined, color: colorScheme.primary),
+              title: const Text('弹幕速度'),
+              subtitle: M3ESlider(
+                decoration: const M3ESliderDecoration(
+                  haptic: M3EHapticFeedback.medium,
+                ),
+                value: speed,
+                min: 0.5,
+                max: 2.0,
+                divisions: 15,
+                label: '×${speed.toStringAsFixed(2)}',
+                // 拖动只刷内存镜像（MV 层经 ListenableBuilder 即时生效），
+                // 松手才落盘（本仓滑条惯例）。
+                onChanged: (v) => SettingsRepository.mvDanmakuSpeed.value = v,
+                onChangeEnd: (v) => _settingsRepository.setMvDanmakuSpeed(v),
+              ),
+            ),
+          ),
+        if (_mvDanmakuEnabled)
+          // search: MV 弹幕 颜色 随机 彩色
+          ValueListenableBuilder<int?>(
+            valueListenable: SettingsRepository.mvDanmakuColor,
+            builder: (context, colorValue, _) => ListTile(
+              leading:
+                  Icon(Icons.palette_outlined, color: colorScheme.primary),
+              title: const Text('弹幕颜色'),
+              subtitle: _DanmakuColorRow(
+                current: colorValue,
+                onSelected: (c) => _settingsRepository.setMvDanmakuColor(c),
+              ),
+            ),
+          ),
+        // 歌曲弹幕：控制是否在播放页叠加弹幕层（TV 无文本输入能力，不编入 TV 包）
+        // search: 歌曲 弹幕 播放页 封面 滚动
+        // v46：改 ValueListenableBuilder（同一静态镜像）——本地 setState +
+        // 异步初始化回填存在覆盖用户点击的竞态（审查实测"设置里打开弹幕不生效"）。
+        // 开启时下方追加速度滑条与颜色选择。
+        if (!kTvBuild)
+          ValueListenableBuilder<bool>(
+            valueListenable: SettingsRepository.songDanmakuEnabled,
+            builder: (context, enabled, _) => Column(
+              children: [
+                SwitchListTile(
+                  secondary: Icon(
+                    Icons.subtitles_outlined,
+                    color: colorScheme.primary,
+                  ),
+                  title: const Text('显示歌曲弹幕'),
+                  subtitle: const Text('在播放页叠加歌曲弹幕'),
+                  value: enabled,
+                  onChanged: (v) {
+                    AppHaptics.lightImpact(HapticCategory.control);
+                    _settingsRepository.setSongDanmakuEnabled(v);
+                  },
+                ),
+                if (enabled)
+                  // search: 弹幕 速度 快慢 滚动 倍率
+                  ValueListenableBuilder<double>(
+                    valueListenable: SettingsRepository.songDanmakuSpeed,
+                    builder: (context, speed, _) => ListTile(
+                      leading: Icon(Icons.speed_outlined,
+                          color: colorScheme.primary),
+                      title: const Text('弹幕速度'),
+                      subtitle: M3ESlider(
+                        decoration: const M3ESliderDecoration(
+                          haptic: M3EHapticFeedback.medium,
+                        ),
+                        value: speed,
+                        min: 0.5,
+                        max: 2.0,
+                        divisions: 15,
+                        label: '×${speed.toStringAsFixed(2)}',
+                        // 拖动只刷内存镜像（宿主即时生效），松手才落盘（本仓滑条惯例）。
+                        onChanged: (v) =>
+                            SettingsRepository.songDanmakuSpeed.value = v,
+                        onChangeEnd: (v) =>
+                            _settingsRepository.setSongDanmakuSpeed(v),
+                      ),
+                    ),
+                  ),
+                if (enabled)
+                  // search: 弹幕 透明度 浓度
+                  ValueListenableBuilder<double>(
+                    valueListenable: SettingsRepository.songDanmakuOpacity,
+                    builder: (context, opacity, _) => ListTile(
+                      leading: Icon(Icons.opacity_outlined,
+                          color: colorScheme.primary),
+                      title: const Text('弹幕透明度'),
+                      subtitle: M3ESlider(
+                        decoration: const M3ESliderDecoration(
+                          haptic: M3EHapticFeedback.medium,
+                        ),
+                        value: opacity,
+                        min: 0.1,
+                        max: 1.0,
+                        divisions: 18,
+                        label: '${(opacity * 100).round()}%',
+                        // 拖动只刷内存镜像（宿主即时生效），松手才落盘（本仓滑条惯例）。
+                        onChanged: (v) =>
+                            SettingsRepository.songDanmakuOpacity.value = v,
+                        onChangeEnd: (v) =>
+                            _settingsRepository.setSongDanmakuOpacity(v),
+                      ),
+                    ),
+                  ),
+                if (enabled)
+                  // search: 弹幕 颜色 随机 彩色
+                  ValueListenableBuilder<int?>(
+                    valueListenable: SettingsRepository.songDanmakuColor,
+                    builder: (context, colorValue, _) => ListTile(
+                      leading: Icon(Icons.palette_outlined,
+                          color: colorScheme.primary),
+                      title: const Text('弹幕颜色'),
+                      subtitle: _DanmakuColorRow(
+                        current: colorValue,
+                        onSelected: (c) =>
+                            _settingsRepository.setSongDanmakuColor(c),
+                      ),
+                    ),
+                  ),
+                // MD3Music fork v47：只看弹幕——隐藏播放页右下角"发弹幕"按钮。
+                if (enabled)
+                  // search: 弹幕 只读 隐藏 发送 按钮
+                  ValueListenableBuilder<bool>(
+                    valueListenable: SettingsRepository.songDanmakuReadOnly,
+                    builder: (context, readOnly, _) => SwitchListTile(
+                      title: const Text('只看弹幕'),
+                      subtitle: const Text('隐藏播放页的发弹幕按钮，仅浏览弹幕'),
+                      value: readOnly,
+                      onChanged: (v) {
+                        AppHaptics.lightImpact(HapticCategory.control);
+                        _settingsRepository.setSongDanmakuReadOnly(v);
+                      },
+                    ),
+                  ),
+              ],
+            ),
           ),
       ],
     );
@@ -6348,8 +6552,9 @@ class _SettingsPageState extends State<SettingsPage>
                   ),
                   child: Text(
                     '运行中',
-                    style: Theme.of(context).textTheme.labelSmall
-                        ?.copyWith(color: colorScheme.onPrimaryContainer),
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: colorScheme.onPrimaryContainer,
+                    ),
                   ),
                 ),
           onTap: _isRestarting ? null : _confirmRestartServer,
@@ -6515,7 +6720,11 @@ class _SettingsPageState extends State<SettingsPage>
         // search: 更新 新版本 升级 upgrade 提醒
         SwitchListTile(
           title: const Text('新版本提醒'),
-          subtitle: const Text('启动时检查 GitHub 发布的新版本，发现后提示一次'),
+          subtitle: Text(
+            Platform.isWindows
+                ? '启动时检查并展示更新说明，可下载更新包后重启安装'
+                : '启动时检查 GitHub 发布的新版本，发现后提示一次',
+          ),
           value: _updateReminderEnabled,
           onChanged: (value) {
             // ignore: discarded_futures
@@ -6538,14 +6747,49 @@ class _SettingsPageState extends State<SettingsPage>
         ListTile(
           title: const Text('更新最新版本'),
           subtitle: Text(
-            _pendingUpdateVersion.isEmpty
+            Platform.isWindows
+                ? (_isCheckingWindowsUpdate
+                      ? '正在检查 GitHub Release…'
+                      : (_pendingUpdateVersion.isEmpty
+                            ? '检查并下载 Windows 更新'
+                            : '有新版 v$_pendingUpdateVersion 可用，点击更新'))
+                : _pendingUpdateVersion.isEmpty
                 ? 'https://github.com/zzyoxml/md3Music/releases'
                 : '有新版 v$_pendingUpdateVersion 可用，点击前往下载',
           ),
           leading: const Icon(Icons.system_update_outlined),
-          trailing: const Icon(Icons.open_in_new, size: 18),
-          onTap: () => _openReleasesUrl(),
+          trailing: Platform.isWindows
+              ? (_isCheckingWindowsUpdate
+                    ? const SizedBox.square(
+                        dimension: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.refresh, size: 18))
+              : const Icon(Icons.open_in_new, size: 18),
+          onTap: _isCheckingWindowsUpdate
+              ? null
+              : (Platform.isWindows
+                    ? _checkWindowsUpdateManually
+                    : _openReleasesUrl),
         ),
+        if (Platform.isWindows) ...[
+          // search: 项目地址 GitHub 开源 仓库 网页
+          ListTile(
+            title: const Text('项目地址'),
+            subtitle: const Text(updateProjectUrl),
+            leading: const Icon(Icons.code),
+            trailing: const Icon(Icons.open_in_new, size: 18),
+            onTap: () => openUpdateWebPage(updateProjectUrl),
+          ),
+          // search: 镜像下载网站 手动下载 下载站 hiwiki
+          ListTile(
+            title: const Text('镜像下载网站'),
+            subtitle: const Text(updateMirrorWebsiteUrl),
+            leading: const Icon(Icons.download_outlined),
+            trailing: const Icon(Icons.open_in_new, size: 18),
+            onTap: () => openUpdateWebPage(updateMirrorWebsiteUrl),
+          ),
+        ],
         // 渲染引擎与版本号同属"当前构建的事实"，故并入版本组：
         // 由构建期 flavor 决定（skia / impeller），运行时不可切换，只读展示。
         // search: 渲染引擎 渲染 引擎 图形 兼容 skia impeller 构建
@@ -6660,6 +6904,31 @@ class _SettingsPageState extends State<SettingsPage>
     final uri = Uri.parse(url);
     if (await canLaunchUrl(uri)) {
       await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
+  }
+
+  Future<void> _checkWindowsUpdateManually() async {
+    if (_isCheckingWindowsUpdate) return;
+    setState(() => _isCheckingWindowsUpdate = true);
+    try {
+      final release = await WindowsUpdateService.instance.checkForUpdate(
+        manual: true,
+      );
+      if (!mounted) return;
+      if (release == null) {
+        showToast('当前已是最新版本，或暂时无法连接发布服务器', long: true);
+        return;
+      }
+      await showWindowsUpdateDialog(
+        context,
+        release,
+        onExitForUpdate: finishWindowsAppExit,
+      );
+      if (mounted) {
+        setState(() => _pendingUpdateVersion = release.version);
+      }
+    } finally {
+      if (mounted) setState(() => _isCheckingWindowsUpdate = false);
     }
   }
 
@@ -6813,10 +7082,10 @@ class _SettingsPageState extends State<SettingsPage>
           isSelected: currentStyle == PlayerStyle.ytMusic,
           onTap: () {
             AppHaptics.lightImpact(HapticCategory.control);
-            setState(() => _useAmStylePlayer = false);
+            setState(() => _useAmStylePlayer = true);
             context.read<ThemeProvider>().setPlayerStyle(PlayerStyle.ytMusic);
           },
-          preview: _SettingsYtStylePreview(colorScheme: colorScheme),
+          preview: SettingsYtStylePreview(colorScheme: colorScheme),
         ),
       ],
     );
@@ -6859,8 +7128,9 @@ class _SettingsPageState extends State<SettingsPage>
                   // 字一放大就撑破。这里豁免系统字号，让预览恒按真实比例呈现。
                   // 「显示大小」不在此列 —— 它整页等比变化，预览随之整体缩放。
                   child: MediaQuery(
-                    data: MediaQuery.of(context)
-                        .copyWith(textScaler: TextScaler.noScaling),
+                    data: MediaQuery.of(
+                      context,
+                    ).copyWith(textScaler: TextScaler.noScaling),
                     child: preview,
                   ),
                 ),
@@ -6939,8 +7209,9 @@ Widget _settingsDescription(
     maxLines: singleLine ? 1 : null,
     softWrap: !singleLine,
     textAlign: TextAlign.start,
-    style: Theme.of(context).textTheme.bodySmall
-        ?.copyWith(color: colorScheme.onSurfaceVariant),
+    style: Theme.of(
+      context,
+    ).textTheme.bodySmall?.copyWith(color: colorScheme.onSurfaceVariant),
   );
   return SizedBox(
     width: double.infinity,
@@ -7778,8 +8049,9 @@ class _DisplayScaleTileState extends State<_DisplayScaleTile> {
           ),
           child: Text(
             '显示大小：与系统同名设置一致，整体等比放大或缩小界面，一屏能显示的内容随之增减',
-            style: Theme.of(context).textTheme.bodySmall
-                ?.copyWith(color: colorScheme.onSurfaceVariant),
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: colorScheme.onSurfaceVariant,
+            ),
           ),
         ),
       ],
@@ -7995,168 +8267,62 @@ class _FlymeLyricAdvanceTileState extends State<_FlymeLyricAdvanceTile> {
   }
 }
 
-class _SettingsYtStylePreview extends StatelessWidget {
-  const _SettingsYtStylePreview({required this.colorScheme});
-  final ColorScheme colorScheme;
+/// MD3Music fork v46：歌曲弹幕颜色选择行——预设色板（null=默认白）+ 选中环。
+class _DanmakuColorRow extends StatelessWidget {
+  const _DanmakuColorRow({required this.current, required this.onSelected});
+
+  final int? current;
+  final ValueChanged<int?> onSelected;
+
+  static const List<int?> _preset = <int?>[
+    -1, // 随机（v49：每条弹幕从调色板随机取色，哨值 -1）——v55 起放第一档
+    null, // 默认（跟随弹幕池/白）
+    0xFFFFFFFF, // 白
+    0xFFFFD54F, // 浅黄
+    0xFF80DEEA, // 浅青
+    0xFFA5D6A7, // 浅绿
+    0xFFFFCC80, // 浅橙
+    0xFFF48FB1, // 浅粉
+    0xFFCE93D8, // 浅紫
+  ];
 
   @override
   Widget build(BuildContext context) {
-    final topGlow = Color.alphaBlend(
-      colorScheme.primary.withValues(alpha: 0.34),
-      colorScheme.surfaceContainerHighest,
-    );
-    final bottomBase = Color.alphaBlend(
-      colorScheme.primary.withValues(alpha: 0.12),
-      colorScheme.surface,
-    );
-    final fg = colorScheme.onSurface;
-    final fgMuted = colorScheme.onSurfaceVariant;
-
-    return Container(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [topGlow, bottomBase],
-        ),
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-      child: Column(
+    final primary = Theme.of(context).colorScheme.primary;
+    return SizedBox(
+      height: 40,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
         children: [
-          Row(
-            children: [
-              Icon(Icons.keyboard_arrow_down, size: 14, color: fgMuted),
-              const Spacer(),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                decoration: BoxDecoration(
-                  color: colorScheme.primary.withValues(alpha: 0.20),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Icon(
-                  Icons.headphones_outlined,
-                  size: 8,
-                  color: colorScheme.primary,
-                ),
-              ),
-              const Spacer(),
-              Icon(Icons.more_vert, size: 12, color: fgMuted),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: colorScheme.primaryContainer,
-              borderRadius: BorderRadius.circular(6),
-              boxShadow: [
-                BoxShadow(
-                  color: colorScheme.shadow.withValues(alpha: 0.22),
-                  blurRadius: 6,
-                  offset: const Offset(0, 3),
-                ),
-              ],
-            ),
-            child: Center(
-              child: Icon(
-                Icons.music_note,
-                color: colorScheme.onPrimaryContainer,
-                size: 20,
-              ),
-            ),
-          ),
-          const SizedBox(height: 5),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Container(
-              height: 4,
-              width: 54,
-              decoration: BoxDecoration(
-                color: fg,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-          ),
-          const SizedBox(height: 3),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Container(
-              height: 3,
-              width: 36,
-              decoration: BoxDecoration(
-                color: fgMuted,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-          ),
-          const SizedBox(height: 5),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.start,
-            children: [
-              _buildMiniChip(Icons.favorite_border),
-              const SizedBox(width: 4),
-              _buildMiniChip(Icons.subtitles_outlined),
-              const SizedBox(width: 4),
-              _buildMiniChip(Icons.playlist_add),
-            ],
-          ),
-          const SizedBox(height: 5),
-          Container(
-            height: 2,
-            decoration: BoxDecoration(
-              color: colorScheme.outlineVariant,
-              borderRadius: BorderRadius.circular(1),
-            ),
-            child: Row(
-              children: [
-                Container(
+          for (final c in _preset)
+            Padding(
+              padding: const EdgeInsets.only(right: 12),
+              child: InkWell(
+                onTap: () => onSelected(c),
+                customBorder: const CircleBorder(),
+                child: Container(
                   width: 32,
+                  height: 32,
                   decoration: BoxDecoration(
-                    color: colorScheme.primary,
-                    borderRadius: BorderRadius.circular(1),
+                    shape: BoxShape.circle,
+                    color: c == null || c < 0 ? Colors.white : Color(c),
+                    border: Border.all(
+                      color: current == c ? primary : Colors.black26,
+                      width: current == c ? 3 : 1,
+                    ),
                   ),
-                ),
-              ],
-            ),
-          ),
-          const Spacer(),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Icon(Icons.shuffle_rounded, size: 10, color: fgMuted),
-              Icon(Icons.skip_previous_rounded, size: 13, color: fg),
-              Container(
-                width: 18,
-                height: 18,
-                decoration: BoxDecoration(
-                  color: colorScheme.primary,
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(
-                  Icons.play_arrow_rounded,
-                  size: 12,
-                  color: colorScheme.onPrimary,
+                  child: c == null
+                      ? Icon(Icons.auto_awesome,
+                          size: 16, color: Colors.black45)
+                      : c < 0
+                          ? const Icon(Icons.shuffle,
+                              size: 16, color: Colors.black45)
+                          : null,
                 ),
               ),
-              Icon(Icons.skip_next_rounded, size: 13, color: fg),
-              Icon(Icons.repeat_rounded, size: 10, color: fgMuted),
-            ],
-          ),
-          const SizedBox(height: 2),
+            ),
         ],
       ),
-    );
-  }
-
-  Widget _buildMiniChip(IconData icon) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-      decoration: BoxDecoration(
-        color: colorScheme.secondaryContainer.withValues(alpha: 0.75),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Icon(icon, size: 8, color: colorScheme.onSecondaryContainer),
     );
   }
 }

@@ -1,11 +1,15 @@
 import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
+import '../../providers/theme_provider.dart';
 import '../../widgets/apple_lyrics/layout/duet_layout.dart';
 import '../../widgets/apple_lyrics/layout/lyric_preferences.dart';
 import 'preview_demo_assets.dart';
 import 'settings_preview_frame.dart';
+
+export '../../modules/player/full_player_yt.dart' show SettingsYtStylePreview;
 
 /// 「歌词效果」三级子页的演示卡。
 ///
@@ -40,23 +44,19 @@ import 'settings_preview_frame.dart';
 /// 为 false 时**不能**把 AM 的开关状态画进演示卡——那会让用户在 MD3 播放页
 /// 看到一个根本不存在的效果。
 class LyricEffectPreview extends StatelessWidget {
-  /// true = 演示 Apple Music / YouTube Music 风格歌词；false = Material 风格。
+  /// true = 演示 Apple Music 风格歌词；false = Material 风格。
   final bool isAmStyle;
-  final String? styleSubtitle;
 
   /// 当前行索引（0..2）。默认 1（中间行），上下各留一行做对照。
   static const int _currentLineIndex = 1;
 
-  const LyricEffectPreview({
-    super.key,
-    required this.isAmStyle,
-    this.styleSubtitle,
-  });
+  const LyricEffectPreview({super.key, required this.isAmStyle});
 
   @override
   Widget build(BuildContext context) {
     // AM 偏好是本卡的唯一真值源（MD3 只额外读 lineBalance）
     final amPrefs = LyricPreferences.instance;
+    final playerStyle = context.watch<ThemeProvider?>()?.playerStyle;
 
     return ListenableBuilder(
       listenable: amPrefs,
@@ -65,10 +65,15 @@ class LyricEffectPreview extends StatelessWidget {
         final colorScheme = theme.colorScheme;
 
         final showDuet = isAmStyle && amPrefs.useDuetLayout;
+        final subtitle = !isAmStyle
+            ? '当前：Material 风格'
+            : (playerStyle == PlayerStyle.ytMusic
+                  ? '当前：YouTube Music 风格'
+                  : '当前：Apple Music 风格');
 
         return SettingsPreviewFrame(
           title: '歌词效果预览',
-          subtitle: styleSubtitle ?? (isAmStyle ? '当前：Apple Music 风格' : '当前：Material 风格'),
+          subtitle: subtitle,
           footnote: '对唱 / 模糊 / 辉光 / 换行 等开关与滑块即时生效',
           height: 190,
           background: colorScheme.surfaceContainerHighest,
@@ -102,6 +107,7 @@ class LyricEffectPreview extends StatelessWidget {
             colors: base,
             text: kPreviewSingleTexts[i],
             isCurrent: i == _currentLineIndex,
+            isAbove: i < _currentLineIndex,
             amPrefs: amPrefs,
             alignment: CrossAxisAlignment.start,
           ),
@@ -129,6 +135,8 @@ class LyricEffectPreview extends StatelessWidget {
             colors: base,
             text: kPreviewDuetTexts[i],
             isCurrent: i == 0,
+            // 对唱只有「当前行 + 下一行」两行，没有上方已唱行可演示。
+            isAbove: false,
             amPrefs: amPrefs,
             // 性别 → 对齐：男=左、女=右（与 DuetLayout._genderToAlign 同口径）
             alignment: _crossAlignFromGender(kPreviewDuetPrefixes[i]),
@@ -139,11 +147,15 @@ class LyricEffectPreview extends StatelessWidget {
   }
 
   /// 一行歌词，含模糊 / 辉光 / 上浮 / 缩放。
+  ///
+  /// [isAbove] 表示该行在当前行上方（已唱）。上方行只有开启
+  /// [LyricPreferences.useAboveLinesPlayedColor] 时才使用已播颜色。
   Widget _buildLine({
     required BuildContext context,
     required _PreviewColors colors,
     required String text,
     required bool isCurrent,
+    required bool isAbove,
     required LyricPreferences amPrefs,
     required CrossAxisAlignment alignment,
   }) {
@@ -157,10 +169,20 @@ class LyricEffectPreview extends StatelessWidget {
     final blurSigma = isAmStyle && amPrefs.useGaussianBlur && !isCurrent
         ? _blurSigmaFor(amPrefs.blurIntensity)
         : 0.0;
-    // 动态取色：85% 白 + 15% 主题主色，再抬明度到 ≥0.78（口径见
-    // apple_lyrics_view.dart:2344-2349 的 forceDarkBackground 分支）。
-    final color = isCurrent && isAmStyle && amPrefs.useDynamicLyricColor
-        ? _liftLightness(Color.lerp(colors.base, colors.accent, 0.15)!)
+    // 动态取色：底色与主题主色按 mixRatio 混色，再抬明度到 ≥0.78
+    // （口径见 apple_lyrics_view.dart build 里的 resolveActiveLineColorValue）。
+    // 当前行恒按开关取色；上方行仅在独立开关开启时跟随已播色。
+    final bool usePlayedColor = isAmStyle &&
+        amPrefs.useDynamicLyricColor &&
+        (isCurrent || (isAbove && amPrefs.useAboveLinesPlayedColor));
+    final color = usePlayedColor
+        ? _liftLightness(
+            Color.lerp(
+              colors.base,
+              colors.accent,
+              amPrefs.dynamicColorMixRatio,
+            )!,
+          )
         : (isCurrent ? colors.active : colors.base);
 
     final line = Column(
@@ -187,6 +209,7 @@ class LyricEffectPreview extends StatelessWidget {
                     color: color,
                     isCurrent: isCurrent,
                     emphasized: glowOn && i == 0,
+                    glowIntensity: amPrefs.glowIntensity,
                   ),
               ],
             ),
@@ -202,32 +225,65 @@ class LyricEffectPreview extends StatelessWidget {
     );
   }
 
-  /// 行内的一个字。[emphasized] 时按播放页同款两段式辉光放大。
+  /// 行内的一个字。[emphasized] 时按播放页同款辉光剖面。
+  ///
+  /// 半径与播放页 `WordRenderer` 的剖面常量一致（0.05 / 0.12 / 0.24 em）。
+  /// 播放页那一侧会**挖空字形本体**（只留笔画外侧的光），而 `Text.shadows`
+  /// 做不到挖空，内层权重按略低的值近似外侧光观感，避免演示卡比真机更糊。
+  /// 颜色取 [color]（已含动态取色混色比例）；[glowIntensity] 与播放页同口径，
+  /// 只乘在阴影 alpha 上（不改半径），保证演示与真机亮度变化一致。
+  /// 强度 >100% 时播放页用 `BlendMode.plus` 追加一层；`Text.shadows` 没有混合
+  /// 模式，这里在同半径上再叠一条阴影等效（累积 alpha 同样单调递增）。
+  /// [Shadow.blurRadius] 与 sigma 的换算系数为 √3（Skia 约定），故 ×1.732。
   Widget _buildChar({
     required String char,
     required Color color,
     required bool isCurrent,
     required bool emphasized,
+    required double glowIntensity,
   }) {
+    const double fontSize = 17;
+    List<Shadow>? glowShadows;
+    if (emphasized) {
+      const List<double> sigmasEm = <double>[0.05, 0.12, 0.24];
+      // 播放页权重 0.90 / 0.40 / 0.20 是叠加在**挖空后**的外侧光上；
+      // 演示卡无法挖空，等比例压低内层以贴近真机观感。
+      const List<double> weights = <double>[0.55, 0.30, 0.16];
+      glowShadows = <Shadow>[
+        for (int i = 0; i < sigmasEm.length; i++)
+          for (final double alpha in _glowLayerAlphas(
+            weights[i],
+            glowIntensity,
+          ))
+            Shadow(
+              color: color.withValues(alpha: alpha),
+              blurRadius: sigmasEm[i] * fontSize * 1.732,
+            ),
+      ];
+    }
     return Text(
       char,
       style: TextStyle(
         color: color,
-        fontSize: 17,
+        fontSize: fontSize,
         fontWeight: isCurrent ? FontWeight.w600 : FontWeight.w500,
         height: 1.3,
-        shadows: emphasized
-            ? [
-                // 近距实影 + 远距弥散，两段才出得来「发光」而非「脏边」
-                Shadow(color: color, blurRadius: 8),
-                Shadow(
-                  color: color.withValues(alpha: 0.55),
-                  blurRadius: 18,
-                ),
-              ]
-            : null,
+        shadows: glowShadows,
       ),
     );
+  }
+
+  /// 把「层权重 × 辉光强度」拆成一到两个 alpha（与播放页 `_glowDrawAlpha` 同口径）。
+  ///
+  /// - `lit <= 1`：单个 alpha；
+  /// - `lit > 1`：常规层饱和到 1.0，超出部分作为第二条阴影追加。
+  static List<double> _glowLayerAlphas(double weight, double intensity) {
+    final double lit = (weight * intensity).clamp(0.0, 2.0);
+    final double base = lit.clamp(0.0, 1.0);
+    final double extra = (lit - 1.0).clamp(0.0, 1.0);
+    return extra > 0
+        ? <double>[base, extra]
+        : <double>[base];
   }
 
   /// 非当前行的模糊 sigma：取播放页最远分级（5）× 用户倍数，clamp 0.5~10。

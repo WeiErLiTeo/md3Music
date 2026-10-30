@@ -41,7 +41,6 @@ class _FullPlayerYtState extends State<FullPlayerYt>
   final GlobalKey<PlayerPlaylistViewState> _playlistKey =
       GlobalKey<PlayerPlaylistViewState>();
   Rect? _measuredCoverRect;
-  String? _prewarmedCoverKey;
 
   DraggablePlayerRoute? _topBarDragRoute;
   double _topBarDragDistance = 0.0;
@@ -335,11 +334,13 @@ class _FullPlayerYtState extends State<FullPlayerYt>
       );
     }
 
+    final baseSong = YtMoreMenu.resolveMatchedSongBase(currentSong);
     final resolvedSong = YtMoreMenu.resolveMatchedSong(currentSong);
-    final safeTop = MediaQuery.paddingOf(context).top;
-    final safeBottom = MediaQuery.paddingOf(context).bottom;
+    final mediaPadding = MediaQuery.paddingOf(context);
+    final safeTop = mediaPadding.top;
+    final safeBottom = mediaPadding.bottom;
+    final safeLeft = mediaPadding.left;
     final screenSize = MediaQuery.sizeOf(context);
-    final dpr = MediaQuery.devicePixelRatioOf(context);
 
     final Listenable overlayExpansion = Listenable.merge([
       _lyricsController,
@@ -361,8 +362,10 @@ class _FullPlayerYtState extends State<FullPlayerYt>
                 final useArtistPhoto = context.select<ThemeProvider, bool>(
                   (p) => p.useArtistPhotoBackground,
                 );
+                // 背景流光取色与高斯模糊层使用原始 400 尺寸 URL（baseSong），
+                // 直接命中外部歌单与迷你栏内存缓存，零网络等待、不阻塞 1080p 主封面翻转
                 return YtBackground(
-                  song: resolvedSong,
+                  song: baseSong,
                   isPlaying: isPlaying,
                   useArtistPhoto: useArtistPhoto,
                 );
@@ -432,9 +435,9 @@ class _FullPlayerYtState extends State<FullPlayerYt>
               ),
             ),
           ],
-          // 悬浮封面层：当歌词抽屉或播放列表抽屉拉开（t > 0.001）时接管，
+          // 悬浮封面层：仅在歌词抽屉或播放列表抽屉拉开（t > 0.001）时挂载，
           // 与主封面共享同一份 1080p PlayerArtworkImage 解码档位与 GPU 纹理，
-          // 全程以 Transform 矩阵缩放平移，零二次加载、零布局重算。
+          // 平时抽屉关闭时不常驻挂载，避免切歌首帧与主封面争抢解码通道。
           LayoutBuilder(
             builder: (context, constraints) {
               final defaultAvailW = math.max(0.0, screenSize.width - 48.0);
@@ -452,53 +455,19 @@ class _FullPlayerYtState extends State<FullPlayerYt>
               final largeRect = _measuredCoverRect ?? fallbackRect;
               final baseSide = math.max(1.0, largeRect.width);
 
-              final prewarmKey =
-                  '${resolvedSong.artworkUri}_${baseSide.round()}_$dpr';
-              if (_prewarmedCoverKey != prewarmKey) {
-                _prewarmedCoverKey = prewarmKey;
-                unawaited(
-                  prewarmPlayerArtworkTexture(
-                    artworkUri: resolvedSong.artworkUri,
-                    settledLogicalWidth: baseSide,
-                    devicePixelRatio: dpr,
-                  ),
-                );
-              }
-
               const double smallSize = 40.0;
-              const double smallLeft = 16.0;
+              final double smallLeft = safeLeft + 16.0;
               final double smallTop = safeTop + (56.0 - smallSize) / 2.0;
-
-              final Widget sharedCoverSurface = RepaintBoundary(
-                child: SizedBox(
-                  width: baseSide,
-                  height: baseSide,
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(12.0),
-                    child: PlayerArtworkImage(
-                      key: ValueKey(
-                        'yt_floating_cover_${resolvedSong.id}_${resolvedSong.artworkUri}',
-                      ),
-                      artworkUri: resolvedSong.artworkUri,
-                      fallbackFilePath: resolvedSong.localPath,
-                      isFill: true,
-                      fit: BoxFit.cover,
-                      iconSize: 48,
-                      backgroundColor: Colors.white12,
-                      iconColor: Colors.white54,
-                    ),
-                  ),
-                ),
-              );
 
               return AnimatedBuilder(
                 animation: overlayExpansion,
-                child: sharedCoverSurface,
-                builder: (context, coverChild) {
+                builder: (context, _) {
                   final t = math
                       .max(_lyricsController.value, _queueController.value)
                       .clamp(0.0, 1.0);
                   final active = t > 0.001;
+                  if (!active) return const SizedBox.shrink();
+
                   final curLeft = ui.lerpDouble(largeRect.left, smallLeft, t)!;
                   final curTop = ui.lerpDouble(largeRect.top, smallTop, t)!;
                   final curSize = math.max(
@@ -507,17 +476,34 @@ class _FullPlayerYtState extends State<FullPlayerYt>
                   );
                   final scale = curSize / baseSide;
 
-                  return Offstage(
-                    offstage: !active,
-                    child: IgnorePointer(
-                      child: Align(
-                        alignment: Alignment.topLeft,
-                        child: Transform.translate(
-                          offset: Offset(curLeft, curTop),
-                          child: Transform.scale(
-                            scale: scale,
-                            alignment: Alignment.topLeft,
-                            child: coverChild,
+                  return IgnorePointer(
+                    child: Align(
+                      alignment: Alignment.topLeft,
+                      child: Transform.translate(
+                        offset: Offset(curLeft, curTop),
+                        child: Transform.scale(
+                          scale: scale,
+                          alignment: Alignment.topLeft,
+                          child: RepaintBoundary(
+                            child: SizedBox(
+                              width: baseSide,
+                              height: baseSide,
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(12.0),
+                                child: PlayerArtworkImage(
+                                  key: ValueKey(
+                                    'yt_floating_cover_${resolvedSong.id}_${resolvedSong.artworkUri}',
+                                  ),
+                                  artworkUri: resolvedSong.artworkUri,
+                                  fallbackFilePath: resolvedSong.localPath,
+                                  isFill: true,
+                                  fit: BoxFit.cover,
+                                  iconSize: 48,
+                                  backgroundColor: Colors.white12,
+                                  iconColor: Colors.white54,
+                                ),
+                              ),
+                            ),
                           ),
                         ),
                       ),
@@ -546,6 +532,175 @@ class _FullPlayerYtState extends State<FullPlayerYt>
       dragRoute: _dragRoute,
       forceMainStyle: _isDragOverlay || widget.dockMode,
       child: page,
+    );
+  }
+}
+
+/// 设置页「播放页样式」中的 YouTube Music 预览缩略卡。
+/// 放在 `full_player_yt.dart` 中并通过 `lyric_effect_preview.dart` 导出，
+/// 避免在 `settings_page.dart` 顶部加 import 或底部加新类导致上游合并冲突。
+class SettingsYtStylePreview extends StatelessWidget {
+  const SettingsYtStylePreview({super.key, required this.colorScheme});
+  final ColorScheme colorScheme;
+
+  @override
+  Widget build(BuildContext context) {
+    final topGlow = Color.alphaBlend(
+      colorScheme.primary.withValues(alpha: 0.34),
+      colorScheme.surfaceContainerHighest,
+    );
+    final bottomBase = Color.alphaBlend(
+      colorScheme.primary.withValues(alpha: 0.12),
+      colorScheme.surface,
+    );
+    final fg = colorScheme.onSurface;
+    final fgMuted = colorScheme.onSurfaceVariant;
+
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [topGlow, bottomBase],
+        ),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Icon(Icons.keyboard_arrow_down, size: 14, color: fgMuted),
+              const Spacer(),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                decoration: BoxDecoration(
+                  color: colorScheme.primary.withValues(alpha: 0.20),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(
+                  Icons.headphones_outlined,
+                  size: 8,
+                  color: colorScheme.primary,
+                ),
+              ),
+              const Spacer(),
+              Icon(Icons.more_vert, size: 12, color: fgMuted),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: colorScheme.primaryContainer,
+              borderRadius: BorderRadius.circular(6),
+              boxShadow: [
+                BoxShadow(
+                  color: colorScheme.shadow.withValues(alpha: 0.22),
+                  blurRadius: 6,
+                  offset: const Offset(0, 3),
+                ),
+              ],
+            ),
+            child: Center(
+              child: Icon(
+                Icons.music_note,
+                color: colorScheme.onPrimaryContainer,
+                size: 20,
+              ),
+            ),
+          ),
+          const SizedBox(height: 5),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Container(
+              height: 4,
+              width: 54,
+              decoration: BoxDecoration(
+                color: fg,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          const SizedBox(height: 3),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Container(
+              height: 3,
+              width: 36,
+              decoration: BoxDecoration(
+                color: fgMuted,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          const SizedBox(height: 5),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.start,
+            children: [
+              _buildMiniChip(Icons.favorite_border),
+              const SizedBox(width: 4),
+              _buildMiniChip(Icons.subtitles_outlined),
+              const SizedBox(width: 4),
+              _buildMiniChip(Icons.playlist_add),
+            ],
+          ),
+          const SizedBox(height: 5),
+          Container(
+            height: 2,
+            decoration: BoxDecoration(
+              color: colorScheme.outlineVariant,
+              borderRadius: BorderRadius.circular(1),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 32,
+                  decoration: BoxDecoration(
+                    color: colorScheme.primary,
+                    borderRadius: BorderRadius.circular(1),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Spacer(),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Icon(Icons.shuffle_rounded, size: 10, color: fgMuted),
+              Icon(Icons.skip_previous_rounded, size: 13, color: fg),
+              Container(
+                width: 18,
+                height: 18,
+                decoration: BoxDecoration(
+                  color: colorScheme.primary,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  Icons.play_arrow_rounded,
+                  size: 12,
+                  color: colorScheme.onPrimary,
+                ),
+              ),
+              Icon(Icons.skip_next_rounded, size: 13, color: fg),
+              Icon(Icons.repeat_rounded, size: 10, color: fgMuted),
+            ],
+          ),
+          const SizedBox(height: 2),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMiniChip(IconData icon) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+      decoration: BoxDecoration(
+        color: colorScheme.secondaryContainer.withValues(alpha: 0.75),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Icon(icon, size: 8, color: colorScheme.onSecondaryContainer),
     );
   }
 }

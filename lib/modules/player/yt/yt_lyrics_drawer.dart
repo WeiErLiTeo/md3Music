@@ -5,6 +5,7 @@ import 'package:m3e_core/m3e_core.dart';
 import 'package:provider/provider.dart';
 
 import '../../../core/utils/local_lyric_loader.dart';
+import '../../../core/utils/lyric_line_balance.dart';
 import '../../../data/models/song.dart';
 import '../../../data/repositories/song_match_repository.dart';
 import '../../../providers/kugou_provider.dart';
@@ -329,10 +330,12 @@ class _YtLyricsDrawerContentState extends State<YtLyricsDrawerContent> {
     if (!mounted || _loadedSongId != song.id) return;
 
     if (lyricText.isNotEmpty) {
-      final parsed = LyricParserChain.parse(
-        lyricText,
-        translationText: translationText,
-        romaText: romaText,
+      final parsed = _normalizeCompoundWords(
+        LyricParserChain.parse(
+          lyricText,
+          translationText: translationText,
+          romaText: romaText,
+        ),
       );
       setState(() {
         _loading = false;
@@ -344,6 +347,78 @@ class _YtLyricsDrawerContentState extends State<YtLyricsDrawerContent> {
         _parsedLines = const [];
       });
     }
+  }
+
+  /// 拆分 KRC 中将整句或多歌手名（含内部空格或 `/`、`\`）打包为单个 [LyricWord] 的复合词，
+  /// 避免单词超宽无法换行或行高预留不足导致重叠。
+  static List<LyricLine> _normalizeCompoundWords(List<LyricLine> lines) {
+    List<LyricLine>? out;
+    for (int i = 0; i < lines.length; i++) {
+      final line = lines[i];
+      if (line.words.isEmpty) continue;
+      bool needsSplit = false;
+      for (final w in line.words) {
+        final trimmed = w.text.trim();
+        if (trimmed.length >= 4 &&
+            (trimmed.contains(' ') ||
+                trimmed.contains('/') ||
+                trimmed.contains('\\'))) {
+          needsSplit = true;
+          break;
+        }
+      }
+      if (!needsSplit) continue;
+
+      final newWords = <LyricWord>[];
+      for (final w in line.words) {
+        final trimmed = w.text.trim();
+        if (trimmed.length < 4 ||
+            (!trimmed.contains(' ') &&
+                !trimmed.contains('/') &&
+                !trimmed.contains('\\'))) {
+          newWords.add(w);
+          continue;
+        }
+        final rawUnits = segmentLyricUnits(
+          w.text.replaceAll('/', '/ ').replaceAll('\\', '\\ '),
+        );
+        final mergedUnits = <String>[];
+        for (final u in rawUnits) {
+          final restored = u.replaceAll('/ ', '/').replaceAll('\\ ', '\\');
+          if (restored.trim().isEmpty && mergedUnits.isNotEmpty) {
+            mergedUnits[mergedUnits.length - 1] = mergedUnits.last + restored;
+          } else if (restored.isNotEmpty) {
+            mergedUnits.add(restored);
+          }
+        }
+        if (mergedUnits.length <= 1) {
+          newWords.add(w);
+          continue;
+        }
+        final totalLen = w.text.length;
+        int offsetChars = 0;
+        for (int idx = 0; idx < mergedUnits.length; idx++) {
+          final piece = mergedUnits[idx];
+          final startRatio = offsetChars / totalLen;
+          final endRatio = (offsetChars + piece.length) / totalLen;
+          final pieceStart = w.startTime + (w.duration * startRatio).round();
+          final pieceEnd = idx == mergedUnits.length - 1
+              ? w.startTime + w.duration
+              : w.startTime + (w.duration * endRatio).round();
+          newWords.add(
+            LyricWord(
+              startTime: pieceStart,
+              duration: (pieceEnd - pieceStart).clamp(0, w.duration),
+              text: piece,
+            ),
+          );
+          offsetChars += piece.length;
+        }
+      }
+      out ??= List<LyricLine>.of(lines);
+      out[i] = line.copyWith(words: newWords);
+    }
+    return out ?? lines;
   }
 
   bool get _hasTranslation {

@@ -44,7 +44,9 @@ class YtMoreMenu {
     return result;
   }
 
-  static Song resolveMatchedSong(Song song) {
+  /// 解析在线匹配元数据，但保留原始 400 尺寸封面 URL（供背景流光取色与高斯模糊层复用
+  /// 列表/MiniPlayer 既有缓存，零网络等待、不与主封面争抢解码带宽）
+  static Song resolveMatchedSongBase(Song song) {
     Song base = song;
     if (!song.isOnline) {
       final info = SongMatchRepository().get(song.id);
@@ -52,6 +54,11 @@ class YtMoreMenu {
         base = info.toSong();
       }
     }
+    return base;
+  }
+
+  static Song resolveMatchedSong(Song song) {
+    final base = resolveMatchedSongBase(song);
     final upgradedUri = upgradeArtworkUri(base.artworkUri);
     if (upgradedUri != base.artworkUri) {
       return base.copyWith(artworkUri: upgradedUri);
