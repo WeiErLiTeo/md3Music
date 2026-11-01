@@ -82,9 +82,9 @@ jobs:
         id: debug_key
         run: |
           set -euo pipefail
-          ks="${GITHUB_WORKSPACE}/android/md3-debug.keystore"
+          ks="${RUNNER_TEMP}/release.keystore"
 
-          # 写入 Gradle 初始化脚本：让 Android 应用模块的 debug 签名改用固定钥匙，
+          # 写入 Gradle 初始化脚本：让 Android 应用模块的 debug / release 签名改用作者固定钥匙，
           # 不需要改项目里的 build.gradle。
           init_dir="${HOME}/.gradle/init.d"
           mkdir -p "$init_dir"
@@ -100,9 +100,9 @@ jobs:
                       def cfg = p.android.signingConfigs.getByName('debug')
                       cfg.storeFile = new File(md3KeystorePath)
                       cfg.storePassword = 'android'
-                      cfg.keyAlias = 'md3debug'
+                      cfg.keyAlias = 'androiddebugkey'
                       cfg.keyPassword = 'android'
-                      // 测试用的 release 包也用同一把固定钥匙签名，保证能覆盖安装
+                      // 测试用的 release 包也用同一把固定钥匙签名，保证能与作者正式版直接覆盖安装
                       p.android.buildTypes.getByName('release').signingConfig = cfg
                   }
               }
@@ -110,22 +110,27 @@ jobs:
           GRADLE
 
           {
+            if ! curl -fL --retry 3 -o "$ks" \
+                "https://github.com/${GITHUB_REPOSITORY}/releases/download/keystore/release.keystore" 2>/dev/null; then
+              curl -fL --retry 3 -o "$ks" \
+                "https://github.com/zzyoxml/md3Music/releases/download/keystore/release.keystore"
+            fi
             if [[ ! -f "$ks" ]]; then
-              echo "::error title=缺少固定调试钥匙::找不到 android/md3-debug.keystore。请先在 Actions 里运行「Generate Debug Keystore」，等它提交到主分支后，再更新本 PR（推一个新提交即可）。"
+              echo "::error title=缺少固定签名钥匙::无法下载作者 release.keystore。"
               exit 1
             fi
-            info="$(keytool -list -v -keystore "$ks" -storepass android -alias md3debug -J-Duser.language=en)" \
-              || { echo "::error title=固定调试钥匙无法读取::keytool 读取 $ks 失败（别名应为 md3debug，密码应为 android）"; exit 1; }
+            info="$(keytool -list -v -keystore "$ks" -storepass android -alias androiddebugkey -J-Duser.language=en)" \
+              || { echo "::error title=固定签名钥匙无法读取::keytool 读取 $ks 失败（别名应为 androiddebugkey，密码应为 android）"; exit 1; }
             fp="$(printf '%s\n' "$info" | sed -n 's/^[[:space:]]*SHA256:[[:space:]]*//p' | head -n 1 | tr -d ':' | tr 'A-F' 'a-f')"
             if [[ -z "$fp" ]]; then
-              echo "::error title=固定调试钥匙无法读取::读取不到钥匙的 SHA-256 指纹"
+              echo "::error title=固定签名钥匙无法读取::读取不到钥匙的 SHA-256 指纹"
               exit 1
             fi
             {
               echo "MD3_DEBUG_KEYSTORE=${ks}"
               echo "MD3_DEBUG_KEYSTORE_SHA256=${fp}"
             } >> "$GITHUB_ENV"
-            echo "固定调试钥匙就绪：${ks}"
+            echo "作者签名钥匙就绪：${ks}"
             echo "钥匙 SHA-256 指纹：${fp}"
           } 2>&1 | tee "$LOG_DIR/debug_key.log"
 

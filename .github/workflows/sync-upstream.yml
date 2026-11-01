@@ -108,7 +108,6 @@ jobs:
 
           # 3. 对最小挂载文件做三方合并 (current=yt3, base=BASE_SHA, other=UPSTREAM_SHA)
           HOOK_FILES=(
-            "android/app/build.gradle.kts"
             "lib/providers/theme_provider.dart"
             "lib/modules/player/full_player_route.dart"
             "lib/modules/player/player_drag_overlay.dart"
@@ -118,16 +117,17 @@ jobs:
             "test/modules/player/full_player_style_sync_test.dart"
           )
 
-          # 以 origin/yt3 为父提交创建同步分支（保证 PR 历史干净，且 .github/workflows 零变动）
+          # 以 origin/yt3 为父提交创建同步分支（保证 PR 历史干净）
           git checkout -B "${SYNC_BRANCH}" origin/yt3
 
-          # 先把整个工作区替换成 upstream/rust-local-force 的最新快照
+          # 先把整个工作区替换成 upstream/rust-local-force 的最新快照（包含上游最新工作流和 build.gradle.kts）
           git rm -rf . > /dev/null
           git checkout upstream/rust-local-force -- .
 
-          # 恢复 .github/workflows 为 yt3 自己的版本（防止上游冲掉工作流，且避免 GITHUB_TOKEN workflows 权限报错）
-          rm -rf .github/workflows
-          git checkout origin/yt3 -- .github/workflows
+          # 仅保留 yt3 自己的 debug-build.yml 与 sync-upstream.yml，其余工作流全部跟随上游最新代码同步
+          git checkout origin/yt3 -- \
+            .github/workflows/debug-build.yml \
+            .github/workflows/sync-upstream.yml
 
           # 恢复 YT 纯新增文件并更新上游基准 SHA 标记
           git checkout origin/yt3 -- \
