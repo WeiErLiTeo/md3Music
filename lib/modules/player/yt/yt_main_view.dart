@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:math' as math;
-import 'dart:ui' as ui;
 
 import 'package:material_ui/material_ui.dart';
 import 'package:m3e_core/m3e_core.dart';
@@ -74,6 +73,8 @@ class YtMainView extends StatefulWidget {
   final GestureDragUpdateCallback? onDragUpdate;
   final GestureDragEndCallback? onDragEnd;
   final GestureDragCancelCallback? onDragCancel;
+  final void Function(bool isVideoMode, VideoPlayerController? controller)?
+  onVideoStateChanged;
 
   const YtMainView({
     super.key,
@@ -92,6 +93,7 @@ class YtMainView extends StatefulWidget {
     this.onDragUpdate,
     this.onDragEnd,
     this.onDragCancel,
+    this.onVideoStateChanged,
   });
 
   @override
@@ -313,6 +315,7 @@ class _YtMainViewState extends State<YtMainView>
       _videoLoading = true;
       _videoError = null;
     });
+    _notifyVideoState();
 
     final mvInfo = _currentMvInfo!;
     final api = KugouApiClient();
@@ -363,6 +366,7 @@ class _YtMainViewState extends State<YtMainView>
     _videoController = null;
     old?.removeListener(_onInlineVideoTick);
     unawaited(old?.dispose());
+    _notifyVideoState();
 
     _currentVideoUrl = url;
     _handlingMvCompletion = false;
@@ -394,6 +398,7 @@ class _YtMainViewState extends State<YtMainView>
           _videoLoading = false;
           _videoError = null;
         });
+        _notifyVideoState();
         _showMvControlsTemporarily();
       }
     } catch (_) {
@@ -490,6 +495,11 @@ class _YtMainViewState extends State<YtMainView>
     }
   }
 
+  void _notifyVideoState() {
+    if (!mounted) return;
+    widget.onVideoStateChanged?.call(_isVideoMode, _videoController);
+  }
+
   void _exitVideoMode({bool resumeAudio = true}) {
     if (!_isVideoMode && _videoController == null) return;
     AppHaptics.lightImpact(HapticCategory.control);
@@ -500,6 +510,7 @@ class _YtMainViewState extends State<YtMainView>
         _videoLoading = false;
         _videoError = null;
       });
+      _notifyVideoState();
     }
   }
 
@@ -989,15 +1000,6 @@ class _YtMainViewState extends State<YtMainView>
         return Stack(
           fit: StackFit.expand,
           children: [
-            // 当处于 MV 视频模式时，同源动态高斯模糊光晕 100% 全屏延伸入侵（从顶栏直达最底部把手），
-            // 彻底消除下半屏断层与分界横线
-            if (_isVideoMode)
-              Positioned.fill(
-                child: IgnorePointer(
-                  child: _buildMvAmbientInvasionBackdrop(resolvedSong),
-                ),
-              ),
-
             // 封面 / 全宽无界 MV 视频层
             Positioned(
               left: _isVideoMode ? 0.0 : normalCoverLeft,
@@ -1119,12 +1121,6 @@ class _YtMainViewState extends State<YtMainView>
     return Stack(
       fit: StackFit.expand,
       children: [
-        if (_isVideoMode)
-          Positioned.fill(
-            child: IgnorePointer(
-              child: _buildMvAmbientInvasionBackdrop(resolvedSong),
-            ),
-          ),
         Padding(
           padding: EdgeInsets.only(
             top: padTop,
@@ -1230,65 +1226,6 @@ class _YtMainViewState extends State<YtMainView>
           ),
         ),
       ],
-    );
-  }
-
-  /// MV 视频模式下 100% 全屏延伸入侵整个播放器的同源动态柔光高斯模糊层
-  Widget _buildMvAmbientInvasionBackdrop(Song resolvedSong) {
-    final ctrl = _videoController;
-    final initialized = ctrl != null && ctrl.value.isInitialized;
-    final vSize = initialized ? ctrl.value.size : Size.zero;
-    final vW = vSize.width > 0 ? vSize.width : 160.0;
-    final vH = vSize.height > 0 ? vSize.height : 90.0;
-    final baseSong = YtMoreMenu.resolveMatchedSongBase(resolvedSong);
-
-    return RepaintBoundary(
-      child: ImageFiltered(
-        imageFilter: ui.ImageFilter.blur(
-          sigmaX: 46,
-          sigmaY: 46,
-          tileMode: TileMode.mirror,
-        ),
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            PlayerArtworkImage(
-              artworkUri: baseSong.artworkUri,
-              fallbackFilePath: baseSong.localPath,
-              isFill: true,
-              fit: BoxFit.cover,
-              iconSize: 48,
-              backgroundColor: Colors.transparent,
-              iconColor: Colors.white24,
-            ),
-            if (initialized)
-              FittedBox(
-                fit: BoxFit.cover,
-                clipBehavior: Clip.hardEdge,
-                child: SizedBox(
-                  width: vW,
-                  height: vH,
-                  child: VideoPlayer(ctrl),
-                ),
-              ),
-            DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  stops: const [0.0, 0.25, 0.65, 1.0],
-                  colors: [
-                    Colors.black.withValues(alpha: 0.26),
-                    Colors.black.withValues(alpha: 0.14),
-                    Colors.black.withValues(alpha: 0.34),
-                    Colors.black.withValues(alpha: 0.56),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 

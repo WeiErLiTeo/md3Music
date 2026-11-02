@@ -1744,14 +1744,23 @@ class _SettingsPageState extends State<SettingsPage>
     ColorScheme colorScheme, {
     required bool first,
   }) {
+    final disabledInYt =
+        context.watch<ThemeProvider>().playerStyle == PlayerStyle.ytMusic &&
+        (subpage.title == '顶栏与横屏布局' || subpage.title == '音乐频谱');
     return Padding(
       padding: EdgeInsets.only(top: first ? AppSpacing.sm : 0),
-      child: _buildNavEntryTile(
-        icon: subpage.icon,
-        title: subpage.title,
-        subtitle: subpage.description,
-        colorScheme: colorScheme,
-        onTap: () => _openSubpage(subpage.title),
+      child: IgnorePointer(
+        ignoring: disabledInYt,
+        child: Opacity(
+          opacity: disabledInYt ? 0.38 : 1.0,
+          child: _buildNavEntryTile(
+            icon: subpage.icon,
+            title: subpage.title,
+            subtitle: subpage.description,
+            colorScheme: colorScheme,
+            onTap: () => _openSubpage(subpage.title),
+          ),
+        ),
       ),
     );
   }
@@ -7088,9 +7097,6 @@ class _SettingsPageState extends State<SettingsPage>
           preview: SettingsYtStylePreview(colorScheme: colorScheme),
         ),
       ],
-    ).withYtStyleUnsupportedHint(
-      colorScheme: colorScheme,
-      isYtStyle: currentStyle == PlayerStyle.ytMusic,
     );
   }
 

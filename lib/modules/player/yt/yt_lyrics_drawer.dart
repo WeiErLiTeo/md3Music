@@ -5,6 +5,7 @@ import 'package:flutter/rendering.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:m3e_core/m3e_core.dart';
 import 'package:provider/provider.dart';
+import 'package:video_player/video_player.dart';
 
 import '../../../core/services/audio_service.dart';
 import '../../../core/utils/app_haptics.dart';
@@ -31,6 +32,8 @@ import '../widgets/play_pause_morph_icon.dart';
 class YtLyricsDrawer extends StatefulWidget {
   final Animation<double> expansion;
   final Song song;
+  final bool isVideoMode;
+  final VideoPlayerController? videoController;
   final VoidCallback onClose;
   final GestureDragUpdateCallback? onVerticalDragUpdate;
   final GestureDragEndCallback? onVerticalDragEnd;
@@ -39,6 +42,8 @@ class YtLyricsDrawer extends StatefulWidget {
     super.key,
     required this.expansion,
     required this.song,
+    this.isVideoMode = false,
+    this.videoController,
     required this.onClose,
     this.onVerticalDragUpdate,
     this.onVerticalDragEnd,
@@ -99,6 +104,8 @@ class _YtLyricsDrawerState extends State<YtLyricsDrawer> {
                         song: widget.song,
                         onTap: widget.onClose,
                         showCover: false,
+                        hideCoverSlot: widget.isVideoMode,
+                        videoController: widget.videoController,
                         onVerticalDragUpdate: widget.onVerticalDragUpdate,
                         onVerticalDragEnd: widget.onVerticalDragEnd,
                       ),
@@ -128,6 +135,8 @@ class YtMiniBar extends StatelessWidget {
   final Song song;
   final VoidCallback onTap;
   final bool showCover;
+  final bool hideCoverSlot;
+  final VideoPlayerController? videoController;
   final GestureDragUpdateCallback? onVerticalDragUpdate;
   final GestureDragEndCallback? onVerticalDragEnd;
 
@@ -136,6 +145,8 @@ class YtMiniBar extends StatelessWidget {
     required this.song,
     required this.onTap,
     this.showCover = true,
+    this.hideCoverSlot = false,
+    this.videoController,
     this.onVerticalDragUpdate,
     this.onVerticalDragEnd,
   });
@@ -153,6 +164,7 @@ class YtMiniBar extends StatelessWidget {
     );
     final player = context.read<PlayerProvider>();
     final audioService = AudioService();
+    final vCtrl = videoController;
 
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
@@ -163,7 +175,7 @@ class YtMiniBar extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 16),
         child: Row(
           children: [
-            if (showCover)
+            if (showCover) ...[
               ClipRRect(
                 borderRadius: BorderRadius.circular(6),
                 child: SizedBox(
@@ -179,10 +191,12 @@ class YtMiniBar extends StatelessWidget {
                     iconColor: Colors.white54,
                   ),
                 ),
-              )
-            else
+              ),
+              const SizedBox(width: 12),
+            ] else if (!hideCoverSlot) ...[
               const SizedBox(width: 40, height: 40),
-            const SizedBox(width: 12),
+              const SizedBox(width: 12),
+            ],
             Expanded(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -220,29 +234,56 @@ class YtMiniBar extends StatelessWidget {
                   ),
                   onPressed: () => player.previous(),
                 ),
-                StreamBuilder<bool>(
-                  stream: audioService.playingStream,
-                  initialData: audioService.playing,
-                  builder: (context, snapshot) {
-                    final enginePlaying = snapshot.data ?? false;
-                    final effectivePlaying = state.isPlaying || enginePlaying;
-                    final showPauseIcon = effectivePlaying && !state.isBuffering;
-                    return IconButton(
-                      icon: PlayPauseMorphIcon(
-                        isPlaying: showPauseIcon,
-                        size: 26,
-                        color: Colors.white,
-                      ),
-                      onPressed: () {
-                        if (player.isPlaying || audioService.playing) {
-                          player.pause();
-                        } else {
-                          player.resume();
-                        }
-                      },
-                    );
-                  },
-                ),
+                if (hideCoverSlot && vCtrl != null && vCtrl.value.isInitialized)
+                  ValueListenableBuilder<VideoPlayerValue>(
+                    valueListenable: vCtrl,
+                    builder: (context, vVal, _) {
+                      return IconButton(
+                        icon: PlayPauseMorphIcon(
+                          isPlaying: vVal.isPlaying,
+                          size: 26,
+                          color: Colors.white,
+                        ),
+                        onPressed: () {
+                          if (vCtrl.value.isPlaying) {
+                            vCtrl.pause();
+                          } else {
+                            if (vCtrl.value.position >=
+                                vCtrl.value.duration -
+                                    const Duration(milliseconds: 300)) {
+                              vCtrl.seekTo(Duration.zero);
+                            }
+                            vCtrl.play();
+                          }
+                        },
+                      );
+                    },
+                  )
+                else
+                  StreamBuilder<bool>(
+                    stream: audioService.playingStream,
+                    initialData: audioService.playing,
+                    builder: (context, snapshot) {
+                      final enginePlaying = snapshot.data ?? false;
+                      final effectivePlaying = state.isPlaying || enginePlaying;
+                      final showPauseIcon =
+                          effectivePlaying && !state.isBuffering;
+                      return IconButton(
+                        icon: PlayPauseMorphIcon(
+                          isPlaying: showPauseIcon,
+                          size: 26,
+                          color: Colors.white,
+                        ),
+                        onPressed: () {
+                          if (player.isPlaying || audioService.playing) {
+                            player.pause();
+                          } else {
+                            player.resume();
+                          }
+                        },
+                      );
+                    },
+                  ),
                 IconButton(
                   icon: const Icon(
                     Icons.skip_next,
@@ -767,6 +808,8 @@ class _RomanizationGlyphPainter extends CustomPainter {
 class YtQueueDrawer extends StatefulWidget {
   final Animation<double> expansion;
   final Song song;
+  final bool isVideoMode;
+  final VideoPlayerController? videoController;
   final PlaylistScrollAnchor scrollAnchor;
   final GlobalKey<PlayerPlaylistViewState>? playlistKey;
   final VoidCallback onClose;
@@ -777,6 +820,8 @@ class YtQueueDrawer extends StatefulWidget {
     super.key,
     required this.expansion,
     required this.song,
+    this.isVideoMode = false,
+    this.videoController,
     required this.scrollAnchor,
     this.playlistKey,
     required this.onClose,
@@ -1184,6 +1229,8 @@ class _YtQueueDrawerState extends State<YtQueueDrawer> {
                         song: widget.song,
                         onTap: widget.onClose,
                         showCover: false,
+                        hideCoverSlot: widget.isVideoMode,
+                        videoController: widget.videoController,
                         onVerticalDragUpdate: widget.onVerticalDragUpdate,
                         onVerticalDragEnd: widget.onVerticalDragEnd,
                       ),
@@ -1480,6 +1527,8 @@ class _RenderYtSortButtonTouchGate extends RenderProxyBox {
 class YtCommentsDrawer extends StatefulWidget {
   final Animation<double> expansion;
   final Song song;
+  final bool isVideoMode;
+  final VideoPlayerController? videoController;
   final VoidCallback onClose;
   final GestureDragUpdateCallback? onVerticalDragUpdate;
   final GestureDragEndCallback? onVerticalDragEnd;
@@ -1488,6 +1537,8 @@ class YtCommentsDrawer extends StatefulWidget {
     super.key,
     required this.expansion,
     required this.song,
+    this.isVideoMode = false,
+    this.videoController,
     required this.onClose,
     this.onVerticalDragUpdate,
     this.onVerticalDragEnd,
@@ -1546,6 +1597,8 @@ class _YtCommentsDrawerState extends State<YtCommentsDrawer> {
                         song: widget.song,
                         onTap: widget.onClose,
                         showCover: false,
+                        hideCoverSlot: widget.isVideoMode,
+                        videoController: widget.videoController,
                         onVerticalDragUpdate: widget.onVerticalDragUpdate,
                         onVerticalDragEnd: widget.onVerticalDragEnd,
                       ),

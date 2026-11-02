@@ -513,7 +513,9 @@ class PlayerSystemUiScope extends StatelessWidget {
         final useMain = forceMainStyle || (dragRoute != null && !expanded);
         return AnnotatedRegion<SystemUiOverlayStyle>(
           value: useMain
-              ? mainPageOverlayStyle(context)
+              ? mainPageOverlayStyle(context).copyWith(
+                  statusBarColor: const Color(0x00000000),
+                )
               : (expandedOverlayStyle ?? kPlayerOverlayStyle),
           child: child,
         );

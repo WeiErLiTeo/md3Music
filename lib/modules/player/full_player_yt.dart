@@ -2,9 +2,9 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
-import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
+import 'package:video_player/video_player.dart';
 
 import '../../main.dart' show appNavigatorKey;
 import '../../core/layout/display_space.dart';
@@ -17,6 +17,7 @@ import '../../widgets/player_artwork_image.dart';
 import '../../widgets/player_playlist_view.dart';
 import '../../utils/landscape_immersive.dart';
 import 'full_player_route.dart';
+import 'player_cover_morph.dart';
 import 'player_page_role.dart';
 import 'yt/yt_background.dart';
 import 'yt/yt_lyrics_drawer.dart';
@@ -45,10 +46,12 @@ class _FullPlayerYtState extends State<FullPlayerYt>
       GlobalKey<PlayerPlaylistViewState>();
   Rect? _measuredCoverRect;
 
-  DraggablePlayerRoute? _attachedRoute;
+  bool _isVideoMode = false;
+  VideoPlayerController? _mvVideoController;
+
+  bool _systemUiInitialized = false;
+  bool _systemUiModified = false;
   DraggablePlayerRoute? _dragRoute;
-  bool? _lastAppliedPlayerStatusBar;
-  SystemUiOverlayStyle? _cachedMainOverlayStyle;
 
   DraggablePlayerRoute? _topBarDragRoute;
   double _topBarDragDistance = 0.0;
@@ -65,79 +68,74 @@ class _FullPlayerYtState extends State<FullPlayerYt>
       vsync: this,
       duration: const Duration(milliseconds: 340),
       reverseDuration: const Duration(milliseconds: 280),
-    );
+    )..addListener(_syncCoverMorphVisibility);
     _queueController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 340),
       reverseDuration: const Duration(milliseconds: 280),
-    );
+    )..addListener(_syncCoverMorphVisibility);
     _commentsController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 340),
       reverseDuration: const Duration(milliseconds: 280),
-    );
+    )..addListener(_syncCoverMorphVisibility);
+  }
+
+  void _syncCoverMorphVisibility() {
+    if (!mounted || _isDragOverlay) return;
+    final drawerOpen =
+        _lyricsController.value > 0.001 ||
+        _queueController.value > 0.001 ||
+        _commentsController.value > 0.001;
+    PlayerCoverMorphBus.instance
+      ..coverSuppressed = _isVideoMode
+      ..coverSuppressOwner = this;
+    playerCoverVisible.value = !_isVideoMode && !drawerOpen;
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _cachedMainOverlayStyle = mainPageOverlayStyle(context);
-
+    if (_systemUiInitialized) return;
+    _systemUiInitialized = true;
     final route = ModalRoute.of(context);
-    final draggableRoute = route is DraggablePlayerRoute ? route : null;
-    if (_attachedRoute != draggableRoute) {
-      _attachedRoute?.controller.removeListener(_onRouteAnimationTick);
-      _attachedRoute?.controller.removeStatusListener(_onRouteAnimationStatus);
-      _attachedRoute = draggableRoute;
-      if (draggableRoute != null && !_isDragOverlay && !widget.dockMode) {
-        _dragRoute = draggableRoute.controller.value < 1.0
-            ? draggableRoute
-            : null;
-        draggableRoute.controller.addListener(_onRouteAnimationTick);
-        draggableRoute.controller.addStatusListener(_onRouteAnimationStatus);
-        _syncStatusBarForProgress(draggableRoute.controller.value);
-      }
+    if (route is DraggablePlayerRoute && route.isDragMode) {
+      _dragRoute = route;
+      route.controller.addStatusListener(_onDragRouteStatus);
+    } else if (route == null || widget.dockMode) {
+      _dragRoute = null;
+      _systemUiModified = false;
+    } else {
+      _dragRoute = null;
+      applyImmersiveForOrientation();
+      _systemUiModified = true;
     }
   }
 
-  void _onRouteAnimationStatus(AnimationStatus status) {
-    if (!mounted) return;
+  void _onDragRouteStatus(AnimationStatus status) {
     if (status == AnimationStatus.completed) {
-      if (_dragRoute != null) {
-        setState(() => _dragRoute = null);
-      }
-      _syncStatusBarForProgress(1.0);
-    } else if (status == AnimationStatus.reverse ||
-        status == AnimationStatus.dismissed) {
-      _syncStatusBarForProgress(_attachedRoute?.controller.value ?? 0.0);
+      applyImmersiveForOrientation();
+      _systemUiModified = true;
+      _dragRoute?.controller.removeStatusListener(_onDragRouteStatus);
+      _dragRoute = null;
+      if (mounted) setState(() {});
+    } else if (status == AnimationStatus.dismissed) {
+      _dragRoute?.controller.removeStatusListener(_onDragRouteStatus);
+      _dragRoute = null;
     }
-  }
-
-  void _onRouteAnimationTick() {
-    final route = _attachedRoute;
-    if (route == null || _isDragOverlay || widget.dockMode) return;
-    _syncStatusBarForProgress(route.controller.value);
-  }
-
-  void _syncStatusBarForProgress(double value) {
-    if (_isDragOverlay || widget.dockMode) return;
-    // PlayerPanelFrame 在收起/下拉 (y > topPadding / 2) 时会裁剪掉顶部区域，
-    // 导致 AnnotatedRegion 脱离状态栏采样点而闪烁；这里在阈值处主动同步 SystemChrome。
-    final bool usePlayerBar = !_isDismissing && value >= 0.92;
-    if (_lastAppliedPlayerStatusBar == usePlayerBar) return;
-    _lastAppliedPlayerStatusBar = usePlayerBar;
-    final targetStyle = usePlayerBar
-        ? kPlayerOverlayStyle
-        : (_cachedMainOverlayStyle ?? kPlayerOverlayStyle);
-    SystemChrome.setSystemUIOverlayStyle(targetStyle);
   }
 
   @override
   void dispose() {
-    _attachedRoute?.controller.removeListener(_onRouteAnimationTick);
-    _attachedRoute?.controller.removeStatusListener(_onRouteAnimationStatus);
-    if (!_isDragOverlay && !widget.dockMode && _cachedMainOverlayStyle != null) {
-      SystemChrome.setSystemUIOverlayStyle(_cachedMainOverlayStyle!);
+    _dragRoute?.controller.removeStatusListener(_onDragRouteStatus);
+    if (identical(PlayerCoverMorphBus.instance.coverSuppressOwner, this)) {
+      PlayerCoverMorphBus.instance
+        ..coverSuppressed = false
+        ..coverSuppressOwner = null;
+      playerCoverVisible.value = true;
+    }
+    if (_systemUiModified) {
+      restoreSystemUi();
     }
     _lyricsController.dispose();
     _queueController.dispose();
@@ -322,7 +320,6 @@ class _FullPlayerYtState extends State<FullPlayerYt>
     final route = ModalRoute.of(context);
     if (route is! DraggablePlayerRoute) return;
     _topBarDragRoute = route;
-    _dragRoute = route;
     route.beginDrag();
     route.controller.value = 1.0;
     final total = route.dragOriginTop ?? playerDragOriginTop;
@@ -375,7 +372,6 @@ class _FullPlayerYtState extends State<FullPlayerYt>
     if (collapse) {
       AppHaptics.lightImpact(HapticCategory.gesture);
       _isDismissing = true;
-      _syncStatusBarForProgress(0.0);
       route.dismiss();
     } else {
       _isDismissing = false;
@@ -400,9 +396,7 @@ class _FullPlayerYtState extends State<FullPlayerYt>
     if (widget.dockMode) return;
     final route = ModalRoute.of(context);
     _isDismissing = true;
-    _syncStatusBarForProgress(0.0);
     if (route is DraggablePlayerRoute) {
-      _dragRoute = route;
       route.dismiss();
     } else if (route == null) {
       playerDragActive.value = false;
@@ -454,7 +448,6 @@ class _FullPlayerYtState extends State<FullPlayerYt>
     final route = ModalRoute.of(context);
     if (route is DraggablePlayerRoute) {
       _isDismissing = true;
-      _syncStatusBarForProgress(0.0);
       route.dismiss();
       Future.delayed(const Duration(milliseconds: 300), () {
         navigatorState?.push(pageRoute);
@@ -462,6 +455,71 @@ class _FullPlayerYtState extends State<FullPlayerYt>
     } else {
       navigatorState?.push(pageRoute);
     }
+  }
+
+  Widget _buildMvAmbientBackdrop(Song baseSong) {
+    final ctrl = _mvVideoController;
+    final hasVideo = ctrl != null && ctrl.value.isInitialized;
+    return IgnorePointer(
+      child: RepaintBoundary(
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            const ColoredBox(color: Color(0xFF030303)),
+            ImageFiltered(
+              imageFilter: ui.ImageFilter.blur(
+                sigmaX: 54,
+                sigmaY: 54,
+                tileMode: TileMode.decal,
+              ),
+              child: Transform.scale(
+                scale: 1.38,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    PlayerArtworkImage(
+                      artworkUri: baseSong.artworkUri,
+                      fallbackFilePath: baseSong.localPath,
+                      isFill: true,
+                      fit: BoxFit.cover,
+                      backgroundColor: const Color(0xFF050505),
+                    ),
+                    if (hasVideo)
+                      FittedBox(
+                        fit: BoxFit.cover,
+                        clipBehavior: Clip.hardEdge,
+                        child: SizedBox(
+                          width: ctrl.value.size.width > 0
+                              ? ctrl.value.size.width
+                              : 16,
+                          height: ctrl.value.size.height > 0
+                              ? ctrl.value.size.height
+                              : 9,
+                          child: VideoPlayer(ctrl),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+            const DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Color(0x66000000),
+                    Color(0x8A050505),
+                    Color(0xD8030303),
+                  ],
+                  stops: [0.0, 0.48, 1.0],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -518,6 +576,8 @@ class _FullPlayerYtState extends State<FullPlayerYt>
               },
             ),
           ),
+          if (_isVideoMode)
+            Positioned.fill(child: _buildMvAmbientBackdrop(baseSong)),
           // 主界面层：随歌词抽屉、播放列表抽屉或评论抽屉展开淡出并轻微上移
           AnimatedBuilder(
             animation: overlayExpansion,
@@ -533,6 +593,16 @@ class _FullPlayerYtState extends State<FullPlayerYt>
                 onOpenComments: _openComments,
                 onCoverRectMeasured: (rect) {
                   _measuredCoverRect = rect;
+                },
+                onVideoStateChanged: (isVideo, ctrl) {
+                  if (_isVideoMode == isVideo && _mvVideoController == ctrl) {
+                    return;
+                  }
+                  setState(() {
+                    _isVideoMode = isVideo;
+                    _mvVideoController = ctrl;
+                  });
+                  _syncCoverMorphVisibility();
                 },
                 onPushPage: _pushOverPlayer,
                 onDismissAndPush: _dismissAndPush,
@@ -571,6 +641,8 @@ class _FullPlayerYtState extends State<FullPlayerYt>
               child: YtLyricsDrawer(
                 expansion: _lyricsController,
                 song: resolvedSong,
+                isVideoMode: _isVideoMode,
+                videoController: _mvVideoController,
                 onClose: _closeLyrics,
                 onVerticalDragUpdate: _onLyricsDragUpdate,
                 onVerticalDragEnd: _onLyricsDragEnd,
@@ -581,6 +653,8 @@ class _FullPlayerYtState extends State<FullPlayerYt>
               child: YtQueueDrawer(
                 expansion: _queueController,
                 song: resolvedSong,
+                isVideoMode: _isVideoMode,
+                videoController: _mvVideoController,
                 scrollAnchor: _playlistScrollAnchor,
                 playlistKey: _playlistKey,
                 onClose: _closeQueue,
@@ -593,13 +667,15 @@ class _FullPlayerYtState extends State<FullPlayerYt>
               child: YtCommentsDrawer(
                 expansion: _commentsController,
                 song: resolvedSong,
+                isVideoMode: _isVideoMode,
+                videoController: _mvVideoController,
                 onClose: _closeComments,
                 onVerticalDragUpdate: _onCommentsDragUpdate,
                 onVerticalDragEnd: _onCommentsDragEnd,
               ),
             ),
           ],
-          // 悬浮封面层：仅在歌词/播放列表/评论抽屉拉开（t > 0.001）时挂载，
+          // 悬浮封面层：仅在歌词/播放列表/评论抽屉拉开（t > 0.001）且非视频模式时挂载，
           // 与主封面共享同一份 1080p PlayerArtworkImage 解码档位与 GPU 纹理，
           // 平时抽屉关闭时不常驻挂载，避免切歌首帧与主封面争抢解码通道。
           LayoutBuilder(
@@ -635,7 +711,7 @@ class _FullPlayerYtState extends State<FullPlayerYt>
                         ),
                       )
                       .clamp(0.0, 1.0);
-                  final active = t > 0.001;
+                  final active = t > 0.001 && !_isVideoMode;
                   if (!active) return const SizedBox.shrink();
 
                   final curLeft = ui.lerpDouble(largeRect.left, smallLeft, t)!;
@@ -700,7 +776,7 @@ class _FullPlayerYtState extends State<FullPlayerYt>
 
     return PlayerSystemUiScope(
       dragRoute: _dragRoute,
-      forceMainStyle: _isDragOverlay || widget.dockMode || _isDismissing,
+      forceMainStyle: _isDragOverlay || widget.dockMode,
       child: page,
     );
   }
@@ -871,74 +947,6 @@ class SettingsYtStylePreview extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
       ),
       child: Icon(icon, size: 8, color: colorScheme.onSecondaryContainer),
-    );
-  }
-}
-
-/// 在不新增 `settings_page.dart` 第二处修改的前提下，直接挂载在 `_buildStyleCards` 返回值尾部：
-/// 当选中 YouTube Music 样式时，在卡片正下方展示置灰说明条，标明仅对 MD3 / AM 生效的模块。
-extension SettingsYtStyleCardsExt on Widget {
-  Widget withYtStyleUnsupportedHint({
-    required ColorScheme colorScheme,
-    required bool isYtStyle,
-  }) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        this,
-        AnimatedSize(
-          duration: const Duration(milliseconds: 220),
-          curve: Curves.easeOutCubic,
-          alignment: Alignment.topCenter,
-          child: !isYtStyle
-              ? const SizedBox.shrink()
-              : Padding(
-                  padding: const EdgeInsets.only(top: 10),
-                  child: Opacity(
-                    opacity: 0.56,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 9,
-                      ),
-                      decoration: BoxDecoration(
-                        color: colorScheme.surfaceContainerHighest.withValues(
-                          alpha: 0.55,
-                        ),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: colorScheme.outlineVariant.withValues(
-                            alpha: 0.5,
-                          ),
-                          width: 0.8,
-                        ),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(
-                            Icons.block_flipped,
-                            size: 15,
-                            color: colorScheme.onSurfaceVariant,
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              '当前样式下「顶栏与横屏布局」「音乐频谱」不生效（采用 YT 专属顶栏/横屏分栏与抽屉布局）',
-                              style: TextStyle(
-                                fontSize: 11.5,
-                                color: colorScheme.onSurfaceVariant,
-                                height: 1.3,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-        ),
-      ],
     );
   }
 }
