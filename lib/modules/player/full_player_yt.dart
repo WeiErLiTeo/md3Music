@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
+import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
@@ -37,10 +38,16 @@ class _FullPlayerYtState extends State<FullPlayerYt>
 
   late final AnimationController _lyricsController;
   late final AnimationController _queueController;
+  late final AnimationController _commentsController;
   final PlaylistScrollAnchor _playlistScrollAnchor = PlaylistScrollAnchor();
   final GlobalKey<PlayerPlaylistViewState> _playlistKey =
       GlobalKey<PlayerPlaylistViewState>();
   Rect? _measuredCoverRect;
+
+  DraggablePlayerRoute? _attachedRoute;
+  DraggablePlayerRoute? _dragRoute;
+  bool? _lastAppliedPlayerStatusBar;
+  SystemUiOverlayStyle? _cachedMainOverlayStyle;
 
   DraggablePlayerRoute? _topBarDragRoute;
   double _topBarDragDistance = 0.0;
@@ -63,20 +70,80 @@ class _FullPlayerYtState extends State<FullPlayerYt>
       duration: const Duration(milliseconds: 340),
       reverseDuration: const Duration(milliseconds: 280),
     );
+    _commentsController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 340),
+      reverseDuration: const Duration(milliseconds: 280),
+    );
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _cachedMainOverlayStyle = mainPageOverlayStyle(context);
+
+    final route = ModalRoute.of(context);
+    final draggableRoute = route is DraggablePlayerRoute ? route : null;
+    if (_attachedRoute != draggableRoute) {
+      _attachedRoute?.controller.removeListener(_onRouteAnimationTick);
+      _attachedRoute?.controller.removeStatusListener(_onRouteAnimationStatus);
+      _attachedRoute = draggableRoute;
+      if (draggableRoute != null && !_isDragOverlay && !widget.dockMode) {
+        _dragRoute = draggableRoute.controller.value < 1.0
+            ? draggableRoute
+            : null;
+        draggableRoute.controller.addListener(_onRouteAnimationTick);
+        draggableRoute.controller.addStatusListener(_onRouteAnimationStatus);
+        _syncStatusBarForProgress(draggableRoute.controller.value);
+      }
+    }
+  }
+
+  void _onRouteAnimationStatus(AnimationStatus status) {
+    if (!mounted) return;
+    if (status == AnimationStatus.completed) {
+      if (_dragRoute != null) {
+        setState(() => _dragRoute = null);
+      }
+      _syncStatusBarForProgress(1.0);
+    } else if (status == AnimationStatus.reverse ||
+        status == AnimationStatus.dismissed) {
+      _syncStatusBarForProgress(_attachedRoute?.controller.value ?? 0.0);
+    }
+  }
+
+  void _onRouteAnimationTick() {
+    final route = _attachedRoute;
+    if (route == null || _isDragOverlay || widget.dockMode) return;
+    _syncStatusBarForProgress(route.controller.value);
+  }
+
+  void _syncStatusBarForProgress(double value) {
+    if (_isDragOverlay || widget.dockMode) return;
+    // PlayerPanelFrame 在收起/下拉 (y > topPadding / 2) 时会裁剪掉顶部区域，
+    // 导致 AnnotatedRegion 脱离状态栏采样点而闪烁；这里在阈值处主动同步 SystemChrome。
+    final bool usePlayerBar = !_isDismissing && value >= 0.92;
+    if (_lastAppliedPlayerStatusBar == usePlayerBar) return;
+    _lastAppliedPlayerStatusBar = usePlayerBar;
+    final targetStyle = usePlayerBar
+        ? kPlayerOverlayStyle
+        : (_cachedMainOverlayStyle ?? kPlayerOverlayStyle);
+    SystemChrome.setSystemUIOverlayStyle(targetStyle);
   }
 
   @override
   void dispose() {
+    _attachedRoute?.controller.removeListener(_onRouteAnimationTick);
+    _attachedRoute?.controller.removeStatusListener(_onRouteAnimationStatus);
+    if (!_isDragOverlay && !widget.dockMode && _cachedMainOverlayStyle != null) {
+      SystemChrome.setSystemUIOverlayStyle(_cachedMainOverlayStyle!);
+    }
     _lyricsController.dispose();
     _queueController.dispose();
+    _commentsController.dispose();
     _playlistScrollAnchor.dispose();
     MusicHapticsService.instance.setPlayerPageActive(false);
     super.dispose();
-  }
-
-  DraggablePlayerRoute? get _dragRoute {
-    final route = ModalRoute.of(context);
-    return route is DraggablePlayerRoute ? route : null;
   }
 
   PlayerPageRole get _pageRole => PlayerPageRole.of(context);
@@ -87,6 +154,13 @@ class _FullPlayerYtState extends State<FullPlayerYt>
     AppHaptics.lightImpact(HapticCategory.control);
     if (_queueController.value > 0.0) {
       _queueController.animateBack(
+        0.0,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeInCubic,
+      );
+    }
+    if (_commentsController.value > 0.0) {
+      _commentsController.animateBack(
         0.0,
         duration: const Duration(milliseconds: 220),
         curve: Curves.easeInCubic,
@@ -141,6 +215,13 @@ class _FullPlayerYtState extends State<FullPlayerYt>
         curve: Curves.easeInCubic,
       );
     }
+    if (_commentsController.value > 0.0) {
+      _commentsController.animateBack(
+        0.0,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeInCubic,
+      );
+    }
     _queueController.animateTo(
       1.0,
       duration: const Duration(milliseconds: 340),
@@ -181,11 +262,66 @@ class _FullPlayerYtState extends State<FullPlayerYt>
     }
   }
 
+  void _openComments() {
+    AppHaptics.lightImpact(HapticCategory.control);
+    if (_lyricsController.value > 0.0) {
+      _lyricsController.animateBack(
+        0.0,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeInCubic,
+      );
+    }
+    if (_queueController.value > 0.0) {
+      _queueController.animateBack(
+        0.0,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeInCubic,
+      );
+    }
+    _commentsController.animateTo(
+      1.0,
+      duration: const Duration(milliseconds: 340),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  void _closeComments() {
+    AppHaptics.lightImpact(HapticCategory.control);
+    _commentsController.animateBack(
+      0.0,
+      duration: const Duration(milliseconds: 280),
+      curve: Curves.easeInCubic,
+    );
+  }
+
+  void _onCommentsDragUpdate(DragUpdateDetails details) {
+    final screenHeight = MediaQuery.sizeOf(context).height;
+    final dragRange = (screenHeight * 0.72).clamp(200.0, 900.0);
+    final dy = toDisplaySpaceDelta(context, details.delta).dy;
+    _commentsController.stop();
+    _commentsController.value = (_commentsController.value - dy / dragRange)
+        .clamp(0.0, 1.0);
+  }
+
+  void _onCommentsDragEnd(DragEndDetails details) {
+    final v = details.primaryVelocity ?? 0.0;
+    if (v < -400.0) {
+      _openComments();
+    } else if (v > 400.0) {
+      _closeComments();
+    } else if (_commentsController.value >= 0.5) {
+      _openComments();
+    } else {
+      _closeComments();
+    }
+  }
+
   void _onTopBarDragStart(DragStartDetails details) {
     _isDismissing = false;
     final route = ModalRoute.of(context);
     if (route is! DraggablePlayerRoute) return;
     _topBarDragRoute = route;
+    _dragRoute = route;
     route.beginDrag();
     route.controller.value = 1.0;
     final total = route.dragOriginTop ?? playerDragOriginTop;
@@ -237,6 +373,8 @@ class _FullPlayerYtState extends State<FullPlayerYt>
             downVelocity > kPlayerFlingVelocityThreshold);
     if (collapse) {
       AppHaptics.lightImpact(HapticCategory.gesture);
+      _isDismissing = true;
+      _syncStatusBarForProgress(0.0);
       route.dismiss();
     } else {
       _isDismissing = false;
@@ -260,11 +398,12 @@ class _FullPlayerYtState extends State<FullPlayerYt>
   void _collapseByButton() {
     if (widget.dockMode) return;
     final route = ModalRoute.of(context);
+    _isDismissing = true;
+    _syncStatusBarForProgress(0.0);
     if (route is DraggablePlayerRoute) {
-      _isDismissing = true;
+      _dragRoute = route;
       route.dismiss();
     } else if (route == null) {
-      _isDismissing = true;
       playerDragActive.value = false;
       playerExpansion.value = 0.0;
     } else {
@@ -283,6 +422,10 @@ class _FullPlayerYtState extends State<FullPlayerYt>
     }
     if (_queueController.value > 0.01 || _queueController.isAnimating) {
       _closeQueue();
+      return true;
+    }
+    if (_commentsController.value > 0.01 || _commentsController.isAnimating) {
+      _closeComments();
       return true;
     }
     if (widget.dockMode) return false;
@@ -310,6 +453,7 @@ class _FullPlayerYtState extends State<FullPlayerYt>
     final route = ModalRoute.of(context);
     if (route is DraggablePlayerRoute) {
       _isDismissing = true;
+      _syncStatusBarForProgress(0.0);
       route.dismiss();
       Future.delayed(const Duration(milliseconds: 300), () {
         navigatorState?.push(pageRoute);
@@ -345,6 +489,7 @@ class _FullPlayerYtState extends State<FullPlayerYt>
     final Listenable overlayExpansion = Listenable.merge([
       _lyricsController,
       _queueController,
+      _commentsController,
     ]);
 
     Widget page = Scaffold(
@@ -372,7 +517,7 @@ class _FullPlayerYtState extends State<FullPlayerYt>
               },
             ),
           ),
-          // 主界面层：随歌词抽屉或播放列表抽屉展开淡出并轻微上移
+          // 主界面层：随歌词抽屉、播放列表抽屉或评论抽屉展开淡出并轻微上移
           AnimatedBuilder(
             animation: overlayExpansion,
             child: RepaintBoundary(
@@ -381,8 +526,10 @@ class _FullPlayerYtState extends State<FullPlayerYt>
                 dockMode: widget.dockMode,
                 lyricsExpansion: _lyricsController,
                 queueController: _queueController,
+                commentsExpansion: _commentsController,
                 onCollapse: _collapseByButton,
                 onOpenLyrics: _openLyrics,
+                onOpenComments: _openComments,
                 onCoverRectMeasured: (rect) {
                   _measuredCoverRect = rect;
                 },
@@ -396,7 +543,13 @@ class _FullPlayerYtState extends State<FullPlayerYt>
             ),
             builder: (context, mainViewChild) {
               final t = math
-                  .max(_lyricsController.value, _queueController.value)
+                  .max(
+                    _lyricsController.value,
+                    math.max(
+                      _queueController.value,
+                      _commentsController.value,
+                    ),
+                  )
                   .clamp(0.0, 1.0);
               final mainOpacity = (1.0 - t * 1.6).clamp(0.0, 1.0);
               return IgnorePointer(
@@ -434,8 +587,18 @@ class _FullPlayerYtState extends State<FullPlayerYt>
                 onVerticalDragEnd: _onQueueDragEnd,
               ),
             ),
+            // 评论区抽屉层（1:1 复刻歌词与播放列表抽屉展开动画：共用顶部 MiniBar 与悬浮封面飞行缩放）
+            Positioned.fill(
+              child: YtCommentsDrawer(
+                expansion: _commentsController,
+                song: resolvedSong,
+                onClose: _closeComments,
+                onVerticalDragUpdate: _onCommentsDragUpdate,
+                onVerticalDragEnd: _onCommentsDragEnd,
+              ),
+            ),
           ],
-          // 悬浮封面层：仅在歌词抽屉或播放列表抽屉拉开（t > 0.001）时挂载，
+          // 悬浮封面层：仅在歌词/播放列表/评论抽屉拉开（t > 0.001）时挂载，
           // 与主封面共享同一份 1080p PlayerArtworkImage 解码档位与 GPU 纹理，
           // 平时抽屉关闭时不常驻挂载，避免切歌首帧与主封面争抢解码通道。
           LayoutBuilder(
@@ -463,7 +626,13 @@ class _FullPlayerYtState extends State<FullPlayerYt>
                 animation: overlayExpansion,
                 builder: (context, _) {
                   final t = math
-                      .max(_lyricsController.value, _queueController.value)
+                      .max(
+                        _lyricsController.value,
+                        math.max(
+                          _queueController.value,
+                          _commentsController.value,
+                        ),
+                      )
                       .clamp(0.0, 1.0);
                   final active = t > 0.001;
                   if (!active) return const SizedBox.shrink();
@@ -530,7 +699,7 @@ class _FullPlayerYtState extends State<FullPlayerYt>
 
     return PlayerSystemUiScope(
       dragRoute: _dragRoute,
-      forceMainStyle: _isDragOverlay || widget.dockMode,
+      forceMainStyle: _isDragOverlay || widget.dockMode || _isDismissing,
       child: page,
     );
   }
@@ -701,6 +870,74 @@ class SettingsYtStylePreview extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
       ),
       child: Icon(icon, size: 8, color: colorScheme.onSecondaryContainer),
+    );
+  }
+}
+
+/// 在不新增 `settings_page.dart` 第二处修改的前提下，直接挂载在 `_buildStyleCards` 返回值尾部：
+/// 当选中 YouTube Music 样式时，在卡片正下方展示置灰说明条，标明仅对 MD3 / AM 生效的模块。
+extension SettingsYtStyleCardsExt on Widget {
+  Widget withYtStyleUnsupportedHint({
+    required ColorScheme colorScheme,
+    required bool isYtStyle,
+  }) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        this,
+        AnimatedSize(
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+          alignment: Alignment.topCenter,
+          child: !isYtStyle
+              ? const SizedBox.shrink()
+              : Padding(
+                  padding: const EdgeInsets.only(top: 10),
+                  child: Opacity(
+                    opacity: 0.56,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 9,
+                      ),
+                      decoration: BoxDecoration(
+                        color: colorScheme.surfaceContainerHighest.withValues(
+                          alpha: 0.55,
+                        ),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: colorScheme.outlineVariant.withValues(
+                            alpha: 0.5,
+                          ),
+                          width: 0.8,
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.block_flipped,
+                            size: 15,
+                            color: colorScheme.onSurfaceVariant,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              '当前样式下「顶栏与横屏布局」「音乐频谱」不生效（采用 YT 专属顶栏/横屏分栏与抽屉布局）',
+                              style: TextStyle(
+                                fontSize: 11.5,
+                                color: colorScheme.onSurfaceVariant,
+                                height: 1.3,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+        ),
+      ],
     );
   }
 }

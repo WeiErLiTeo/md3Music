@@ -7088,6 +7088,9 @@ class _SettingsPageState extends State<SettingsPage>
           preview: SettingsYtStylePreview(colorScheme: colorScheme),
         ),
       ],
+    ).withYtStyleUnsupportedHint(
+      colorScheme: colorScheme,
+      isYtStyle: currentStyle == PlayerStyle.ytMusic,
     );
   }
 

@@ -9,7 +9,8 @@ import '../../widgets/apple_lyrics/layout/lyric_preferences.dart';
 import 'preview_demo_assets.dart';
 import 'settings_preview_frame.dart';
 
-export '../../modules/player/full_player_yt.dart' show SettingsYtStylePreview;
+export '../../modules/player/full_player_yt.dart'
+    show SettingsYtStylePreview, SettingsYtStyleCardsExt;
 
 /// 「歌词效果」三级子页的演示卡。
 ///

@@ -8,9 +8,11 @@ import 'package:provider/provider.dart';
 import 'package:video_player/video_player.dart';
 
 import '../../../core/layout/display_space.dart';
+import '../../../core/services/audio_service.dart';
 import '../../../core/services/wakelock_service.dart';
 import '../../../core/utils/app_haptics.dart';
 import '../../../core/utils/app_toast.dart';
+import '../../../core/utils/artwork_color_extractor.dart';
 import '../../../data/models/mv_models.dart';
 import '../../../data/models/song.dart';
 import '../../../providers/favorites_provider.dart';
@@ -22,6 +24,7 @@ import '../../../widgets/add_to_playlist_dialog.dart';
 import '../../../widgets/depth_cover_host.dart';
 import '../../../widgets/dynamic_cover_view.dart';
 import '../../../widgets/marquee_text.dart';
+import '../../../widgets/playback_hint_pills.dart';
 import '../../../widgets/player_artwork_image.dart'
     show
         PlayerArtworkImage,
@@ -29,8 +32,8 @@ import '../../../widgets/player_artwork_image.dart'
         preloadPlayerArtwork,
         prewarmPlayerArtworkTexture;
 import '../../../widgets/player_seek_bar.dart';
-import '../../settings/equalizer_settings_page.dart';
 import '../../sheet/song_sheet_sheet.dart';
+import '../../sound/sounds_page.dart';
 import '../comments_view.dart';
 import '../cover_switch_physics.dart';
 import '../dlna_cast_sheet.dart';
@@ -60,8 +63,10 @@ class YtMainView extends StatefulWidget {
   final bool dockMode;
   final Animation<double> lyricsExpansion;
   final AnimationController? queueController;
+  final Animation<double>? commentsExpansion;
   final VoidCallback onCollapse;
   final VoidCallback onOpenLyrics;
+  final VoidCallback? onOpenComments;
   final ValueChanged<Rect>? onCoverRectMeasured;
   final void Function(Route<dynamic>)? onPushPage;
   final void Function(Route<dynamic>)? onDismissAndPush;
@@ -76,8 +81,10 @@ class YtMainView extends StatefulWidget {
     this.dockMode = false,
     required this.lyricsExpansion,
     this.queueController,
+    this.commentsExpansion,
     required this.onCollapse,
     required this.onOpenLyrics,
+    this.onOpenComments,
     this.onCoverRectMeasured,
     this.onPushPage,
     this.onDismissAndPush,
@@ -92,7 +99,7 @@ class YtMainView extends StatefulWidget {
 }
 
 class _YtMainViewState extends State<YtMainView>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   final GlobalKey<CoverSwitchPagerState> _coverPagerKey =
       GlobalKey<CoverSwitchPagerState>();
   PlayerProvider? _playerProvider;
@@ -106,14 +113,20 @@ class _YtMainViewState extends State<YtMainView>
 
   /// 拖动进度条前是否正在播放（修复点击/拖动时间轴导致歌曲暂停的 Bug）
   bool _wasPlayingBeforeDrag = false;
+  int? _activeSeekSession;
   bool _isSeekingVideo = false;
   bool _lastVideoPlayingState = false;
   DateTime? _lastSongSwitchAt;
+
+  /// 缓冲时进度条呼吸脉冲动画控制器
+  late final AnimationController _bufferingPulseController;
 
   /// 内部兜底队列动画控制器（当父级未传入 queueController 时使用）
   AnimationController? _internalQueueController;
   AnimationController get _queueCtrl =>
       widget.queueController ?? _internalQueueController!;
+  Animation<double> get _commentsAnim =>
+      widget.commentsExpansion ?? const AlwaysStoppedAnimation<double>(0.0);
 
   // ============== 顶栏「音频 / 视频」原地 MV 切换状态 ==============
   String? _probedAlbumAudioId;
@@ -140,6 +153,10 @@ class _YtMainViewState extends State<YtMainView>
   @override
   void initState() {
     super.initState();
+    _bufferingPulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 850),
+    );
     if (widget.queueController == null) {
       _internalQueueController = AnimationController(
         vsync: this,
@@ -186,6 +203,7 @@ class _YtMainViewState extends State<YtMainView>
     _neighborPrewarmTimer?.cancel();
     _songSwitchDeferTimer?.cancel();
     _disposeVideoController(resumeAudio: false);
+    _bufferingPulseController.dispose();
     _internalQueueController?.dispose();
     _playerProvider?.removeListener(_onPlayerChanged);
     super.dispose();
@@ -599,6 +617,9 @@ class _YtMainViewState extends State<YtMainView>
         if (neighbor == null) continue;
         final base = YtMoreMenu.resolveMatchedSongBase(neighbor);
         preloadPlayerArtwork(base.artworkUri);
+        if (base.artworkUri != null && base.artworkUri!.isNotEmpty) {
+          unawaited(ArtworkColorExtractor.loadPalette(base.artworkUri!));
+        }
         final resolved = YtMoreMenu.resolveMatchedSong(neighbor);
         unawaited(
           prewarmPlayerArtworkTexture(
@@ -1591,7 +1612,8 @@ class _YtMainViewState extends State<YtMainView>
                 !widget.dockMode &&
                 !_isVideoMode &&
                 widget.lyricsExpansion.value <= 0.001 &&
-                _queueCtrl.value <= 0.001,
+                _queueCtrl.value <= 0.001 &&
+                _commentsAnim.value <= 0.001,
             settledScale: 1.0,
             settledAnchor: Alignment.center,
             child: SongDanmakuHost(
@@ -1624,11 +1646,17 @@ class _YtMainViewState extends State<YtMainView>
       onVerticalDragEnd: widget.onDragEnd,
       onVerticalDragCancel: widget.onDragCancel,
       child: AnimatedBuilder(
-        animation: Listenable.merge([widget.lyricsExpansion, _queueCtrl]),
+        animation: Listenable.merge([
+          widget.lyricsExpansion,
+          _queueCtrl,
+          _commentsAnim,
+        ]),
         child: coverContent,
         builder: (context, child) {
           final drawerActive =
-              widget.lyricsExpansion.value > 0.001 || _queueCtrl.value > 0.001;
+              widget.lyricsExpansion.value > 0.001 ||
+              _queueCtrl.value > 0.001 ||
+              _commentsAnim.value > 0.001;
           return Opacity(
             opacity: drawerActive ? 0.0 : 1.0,
             child: IgnorePointer(ignoring: drawerActive, child: child),
@@ -1709,7 +1737,8 @@ class _YtMainViewState extends State<YtMainView>
       eligible: () =>
           !widget.dockMode &&
           widget.lyricsExpansion.value <= 0.001 &&
-          _queueCtrl.value <= 0.001,
+          _queueCtrl.value <= 0.001 &&
+          _commentsAnim.value <= 0.001,
       child: TitleSwitchFade(
         version: song.id,
         align: Alignment.centerLeft,
@@ -1870,7 +1899,13 @@ class _YtMainViewState extends State<YtMainView>
             _buildCapsuleButton(
               icon: Icons.comment_outlined,
               label: '评论',
-              onTap: () => showSongCommentsSheet(context, song),
+              onTap: () {
+                if (widget.onOpenComments != null) {
+                  widget.onOpenComments!();
+                } else {
+                  showSongCommentsSheet(context, song);
+                }
+              },
             ),
           ] else ...[
             const SizedBox(width: 10),
@@ -1889,7 +1924,13 @@ class _YtMainViewState extends State<YtMainView>
             _buildCapsuleButton(
               icon: Icons.comment_outlined,
               label: '评论',
-              onTap: () => showSongCommentsSheet(context, song),
+              onTap: () {
+                if (widget.onOpenComments != null) {
+                  widget.onOpenComments!();
+                } else {
+                  showSongCommentsSheet(context, song);
+                }
+              },
             ),
             if (hasSheet) ...[
               const SizedBox(width: 10),
@@ -1907,7 +1948,7 @@ class _YtMainViewState extends State<YtMainView>
                 final push = widget.onPushPage ?? Navigator.of(context).push;
                 push(
                   MaterialPageRoute(
-                    builder: (_) => const EqualizerSettingsPage(),
+                    builder: (_) => const SoundsPage(),
                   ),
                 );
               },
@@ -2085,45 +2126,101 @@ class _YtMainViewState extends State<YtMainView>
 
     return Selector<
       PlayerProvider,
-      ({Duration duration, bool isPlaying, double speed})
+      ({Duration duration, bool isPlaying, bool isBuffering, double speed})
     >(
       selector: (_, p) => (
         duration: p.duration ?? Duration.zero,
         isPlaying: p.isPlaying,
+        isBuffering:
+            p.isStreamBuffering ||
+            p.isWaitingForAudioStart ||
+            p.isAwaitingPlaybackProgress,
         speed: p.speed,
       ),
       builder: (context, state, _) {
         final playerProvider = context.read<PlayerProvider>();
+        if (state.isBuffering) {
+          if (!_bufferingPulseController.isAnimating) {
+            _bufferingPulseController.repeat(reverse: true);
+          }
+        } else {
+          if (_bufferingPulseController.isAnimating) {
+            _bufferingPulseController.stop();
+            _bufferingPulseController.value = 1.0;
+          }
+        }
+
         return ValueListenableBuilder<bool>(
           valueListenable: kSeekBarWaveEnabled,
           builder: (context, waveEnabled, _) {
             return ValueListenableBuilder<Duration>(
               valueListenable: playerProvider.positionNotifier,
               builder: (context, position, _) {
-                return PlayerSeekBar(
-                  position: position,
-                  duration: state.duration,
-                  isPlaying: state.isPlaying,
-                  speed: state.speed,
-                  md3Style: true,
-                  waveEnabled: waveEnabled,
-                  activeColor: Colors.white,
-                  inactiveColor: Colors.white24,
-                  labelColor: Colors.white70,
-                  climaxStart: song.climaxStart?.toDouble(),
-                  climaxEnd: song.climaxEnd?.toDouble(),
-                  onSeekStart: () {
-                    _wasPlayingBeforeDrag = playerProvider.isPlaying;
-                    if (_wasPlayingBeforeDrag) {
-                      playerProvider.pauseForSeek();
-                    }
-                  },
-                  onSeekEnd: (pos) async {
-                    AppHaptics.tick(HapticCategory.transport);
-                    await playerProvider.seek(pos, forceNotify: true);
-                    if (_wasPlayingBeforeDrag) {
-                      playerProvider.resume();
-                    }
+                return AnimatedBuilder(
+                  animation: _bufferingPulseController,
+                  builder: (context, _) {
+                    final pulse = state.isBuffering
+                        ? Curves.easeInOutSine.transform(
+                            _bufferingPulseController.value,
+                          )
+                        : 1.0;
+                    final activeColor = state.isBuffering
+                        ? Color.lerp(
+                            Colors.white.withValues(alpha: 0.38),
+                            Colors.white,
+                            pulse,
+                          )!
+                        : Colors.white;
+                    final inactiveColor = state.isBuffering
+                        ? Color.lerp(
+                            Colors.white.withValues(alpha: 0.14),
+                            Colors.white.withValues(alpha: 0.46),
+                            pulse,
+                          )!
+                        : Colors.white24;
+
+                    return PlayerSeekBar(
+                      position: position,
+                      duration: state.duration,
+                      isPlaying: state.isPlaying && !state.isBuffering,
+                      speed: state.speed,
+                      md3Style: true,
+                      waveEnabled: waveEnabled,
+                      activeColor: activeColor,
+                      inactiveColor: inactiveColor,
+                      labelColor: Colors.white70,
+                      labelRowHints: playerHintPillsFor(
+                        playerProvider,
+                        amStyle: true,
+                      ),
+                      climaxStart: song.climaxStart?.toDouble(),
+                      climaxEnd: song.climaxEnd?.toDouble(),
+                      onSeekStart: () {
+                        final wasPlaying =
+                            playerProvider.isPlaying || AudioService().playing;
+                        _wasPlayingBeforeDrag = wasPlaying;
+                        _activeSeekSession = playerProvider.beginSeekSession(
+                          wasPlaying: wasPlaying,
+                        );
+                      },
+                      onSeekEnd: (pos) async {
+                        AppHaptics.tick(HapticCategory.transport);
+                        final session = _activeSeekSession;
+                        _activeSeekSession = null;
+                        if (session != null) {
+                          await playerProvider.completeSeekSession(
+                            session,
+                            pos,
+                            forceNotify: true,
+                          );
+                        } else {
+                          await playerProvider.seek(pos, forceNotify: true);
+                          if (_wasPlayingBeforeDrag) {
+                            await playerProvider.resume();
+                          }
+                        }
+                      },
+                    );
                   },
                 );
               },
@@ -2144,15 +2241,25 @@ class _YtMainViewState extends State<YtMainView>
 
     return Selector<
       PlayerProvider,
-      ({bool isPlaying, bool shuffleEnabled, AppLoopMode loopMode})
+      ({
+        bool isPlaying,
+        bool isBuffering,
+        bool shuffleEnabled,
+        AppLoopMode loopMode,
+      })
     >(
       selector: (_, p) => (
         isPlaying: p.isPlaying,
+        isBuffering:
+            p.isStreamBuffering ||
+            p.isWaitingForAudioStart ||
+            p.isAwaitingPlaybackProgress,
         shuffleEnabled: p.shuffleEnabled,
         loopMode: p.loopMode,
       ),
       builder: (context, state, _) {
         final playerProvider = context.read<PlayerProvider>();
+        final audioService = AudioService();
         final loopMode = state.loopMode;
         final vCtrl = _videoController;
 
@@ -2246,37 +2353,50 @@ class _YtMainViewState extends State<YtMainView>
                 playerProvider.previous();
               },
             ),
-            GestureDetector(
-              onTap: () {
-                AppHaptics.click(HapticCategory.transport);
-                if (_isVideoMode &&
-                    vCtrl != null &&
-                    vCtrl.value.isInitialized) {
-                  if (vCtrl.value.isPlaying) {
-                    vCtrl.pause();
-                  } else {
-                    if (vCtrl.value.position >=
-                        vCtrl.value.duration -
-                            const Duration(milliseconds: 300)) {
-                      vCtrl.seekTo(Duration.zero);
+            StreamBuilder<bool>(
+              stream: audioService.playingStream,
+              initialData: audioService.playing,
+              builder: (context, snapshot) {
+                final enginePlaying = snapshot.data ?? false;
+                final effectivePlaying = state.isPlaying || enginePlaying;
+                final showPauseIcon = effectivePlaying && !state.isBuffering;
+
+                return GestureDetector(
+                  onTap: () {
+                    AppHaptics.click(HapticCategory.transport);
+                    if (_isVideoMode &&
+                        vCtrl != null &&
+                        vCtrl.value.isInitialized) {
+                      if (vCtrl.value.isPlaying) {
+                        vCtrl.pause();
+                      } else {
+                        if (vCtrl.value.position >=
+                            vCtrl.value.duration -
+                                const Duration(milliseconds: 300)) {
+                          vCtrl.seekTo(Duration.zero);
+                        }
+                        vCtrl.play();
+                      }
+                      return;
                     }
-                    vCtrl.play();
-                  }
-                  return;
-                }
-                if (state.isPlaying) {
-                  playerProvider.pause();
-                } else {
-                  playerProvider.resume();
-                }
+                    if (playerProvider.isPlaying || audioService.playing) {
+                      playerProvider.pause();
+                    } else {
+                      playerProvider.resume();
+                    }
+                  },
+                  child:
+                      (_isVideoMode &&
+                          vCtrl != null &&
+                          vCtrl.value.isInitialized)
+                      ? ValueListenableBuilder<VideoPlayerValue>(
+                          valueListenable: vCtrl,
+                          builder: (context, vVal, _) =>
+                              playPauseCircle(vVal.isPlaying),
+                        )
+                      : playPauseCircle(showPauseIcon),
+                );
               },
-              child: (_isVideoMode && vCtrl != null && vCtrl.value.isInitialized)
-                  ? ValueListenableBuilder<VideoPlayerValue>(
-                      valueListenable: vCtrl,
-                      builder: (context, vVal, _) =>
-                          playPauseCircle(vVal.isPlaying),
-                    )
-                  : playPauseCircle(state.isPlaying),
             ),
             IconButton(
               padding: EdgeInsets.zero,

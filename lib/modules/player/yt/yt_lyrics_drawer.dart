@@ -1,9 +1,13 @@
+import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/rendering.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:m3e_core/m3e_core.dart';
 import 'package:provider/provider.dart';
 
+import '../../../core/services/audio_service.dart';
+import '../../../core/utils/app_haptics.dart';
 import '../../../core/utils/local_lyric_loader.dart';
 import '../../../core/utils/lyric_line_balance.dart';
 import '../../../data/models/song.dart';
@@ -20,6 +24,7 @@ import '../../../widgets/apple_lyrics/utils/lyric_credit_filter.dart';
 import '../../../widgets/player_artwork_image.dart';
 import '../../../widgets/player_playlist_view.dart';
 import '../../library/song_match_sheet.dart';
+import '../comments_view.dart';
 import '../widgets/play_pause_morph_icon.dart';
 
 /// YouTube Music 风格的内联歌词抽屉（配合悬浮封面缩放与跟手滑动）
@@ -137,8 +142,17 @@ class YtMiniBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isPlaying = context.select<PlayerProvider, bool>((p) => p.isPlaying);
+    final state = context.select<PlayerProvider, ({bool isPlaying, bool isBuffering})>(
+      (p) => (
+        isPlaying: p.isPlaying,
+        isBuffering:
+            p.isStreamBuffering ||
+            p.isWaitingForAudioStart ||
+            p.isAwaitingPlaybackProgress,
+      ),
+    );
     final player = context.read<PlayerProvider>();
+    final audioService = AudioService();
 
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
@@ -206,18 +220,27 @@ class YtMiniBar extends StatelessWidget {
                   ),
                   onPressed: () => player.previous(),
                 ),
-                IconButton(
-                  icon: PlayPauseMorphIcon(
-                    isPlaying: isPlaying,
-                    size: 26,
-                    color: Colors.white,
-                  ),
-                  onPressed: () {
-                    if (player.isPlaying) {
-                      player.pause();
-                    } else {
-                      player.resume();
-                    }
+                StreamBuilder<bool>(
+                  stream: audioService.playingStream,
+                  initialData: audioService.playing,
+                  builder: (context, snapshot) {
+                    final enginePlaying = snapshot.data ?? false;
+                    final effectivePlaying = state.isPlaying || enginePlaying;
+                    final showPauseIcon = effectivePlaying && !state.isBuffering;
+                    return IconButton(
+                      icon: PlayPauseMorphIcon(
+                        isPlaying: showPauseIcon,
+                        size: 26,
+                        color: Colors.white,
+                      ),
+                      onPressed: () {
+                        if (player.isPlaying || audioService.playing) {
+                          player.pause();
+                        } else {
+                          player.resume();
+                        }
+                      },
+                    );
                   },
                 ),
                 IconButton(
@@ -770,6 +793,360 @@ class _YtQueueDrawerState extends State<YtQueueDrawer> {
   bool _capturingPullDown = false;
   double _lastStepDy = 0.0;
 
+  PlaylistSortBy _sortBy = PlaylistSortBy.queue;
+  bool _sortAscending = true;
+  final List<String> _originalQueueIds = <String>[];
+  final GlobalKey _sortAnchorKey = GlobalKey();
+
+  void _syncOriginalQueueSnapshot(List<Song> currentPlaylist) {
+    if (currentPlaylist.isEmpty) {
+      _originalQueueIds.clear();
+      return;
+    }
+    final currentIds = currentPlaylist.map((s) => s.id).toSet();
+    _originalQueueIds.removeWhere((id) => !currentIds.contains(id));
+    final known = _originalQueueIds.toSet();
+    for (final s in currentPlaylist) {
+      if (!known.contains(s.id)) {
+        _originalQueueIds.add(s.id);
+        known.add(s.id);
+      }
+    }
+  }
+
+  Future<void> _applyQueueSort(
+    PlayerProvider playerProvider,
+    PlaylistSortBy by,
+    bool ascending,
+  ) async {
+    final playlist = playerProvider.playlist;
+    if (playlist.length < 2) return;
+    _syncOriginalQueueSnapshot(playlist);
+
+    final orderIndexMap = <String, int>{
+      for (int i = 0; i < _originalQueueIds.length; i++)
+        _originalQueueIds[i]: i,
+    };
+
+    final targetOrder = List<Song>.from(playlist);
+    targetOrder.sort((a, b) {
+      int cmp;
+      switch (by) {
+        case PlaylistSortBy.queue:
+          final ia = orderIndexMap[a.id] ?? 0;
+          final ib = orderIndexMap[b.id] ?? 0;
+          cmp = ia.compareTo(ib);
+          break;
+        case PlaylistSortBy.title:
+          cmp = a.displayName.toLowerCase().compareTo(
+            b.displayName.toLowerCase(),
+          );
+          if (cmp == 0) {
+            final ia = orderIndexMap[a.id] ?? 0;
+            final ib = orderIndexMap[b.id] ?? 0;
+            cmp = ia.compareTo(ib);
+          }
+          break;
+        case PlaylistSortBy.duration:
+          cmp = a.duration.compareTo(b.duration);
+          if (cmp == 0) {
+            final ia = orderIndexMap[a.id] ?? 0;
+            final ib = orderIndexMap[b.id] ?? 0;
+            cmp = ia.compareTo(ib);
+          }
+          break;
+      }
+      return ascending ? cmp : -cmp;
+    });
+
+    // 检查顺序是否已经与目标一致
+    bool alreadyMatched = true;
+    for (int i = 0; i < playlist.length; i++) {
+      if (playlist[i].id != targetOrder[i].id) {
+        alreadyMatched = false;
+        break;
+      }
+    }
+    if (alreadyMatched) return;
+
+    final currentSong = playerProvider.currentSong;
+    int curIdx = playerProvider.currentIndex;
+    if (currentSong == null || curIdx < 0 || curIdx >= playlist.length) {
+      for (int i = 0; i < targetOrder.length; i++) {
+        final found = playlist.indexWhere((s) => s.id == targetOrder[i].id);
+        if (found > i) {
+          await playerProvider.reorderPlaylist(found, i);
+        }
+      }
+      return;
+    }
+
+    final targetCurrentIdx = targetOrder.indexWhere(
+      (s) => s.id == currentSong.id,
+    );
+    if (targetCurrentIdx < 0) return;
+
+    // 若当前播放歌曲在排序前后恰好处在同一索引，先用一次相移腾出差位，
+    // 再用单次 reorderPlaylist 精确落位并自动同步 PlayerProvider._currentIndex。
+    if (curIdx == targetCurrentIdx) {
+      final altIdx = curIdx == 0 ? 1 : curIdx - 1;
+      await playerProvider.reorderPlaylist(
+        curIdx,
+        curIdx < altIdx ? altIdx + 1 : altIdx,
+      );
+      curIdx = playerProvider.currentIndex;
+    }
+
+    final withoutCurrent = targetOrder
+        .where((s) => s.id != currentSong.id)
+        .toList();
+    final safeInsert = curIdx.clamp(0, withoutCurrent.length);
+    withoutCurrent.insert(safeInsert, currentSong);
+
+    playlist
+      ..clear()
+      ..addAll(withoutCurrent);
+
+    await playerProvider.reorderPlaylist(
+      safeInsert,
+      safeInsert < targetCurrentIdx ? targetCurrentIdx + 1 : targetCurrentIdx,
+    );
+  }
+
+  Future<void> _openYtSortMenu() async {
+    final playerProvider = context.read<PlayerProvider>();
+    if (playerProvider.playlist.isEmpty) return;
+    _syncOriginalQueueSnapshot(playerProvider.playlist);
+
+    final anchorCtx = _sortAnchorKey.currentContext;
+    final box = anchorCtx?.findRenderObject() as RenderBox?;
+    final overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox?;
+    final Offset anchorTopRight = (box != null && overlay != null)
+        ? box.localToGlobal(Offset(box.size.width, box.size.height), ancestor: overlay)
+        : Offset(MediaQuery.sizeOf(context).width - 56, 200);
+
+    final screenSize = MediaQuery.sizeOf(context);
+    const double menuWidth = 220.0;
+    final double left = (anchorTopRight.dx - menuWidth).clamp(
+      12.0,
+      math.max(12.0, screenSize.width - menuWidth - 12.0),
+    );
+    final double top = (anchorTopRight.dy + 4.0).clamp(
+      64.0,
+      math.max(64.0, screenSize.height - 260.0),
+    );
+
+    AppHaptics.lightImpact(HapticCategory.control);
+
+    await showGeneralDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: '关闭排序菜单',
+      barrierColor: Colors.black26,
+      transitionDuration: const Duration(milliseconds: 180),
+      pageBuilder: (dialogCtx, anim, secondaryAnim) {
+        return StatefulBuilder(
+          builder: (ctx, setModalState) {
+            final cs = Theme.of(ctx).colorScheme;
+            const options = <(PlaylistSortBy, String)>[
+              (PlaylistSortBy.queue, '播放顺序'),
+              (PlaylistSortBy.title, '标题'),
+              (PlaylistSortBy.duration, '时长'),
+            ];
+
+            void selectSortOption(PlaylistSortBy picked) {
+              AppHaptics.lightImpact(HapticCategory.control);
+              setState(() {
+                if (_sortBy == picked) {
+                  _sortAscending = !_sortAscending;
+                } else {
+                  _sortBy = picked;
+                  _sortAscending = true;
+                }
+              });
+              setModalState(() {});
+              unawaited(
+                _applyQueueSort(playerProvider, _sortBy, _sortAscending),
+              );
+            }
+
+            void selectDirection(bool ascending) {
+              if (_sortAscending == ascending) return;
+              AppHaptics.lightImpact(HapticCategory.control);
+              setState(() => _sortAscending = ascending);
+              setModalState(() {});
+              unawaited(
+                _applyQueueSort(playerProvider, _sortBy, _sortAscending),
+              );
+            }
+
+            return Stack(
+              children: [
+                Positioned(
+                  left: left,
+                  top: top,
+                  width: menuWidth,
+                  child: ScaleTransition(
+                    scale: CurvedAnimation(
+                      parent: anim,
+                      curve: Curves.easeOutBack,
+                    ),
+                    alignment: Alignment.topRight,
+                    child: Material(
+                      color: cs.surfaceContainerHigh,
+                      elevation: 8,
+                      shadowColor: Colors.black54,
+                      borderRadius: BorderRadius.circular(20),
+                      clipBehavior: Clip.antiAlias,
+                      child: Padding(
+                        padding: const EdgeInsets.all(8),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            for (final opt in options)
+                              InkWell(
+                                borderRadius: BorderRadius.circular(12),
+                                onTap: () => selectSortOption(opt.$1),
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 14,
+                                    vertical: 11,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: _sortBy == opt.$1
+                                        ? cs.secondaryContainer.withValues(
+                                            alpha: 0.65,
+                                          )
+                                        : Colors.transparent,
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          opt.$2,
+                                          style: TextStyle(
+                                            color: _sortBy == opt.$1
+                                                ? cs.onSecondaryContainer
+                                                : cs.onSurface,
+                                            fontSize: 14,
+                                            fontWeight: _sortBy == opt.$1
+                                                ? FontWeight.w600
+                                                : FontWeight.w400,
+                                          ),
+                                        ),
+                                      ),
+                                      if (_sortBy == opt.$1)
+                                        Icon(
+                                          Icons.check_rounded,
+                                          size: 18,
+                                          color: cs.primary,
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 6,
+                                vertical: 6,
+                              ),
+                              child: Divider(
+                                height: 1,
+                                color: cs.outlineVariant.withValues(alpha: 0.5),
+                              ),
+                            ),
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(4, 2, 4, 4),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: _buildDirectionSegment(
+                                      cs: cs,
+                                      selected: _sortAscending,
+                                      icon: Icons.arrow_upward_rounded,
+                                      label: '正序',
+                                      isLeft: true,
+                                      onTap: () => selectDirection(true),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Expanded(
+                                    child: _buildDirectionSegment(
+                                      cs: cs,
+                                      selected: !_sortAscending,
+                                      icon: Icons.arrow_downward_rounded,
+                                      label: '倒序',
+                                      isLeft: false,
+                                      onTap: () => selectDirection(false),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildDirectionSegment({
+    required ColorScheme cs,
+    required bool selected,
+    required IconData icon,
+    required String label,
+    required bool isLeft,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(12),
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+        decoration: BoxDecoration(
+          color: selected ? cs.primary : Colors.transparent,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: selected
+                ? cs.primary
+                : cs.outlineVariant.withValues(alpha: 0.6),
+            width: 1,
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              icon,
+              size: 15,
+              color: selected ? cs.onPrimary : cs.onSurfaceVariant,
+            ),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                color: selected ? cs.onPrimary : cs.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final safeTop = MediaQuery.paddingOf(context).top;
@@ -1016,9 +1393,335 @@ class _YtQueueDrawerState extends State<YtQueueDrawer> {
                 },
                 child: Padding(
                   padding: EdgeInsets.only(bottom: safeBottom),
-                  child: PlayerPlaylistView(
-                    key: widget.playlistKey,
-                    scrollAnchor: widget.scrollAnchor,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      PlayerPlaylistView(
+                        key: widget.playlistKey,
+                        scrollAnchor: widget.scrollAnchor,
+                      ),
+                      // 覆盖在 PlayerPlaylistView 常态顶栏「排序」按钮位之上：
+                      // 编辑模式下自动放行触摸给「全选」按钮，常态下接管排序弹窗，
+                      // 零侵入修复上游播放顺序还原与正倒序切换问题。
+                      Positioned(
+                        top: 10,
+                        right: 56,
+                        width: 48,
+                        height: 50,
+                        child: _YtSortButtonTouchGate(
+                          key: _sortAnchorKey,
+                          shouldIntercept: () {
+                            final edit =
+                                widget.playlistKey?.currentState?.editMode ??
+                                false;
+                            if (edit) return false;
+                            final p = context.read<PlayerProvider>();
+                            return p.playlist.isNotEmpty;
+                          },
+                          onTap: _openYtSortMenu,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 动态触摸门控：仅在非编辑模式下拦截 PlayerPlaylistView 右上角的排序图标点击
+class _YtSortButtonTouchGate extends SingleChildRenderObjectWidget {
+  final bool Function() shouldIntercept;
+  final VoidCallback onTap;
+
+  _YtSortButtonTouchGate({
+    super.key,
+    required this.shouldIntercept,
+    required this.onTap,
+  }) : super(
+         child: GestureDetector(
+           behavior: HitTestBehavior.opaque,
+           onTap: onTap,
+           child: const SizedBox.expand(),
+         ),
+       );
+
+  @override
+  RenderObject createRenderObject(BuildContext context) {
+    return _RenderYtSortButtonTouchGate(shouldIntercept: shouldIntercept);
+  }
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    covariant _RenderYtSortButtonTouchGate renderObject,
+  ) {
+    renderObject.shouldIntercept = shouldIntercept;
+  }
+}
+
+class _RenderYtSortButtonTouchGate extends RenderProxyBox {
+  bool Function() shouldIntercept;
+
+  _RenderYtSortButtonTouchGate({required this.shouldIntercept});
+
+  @override
+  bool hitTest(BoxHitTestResult result, {required Offset position}) {
+    if (!shouldIntercept()) return false;
+    return super.hitTest(result, position: position);
+  }
+}
+
+/// 1:1 复刻歌词与播放列表展开动画的全屏「评论区」抽屉（配合 FullPlayerYt 悬浮封面飞行缩放）
+class YtCommentsDrawer extends StatefulWidget {
+  final Animation<double> expansion;
+  final Song song;
+  final VoidCallback onClose;
+  final GestureDragUpdateCallback? onVerticalDragUpdate;
+  final GestureDragEndCallback? onVerticalDragEnd;
+
+  const YtCommentsDrawer({
+    super.key,
+    required this.expansion,
+    required this.song,
+    required this.onClose,
+    this.onVerticalDragUpdate,
+    this.onVerticalDragEnd,
+  });
+
+  @override
+  State<YtCommentsDrawer> createState() => _YtCommentsDrawerState();
+}
+
+class _YtCommentsDrawerState extends State<YtCommentsDrawer> {
+  final ScrollController _scrollController = ScrollController();
+  double? _pointerStartY;
+  bool _capturingPullDown = false;
+  double _lastStepDy = 0.0;
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final safeTop = MediaQuery.paddingOf(context).top;
+    final safeBottom = MediaQuery.paddingOf(context).bottom;
+    final screenHeight = MediaQuery.sizeOf(context).height;
+    final drawerSlideDistance = math.max(
+      200.0,
+      (screenHeight - safeTop - 56.0) * 0.72,
+    );
+
+    return AnimatedBuilder(
+      animation: widget.expansion,
+      builder: (context, _) {
+        final t = widget.expansion.value.clamp(0.0, 1.0);
+        if (t <= 0.001) {
+          return const SizedBox.shrink();
+        }
+        final miniBarOpacity = ((t - 0.25) / 0.75).clamp(0.0, 1.0);
+        final sheetOpacity = (t * 1.4).clamp(0.0, 1.0);
+
+        return IgnorePointer(
+          ignoring: t < 0.05,
+          child: SafeArea(
+            top: true,
+            bottom: false,
+            child: Column(
+              children: [
+                SizedBox(
+                  height: 56,
+                  child: Opacity(
+                    opacity: miniBarOpacity,
+                    child: Transform.translate(
+                      offset: Offset(0, -10.0 * (1.0 - t)),
+                      child: YtMiniBar(
+                        song: widget.song,
+                        onTap: widget.onClose,
+                        showCover: false,
+                        onVerticalDragUpdate: widget.onVerticalDragUpdate,
+                        onVerticalDragEnd: widget.onVerticalDragEnd,
+                      ),
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: Opacity(
+                    opacity: sheetOpacity,
+                    child: Transform.translate(
+                      offset: Offset(0, (1.0 - t) * drawerSlideDistance),
+                      child: RepaintBoundary(
+                        child: _buildSheetContent(context, safeBottom),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildSheetContent(BuildContext context, double safeBottom) {
+    final currentSong = widget.song;
+
+    return ClipRRect(
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+      child: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Colors.black.withValues(alpha: 0.34),
+              Colors.black.withValues(alpha: 0.64),
+            ],
+          ),
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          border: Border(
+            top: BorderSide(
+              color: Colors.white.withValues(alpha: 0.10),
+              width: 0.5,
+            ),
+          ),
+        ),
+        child: Column(
+          children: [
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onVerticalDragUpdate: widget.onVerticalDragUpdate,
+              onVerticalDragEnd: widget.onVerticalDragEnd,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 16, 6),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 36,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.3),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        IconButton(
+                          visualDensity: VisualDensity.compact,
+                          icon: const Icon(
+                            Icons.keyboard_arrow_down,
+                            color: Colors.white70,
+                            size: 26,
+                          ),
+                          onPressed: widget.onClose,
+                        ),
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Text(
+                                '歌曲评论',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              const SizedBox(height: 1),
+                              Text(
+                                '${currentSong.displayName} · ${currentSong.artist}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: Colors.white60,
+                                  fontSize: 11.5,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            Expanded(
+              child: Listener(
+                behavior: HitTestBehavior.translucent,
+                onPointerDown: (e) {
+                  _pointerStartY = e.position.dy;
+                  _capturingPullDown = false;
+                  _lastStepDy = 0.0;
+                },
+                onPointerMove: (e) {
+                  final startY = _pointerStartY;
+                  if (startY == null) return;
+                  final totalDy = e.position.dy - startY;
+                  final atTop =
+                      !_scrollController.hasClients ||
+                      _scrollController.offset <= 1.0;
+                  if (!_capturingPullDown && totalDy > 8.0 && atTop) {
+                    _capturingPullDown = true;
+                  }
+                  if (_capturingPullDown) {
+                    if (_scrollController.hasClients &&
+                        _scrollController.offset > 0) {
+                      _scrollController.jumpTo(0);
+                    }
+                    _lastStepDy = e.delta.dy;
+                    widget.onVerticalDragUpdate?.call(
+                      DragUpdateDetails(
+                        globalPosition: e.position,
+                        localPosition: e.localPosition,
+                        delta: Offset(0, e.delta.dy),
+                        primaryDelta: e.delta.dy,
+                      ),
+                    );
+                  }
+                },
+                onPointerUp: (_) {
+                  if (_capturingPullDown) {
+                    _capturingPullDown = false;
+                    final velocity = _lastStepDy * 55.0;
+                    widget.onVerticalDragEnd?.call(
+                      DragEndDetails(
+                        velocity: Velocity(
+                          pixelsPerSecond: Offset(0, velocity),
+                        ),
+                        primaryVelocity: velocity,
+                      ),
+                    );
+                  }
+                  _pointerStartY = null;
+                },
+                onPointerCancel: (_) {
+                  if (_capturingPullDown) {
+                    _capturingPullDown = false;
+                    widget.onVerticalDragEnd?.call(DragEndDetails());
+                  }
+                  _pointerStartY = null;
+                },
+                child: Padding(
+                  padding: EdgeInsets.only(bottom: safeBottom),
+                  child: CommentsView(
+                    songHash: currentSong.id,
+                    albumAudioId: currentSong.albumAudioId,
+                    artworkUri: currentSong.artworkUri,
+                    isAmStyle: true,
+                    scrollController: _scrollController,
                   ),
                 ),
               ),
