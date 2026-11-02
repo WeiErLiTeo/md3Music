@@ -124,9 +124,9 @@ jobs:
           git rm -rf . > /dev/null
           git checkout upstream/rust-local-force -- .
 
-          # 仅保留 yt3 自己的 debug-build.yml 与 sync-upstream.yml，其余工作流全部跟随上游最新代码同步
+          # 仅保留 yt3 自己的 personal-test.yml 与 sync-upstream.yml，其余工作流（含 debug-build.yml）全部跟随上游最新代码同步
           git checkout origin/yt3 -- \
-            .github/workflows/debug-build.yml \
+            .github/workflows/personal-test.yml \
             .github/workflows/sync-upstream.yml
 
           # 恢复 YT 纯新增文件并更新上游基准 SHA 标记
@@ -184,8 +184,8 @@ jobs:
             --body "### 自动同步上游更新
           - **上游版本**: \`${UPSTREAM_VER}\`
           - **上游提交**: \`${UPSTREAM_SHA}\`
-          - **合并状态**: 6 个挂载文件与 5 个 YT 独立文件全部无冲突自动合并通过
-          - **说明**: 合并此 PR 到 \`yt3\` 后，将自动递增版本号并编译发布最新的 64 位签名 Release APK。")"
+          - **合并状态**: 挂载文件与 YT 独立文件全部无冲突自动合并通过
+          - **说明**: 版本号与 \`debug-build.yml\` 完全跟随上游同步，不递增版本号。")"
 
           echo "已成功创建审查 PR: ${PR_URL}"
 
@@ -201,53 +201,24 @@ jobs:
           ref: yt3
           fetch-depth: 0
 
-      - name: Bump versionName & versionCode in pubspec.yaml
+      - name: Read version from pubspec.yaml (keep synced with upstream)
         id: bump
         run: |
           set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
           RAW_VER="$(grep -m1 '^version:' pubspec.yaml | sed 's/^version:[[:space:]]*//' | tr -d '\r')"
           VER_NAME="${RAW_VER%+*}"
           VER_CODE="${RAW_VER#*+}"
           if [[ "$VER_CODE" == "$RAW_VER" || -z "$VER_CODE" ]]; then
-            VER_CODE=100
+            VER_CODE=1
           fi
+          FULL_VERSION="${VER_NAME}+${VER_CODE}"
+          RELEASE_TAG="v${VER_NAME}-yt.${VER_CODE}"
 
-          # 解析 X.Y.Z 并自动递增修订号 Z 与 versionCode
-          IFS='.' read -r MAJOR MINOR PATCH <<<"${VER_NAME%%-*}"
-          MAJOR="${MAJOR:-6}"
-          MINOR="${MINOR:-2}"
-          PATCH="${PATCH:-0}"
-          NEW_PATCH=$(( PATCH + 1 ))
-          NEW_VER_NAME="${MAJOR}.${MINOR}.${NEW_PATCH}"
-
-          # 保证 versionCode 比仓库所有历史 tag 和当前值都大
-          MAX_TAG_CODE=$(git tag --list 'v*' | while read -r t; do
-            git show "$t:pubspec.yaml" 2>/dev/null | grep -E '^version:' | head -1 | grep -oE '\+[0-9]+' | tr -d '+' || true
-          done | sort -n | tail -1)
-          BASE_CODE="${VER_CODE}"
-          if [[ -n "$MAX_TAG_CODE" && "$MAX_TAG_CODE" -gt "$BASE_CODE" ]]; then
-            BASE_CODE="$MAX_TAG_CODE"
-          fi
-          NEW_VER_CODE=$(( BASE_CODE + 1 ))
-          FULL_VERSION="${NEW_VER_NAME}+${NEW_VER_CODE}"
-          RELEASE_TAG="v${NEW_VER_NAME}-yt.${NEW_VER_CODE}"
-
-          sed -i.bak -E "s/^version:.*/version: ${FULL_VERSION}/" pubspec.yaml
-          rm -f pubspec.yaml.bak
-
-          echo "已递增版本: ${RAW_VER} -> ${FULL_VERSION} (Tag: ${RELEASE_TAG})"
-          echo "version=${NEW_VER_NAME}" >> "$GITHUB_OUTPUT"
-          echo "version_code=${NEW_VER_CODE}" >> "$GITHUB_OUTPUT"
+          echo "当前上游同步版本: ${FULL_VERSION} (Tag: ${RELEASE_TAG})"
+          echo "version=${VER_NAME}" >> "$GITHUB_OUTPUT"
+          echo "version_code=${VER_CODE}" >> "$GITHUB_OUTPUT"
           echo "full_version=${FULL_VERSION}" >> "$GITHUB_OUTPUT"
           echo "release_tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
-
-          # 将递增后的 pubspec.yaml 推回 yt3 分支
-          git add pubspec.yaml
-          git commit -m "chore(release): bump version to ${FULL_VERSION} [skip ci]"
-          git push origin HEAD:yt3 || echo "::warning::写回版本号推送跳过，继续使用新版本号打包"
 
       - name: Set up Java 17
         uses: actions/setup-java@v4

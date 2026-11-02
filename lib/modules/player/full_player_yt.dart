@@ -15,6 +15,7 @@ import '../../providers/player_provider.dart';
 import '../../providers/theme_provider.dart';
 import '../../widgets/player_artwork_image.dart';
 import '../../widgets/player_playlist_view.dart';
+import 'full_player.dart';
 import 'full_player_route.dart';
 import 'player_page_role.dart';
 import 'yt/yt_background.dart';
