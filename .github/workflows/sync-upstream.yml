@@ -5,10 +5,10 @@ name: Sync Upstream & Build YT3 Release
 #    - 检测最上游仓库 zzyoxml/md3Music (rust-local-force) 是否有更新
 #    - 自动将本仓库的 rust-local-force 分支同步到与上游一致
 #    - 将 yt3 的定制改动（YT 播放器等）自动三方合并到上游最新代码上（保持 .github/workflows 不被上游覆盖）
-#    - 在本仓库内创建 sync/<版本> -> yt3 的审查 PR（绝不向上游提 PR）；如有冲突则在本仓库创建 Issue 提醒
+#    - 若无冲突则直接推送到本仓库 yt3 分支，并紧接着触发 build-yt3-release 自动编译发布 Release；如有冲突则创建 Issue 提醒
 #
-# 2. build-yt3-release（当代码合入/推送到 yt3 分支，或手动选择立即编译时触发）：
-#    - 自动递增 versionCode 与 versionName（例如 6.2.0 -> 6.2.1+N）
+# 2. build-yt3-release（当同步完成、代码合入 yt3 分支，或手动选择立即编译时触发）：
+#    - 版本号完全跟随上游 pubspec.yaml，不额外递增
 #    - 使用与上游一致的 release.keystore（SHA-256: 84ba3586...）编译 64 位 (arm64-v8a) Release 正式版 APK
 #    - 开启 R8 代码混淆 (isMinifyEnabled = true) 与资源瘦身 (isShrinkResources = true)，去除 Debug 版本
 #    - 自动发布到本仓库的 GitHub Releases 并上传构建产物
@@ -45,6 +45,8 @@ jobs:
     if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.action == 'sync_and_check') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    outputs:
+      synced: ${{ steps.check.outputs.synced }}
     steps:
       - name: Checkout yt3
         uses: actions/checkout@v4
@@ -68,12 +70,18 @@ jobs:
           UPSTREAM_SHA="$(git rev-parse upstream/rust-local-force)"
           UPSTREAM_SHORT="${UPSTREAM_SHA:0:8}"
           UPSTREAM_VER="$(git show upstream/rust-local-force:pubspec.yaml | grep -m1 '^version:' | sed 's/^version:[[:space:]]*//' | tr -d '\r')"
+          VER_NAME="${UPSTREAM_VER%+*}"
+          VER_CODE="${UPSTREAM_VER#*+}"
+          if [[ "$VER_CODE" == "$UPSTREAM_VER" || -z "$VER_CODE" ]]; then
+            VER_CODE=1
+          fi
+          RELEASE_TAG="v${VER_NAME}-yt.${VER_CODE}"
 
-          echo "上游最新提交: ${UPSTREAM_SHA} (版本: ${UPSTREAM_VER})"
+          echo "上游最新提交: ${UPSTREAM_SHA} (版本: ${UPSTREAM_VER}, Release Tag: ${RELEASE_TAG})"
 
           # 1. 保持本仓库 rust-local-force 分支与上游 100% 同步（不改 workflow 权限问题时尽力同步）
           git push origin "refs/remotes/upstream/rust-local-force:refs/heads/rust-local-force" --force || \
-            echo "::warning::rust-local-force 包含上游 workflow 变更，跳过直接强制推送分支，继续生成 yt3 同步 PR"
+            echo "::warning::rust-local-force 包含上游 workflow 变更，跳过直接强制推送分支，继续同步 yt3"
 
           # 2. 读取 .md3/upstream-base-sha 判断当前 yt3 是否已同步到该上游提交
           BASE_SHA=""
@@ -85,26 +93,18 @@ jobs:
           fi
 
           if [[ "$BASE_SHA" == "$UPSTREAM_SHA" ]]; then
-            echo "yt3 已经包含上游最新代码 (${UPSTREAM_VER} @ ${UPSTREAM_SHORT})，无需同步。"
-            echo "has_update=false" >> "$GITHUB_OUTPUT"
+            if ! gh release view "$RELEASE_TAG" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+              echo "yt3 代码已是最新 (${UPSTREAM_VER} @ ${UPSTREAM_SHORT})，但尚未发布 ${RELEASE_TAG} Release，触发打包发布。"
+              echo "synced=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "yt3 已经包含上游最新代码且已发布 ${RELEASE_TAG} (${UPSTREAM_VER} @ ${UPSTREAM_SHORT})，无需同步。"
+            echo "synced=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           echo "检测到上游新版本/新提交：${BASE_SHA:0:8} -> ${UPSTREAM_SHORT} (${UPSTREAM_VER})"
-          echo "has_update=true" >> "$GITHUB_OUTPUT"
-          echo "upstream_sha=${UPSTREAM_SHA}" >> "$GITHUB_OUTPUT"
-          echo "upstream_short=${UPSTREAM_SHORT}" >> "$GITHUB_OUTPUT"
-          echo "upstream_ver=${UPSTREAM_VER}" >> "$GITHUB_OUTPUT"
-
           SYNC_BRANCH="sync/upstream-${UPSTREAM_SHORT}"
-          echo "sync_branch=${SYNC_BRANCH}" >> "$GITHUB_OUTPUT"
-
-          # 如果该同步分支已存在且已有开启的 PR，直接跳过
-          EXISTING_PR="$(gh pr list --repo "${GITHUB_REPOSITORY}" --head "${SYNC_BRANCH}" --base yt3 --state open --json number --jq '.[0].number // empty')"
-          if [[ -n "$EXISTING_PR" ]]; then
-            echo "同步 PR #${EXISTING_PR} 已存在，跳过重复创建。"
-            exit 0
-          fi
 
           # 3. 对最小挂载文件做三方合并 (current=yt3, base=BASE_SHA, other=UPSTREAM_SHA)
           HOOK_FILES=(
@@ -117,7 +117,7 @@ jobs:
             "test/modules/player/full_player_style_sync_test.dart"
           )
 
-          # 以 origin/yt3 为父提交创建同步分支（保证 PR 历史干净）
+          # 以 origin/yt3 为父提交创建同步工作分支
           git checkout -B "${SYNC_BRANCH}" origin/yt3
 
           # 先把整个工作区替换成 upstream/rust-local-force 的最新快照（包含上游最新工作流和 build.gradle.kts）
@@ -136,7 +136,7 @@ jobs:
           mkdir -p .md3
           printf '%s\n' "${UPSTREAM_SHA}" > .md3/upstream-base-sha
 
-          # 对 6 个最小挂载文件做三方合并 (current=yt3, base=上次上游基准 BASE_SHA, other=最新上游 UPSTREAM_SHA)
+          # 对 7 个最小挂载文件做三方合并 (current=yt3, base=上次上游基准 BASE_SHA, other=最新上游 UPSTREAM_SHA)
           CONFLICT_FILES=()
           for hf in "${HOOK_FILES[@]}"; do
             TMP_YT="$(mktemp)"
@@ -164,34 +164,31 @@ jobs:
             done
             BODY+="\n请手动检查并处理。"
             gh issue create --repo "${GITHUB_REPOSITORY}" --title "$TITLE" --body "$(printf '%b' "$BODY")" || true
+            echo "synced=false" >> "$GITHUB_OUTPUT"
             exit 1
           fi
 
           git add -A
           if git diff --cached --quiet; then
             echo "合并后无文件变更。"
+            echo "synced=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           git commit -m "chore(sync): 同步上游 ${UPSTREAM_VER} (${UPSTREAM_SHORT}) [upstream-base:${UPSTREAM_SHORT}]"
-          git push origin "${SYNC_BRANCH}" --force
-
-          PR_URL="$(gh pr create \
-            --repo "${GITHUB_REPOSITORY}" \
-            --base yt3 \
-            --head "${SYNC_BRANCH}" \
-            --title "chore(sync): 同步上游 ${UPSTREAM_VER} (${UPSTREAM_SHORT})" \
-            --body "### 自动同步上游更新
-          - **上游版本**: \`${UPSTREAM_VER}\`
-          - **上游提交**: \`${UPSTREAM_SHA}\`
-          - **合并状态**: 挂载文件与 YT 独立文件全部无冲突自动合并通过
-          - **说明**: 版本号与 \`debug-build.yml\` 完全跟随上游同步，不递增版本号。")"
-
-          echo "已成功创建审查 PR: ${PR_URL}"
+          git push origin "${SYNC_BRANCH}:refs/heads/yt3"
+          echo "已自动合并并推送至 yt3 分支: ${UPSTREAM_VER} (${UPSTREAM_SHORT})"
+          echo "synced=true" >> "$GITHUB_OUTPUT"
 
   build-yt3-release:
     name: Build & Publish YT3 64-bit Release APK
-    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/yt3' && (startsWith(github.event.head_commit.message, 'chore(sync):') || contains(github.event.head_commit.message, 'sync/upstream-') || contains(github.event.head_commit.message, '[release]'))) || (github.event_name == 'workflow_dispatch' && inputs.action == 'build_release_now') }}
+    needs: [sync-upstream]
+    if: >-
+      always() && (
+        (needs.sync-upstream.result == 'success' && needs.sync-upstream.outputs.synced == 'true') ||
+        (github.event_name == 'push' && github.ref == 'refs/heads/yt3' && (startsWith(github.event.head_commit.message, 'chore(sync):') || contains(github.event.head_commit.message, 'sync/upstream-') || contains(github.event.head_commit.message, '[release]'))) ||
+        (github.event_name == 'workflow_dispatch' && inputs.action == 'build_release_now')
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -320,6 +317,10 @@ jobs:
           TAG="${{ steps.bump.outputs.release_tag }}"
           VER="${{ steps.bump.outputs.full_version }}"
           APK="${{ steps.apk.outputs.apk_path }}"
+
+          if gh release view "$TAG" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release delete "$TAG" --repo "${GITHUB_REPOSITORY}" --yes || true
+          fi
 
           git tag -f "$TAG"
           git push origin "refs/tags/${TAG}" --force
