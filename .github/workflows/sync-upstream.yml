@@ -253,11 +253,13 @@ jobs:
       - name: Download official release.keystore & configure signing
         run: |
           set -euo pipefail
-          # 优先从本仓库 keystore release 下载，若无则从上游 zzyoxml/md3Music 下载同一把钥匙
-          if ! curl -fL --retry 3 -o android/app/release.keystore \
-              "https://github.com/${GITHUB_REPOSITORY}/releases/download/keystore/release.keystore"; then
-            curl -fL --retry 3 -o android/app/release.keystore \
-              "https://github.com/zzyoxml/md3Music/releases/download/keystore/release.keystore"
+          # 优先从本仓库或上游下载 release.keystore，若 GitHub CDN 504 则使用内置同源钥匙兜底
+          if ! curl -fL --retry 2 --connect-timeout 10 -o android/app/release.keystore \
+              "https://github.com/${GITHUB_REPOSITORY}/releases/download/keystore/release.keystore" 2>/dev/null; then
+            if ! curl -fL --retry 2 --connect-timeout 10 -o android/app/release.keystore \
+                "https://github.com/zzyoxml/md3Music/releases/download/keystore/release.keystore" 2>/dev/null; then
+              printf "%s" "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" | base64 -d > android/app/release.keystore
+            fi
           fi
 
           cat > android/keystore.properties <<EOF
@@ -274,7 +276,7 @@ jobs:
           set -euo pipefail
           flutter pub get
           # 只编译 64 位 (android-arm64) 标准版 Release 包（build.gradle.kts 已开启 isMinifyEnabled=true 与 isShrinkResources=true）
-          flutter build apk --release --flavor standard --split-per-abi \
+          flutter build apk --release --flavor lite --split-per-abi \
             --target-platform android-arm64 \
             --android-project-arg=md3ApplicationId=com.md3music.md3music
 
@@ -284,7 +286,7 @@ jobs:
           set -euo pipefail
           apk_dir="build/app/outputs/flutter-apk"
           ver="${{ steps.bump.outputs.version }}"
-          src="${apk_dir}/app-arm64-v8a-standard-release.apk"
+          src="${apk_dir}/app-arm64-v8a-lite-release.apk"
           dst="${apk_dir}/MD3音乐-${ver}-YT版-64位-release.apk"
           mv "$src" "$dst"
 
