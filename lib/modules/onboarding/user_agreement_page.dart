@@ -84,7 +84,8 @@ class UserAgreementPage extends StatefulWidget {
 
 class _UserAgreementPageState extends State<UserAgreementPage>
     with CarModePanelSuppressor<UserAgreementPage> {
-  bool _agreed = false;
+  // 默认勾选：协议页只在首启/复看时出现，默认勾上省去一次手动点击。
+  bool _agreed = true;
 
   /// SharedPreferences key：标记用户已同意协议。
   /// 设置后下次冷启动不再展示。

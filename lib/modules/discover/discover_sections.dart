@@ -38,7 +38,10 @@ extension DiscoverSectionInfo on DiscoverSection {
 class DiscoverSectionConfig {
   const DiscoverSectionConfig({
     this.order = DiscoverSection.values,
-    this.hidden = const {},
+    this.hidden = const {
+      DiscoverSection.newSongs,
+      DiscoverSection.newAlbums,
+    },
   });
 
   // settings_ 前缀确保「还原所有设置」会清除布局，但不涉及账号数据。

@@ -280,7 +280,10 @@ class _LaunchPadCard extends StatelessWidget {
     final content = ClipRRect(
       borderRadius: BorderRadius.circular(16),
       child: Material(
-        color: cs.surfaceContainerLow,
+        // 壁纸模式：60% 透明（40% 不透明），普通背景保持原有纯色。
+        color: Theme.of(context).scaffoldBackgroundColor == Colors.transparent
+            ? cs.surfaceContainerLow.withValues(alpha: 0.4)
+            : cs.surfaceContainerLow,
         child: InkWell(
           onTap: hidden ? null : onTap,
           child: Column(

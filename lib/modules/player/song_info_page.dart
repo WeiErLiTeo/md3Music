@@ -11,6 +11,7 @@ import '../../core/utils/audio_format_utils.dart';
 import '../../core/utils/audio_scanner.dart' show audioExtensions;
 import '../../data/models/album.dart';
 import '../../data/models/song.dart';
+import '../../data/repositories/settings_repository.dart';
 import '../../providers/player_provider.dart';
 import '../../providers/song_match_provider.dart';
 import '../../widgets/player_artwork_image.dart';
@@ -335,7 +336,8 @@ class _SongInfoPageState extends State<SongInfoPage> {
                             showSongRankingSheet(context, matchedSong),
                         child: const Text('看成绩单'),
                       ),
-                    if (isMatched)
+                    if (isMatched &&
+                        SettingsRepository.accompanyFeatureEnabled.value)
                       TextButton(
                         onPressed: () =>
                             showSongAccompanySheet(context, matchedSong),

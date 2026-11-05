@@ -85,6 +85,9 @@ class KugouApiClient {
           // 4xx/5xx 业务错误（如未登录）仍然代表网络可达
           if (_isConnectionError(e)) {
             networkReachable.value = false;
+            if (_isLocalApiUri(e.requestOptions.uri)) {
+              KugouApiClient.onLocalServerUnavailable?.call();
+            }
           }
           handler.next(e);
         },
@@ -98,6 +101,9 @@ class KugouApiClient {
   /// 业务错误（4xx/5xx）不影响此值。
   /// FavoritesPage 等页面用它实时反映 banner 显示。
   static final ValueNotifier<bool> networkReachable = ValueNotifier(true);
+
+  /// Local API transport failures notify the lifecycle owner for background recovery.
+  static void Function()? onLocalServerUnavailable;
 
   static bool _isConnectionError(DioException e) {
     return e.type == DioExceptionType.connectionError ||
@@ -151,36 +157,18 @@ class KugouApiClient {
 
   static int markServerStarting() => _serverLifecycle.beginStart();
 
-  static void markServerReady([int? generation]) {
-    if (_serverLifecycle.markReady(generation ?? _serverLifecycle.generation)) {
-      localServerAvailable.value = true;
-    }
-  }
+  static void markServerReady([int? generation]) =>
+      _serverLifecycle.markReady(generation ?? _serverLifecycle.generation);
 
-  static void markServerStartFailed([int? generation]) {
-    if (_serverLifecycle.markFailed(
-      generation ?? _serverLifecycle.generation,
-    )) {
-      localServerAvailable.value = false;
-    }
-  }
+  static void markServerStartFailed([int? generation]) =>
+      _serverLifecycle.markFailed(
+        generation ?? _serverLifecycle.generation,
+      );
 
-  static int markServerStopping() {
-    localServerAvailable.value = false;
-    return _serverLifecycle.beginStop();
-  }
+  static int markServerStopping() => _serverLifecycle.beginStop();
 
-  static void markServerStopped(int generation) {
-    if (_serverLifecycle.markStopped(generation)) {
-      localServerAvailable.value = false;
-    }
-  }
-
-  /// 本地 API 服务器可用性。启动失败（桌面缺 kugou_server.dll、端口全占用等）
-  /// 时置 false，UI 据此显示"本地数据接口未启动"提示——否则用户只能看到
-  /// 一片加载不出来的空页面，无从判断是网络问题还是安装包残缺。
-  /// 初值 true：正常启动过程中不闪提示。
-  static final ValueNotifier<bool> localServerAvailable = ValueNotifier(true);
+  static void markServerStopped(int generation) =>
+      _serverLifecycle.markStopped(generation);
 
   static LocalServerState get localServerState => _serverLifecycle.state;
   static int get localServerGeneration => _serverLifecycle.generation;
@@ -3040,7 +3028,57 @@ class KugouApiClient {
       noCache: noCache,
     );
     if (json == null) return null;
-    return parseHomeDiscoverSongs(json);
+    return _completeHomeDiscoverDetails(parseHomeDiscoverSongs(json));
+  }
+
+  /// 刷歌推荐只给歌手名；按发行编号一次补齐 ID，不用同名搜索猜版本。
+  Future<List<KugouSongDetail>> _completeHomeDiscoverDetails(
+    List<KugouSongDetail> songs,
+  ) async {
+    bool missing(String? id) => id == null || id.isEmpty || id == '0';
+    final ids = songs
+        .where((s) => missing(s.artistId) || missing(s.albumId))
+        .map((s) => s.albumAudioId)
+        .whereType<String>()
+        .where((id) => (int.tryParse(id) ?? 0) > 0)
+        .toSet();
+    if (ids.isEmpty) return songs;
+    final json = await _get(
+      KugouEndpoints.krmAudio,
+      queryParameters: {
+        'album_audio_id': ids.join(','),
+        'fields': 'album_info,base,authors.base',
+      },
+    );
+    final data = json?['data'];
+    if (data is! List) return songs;
+    final details = <String, KugouSongDetail>{};
+    for (final entry in data) {
+      if (entry is! Map<String, dynamic>) continue;
+      try {
+        final authors = entry['authors'];
+        final detail = KugouSongDetail.fromJson({
+          ...entry,
+          if (authors is List)
+            'authors': [
+              for (final author in authors)
+                if (author is Map) author['base'] ?? author,
+            ],
+        });
+        final id = detail.albumAudioId;
+        if (id != null && ids.contains(id)) details[id] = detail;
+      } catch (_) {
+        // 单条元数据损坏不能丢掉可播放的推荐。
+      }
+    }
+    return songs.map((song) {
+      final detail = details[song.albumAudioId];
+      if (detail == null) return song;
+      return song.copyWith(
+        albumId: missing(song.albumId) ? detail.albumId : null,
+        artistId: missing(song.artistId) ? detail.artistId : null,
+      );
+    }).toList();
   }
 
   // ==================== Scene ====================

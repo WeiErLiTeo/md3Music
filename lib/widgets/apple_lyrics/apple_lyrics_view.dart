@@ -277,9 +277,6 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
   double _smoothPosMs = 0;
   int _lastAuthorityPosMs = -1;
 
-  // P0: 间奏点动画降频（30fps）用的帧时间累积器
-  double _interludeAccumulator = 0;
-
   /// 逐字动画平滑时间的权威位置校正：
   ///
   /// - [_smoothPosSeekJumpMs]：权威位置跳变超过此值视为 seek/大跳变，直接吸附。
@@ -359,6 +356,11 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
   /// 与"自然结束"两条路径被正确区分。
   @visibleForTesting
   bool get interludeDotsInExitPhaseForTest => _interludeDots.isInExitPhase;
+
+  /// 间奏点动画时钟（ms）。仅测试用：验证收起阶段圆点逐帧推进（省电模式
+  /// 名义步长下曾出现每 3 帧才推进一次的台阶卡顿）与收尾补帧不瞬灭。
+  @visibleForTesting
+  double get interludeDotsAnimationMsForTest => _interludeDots.animationTimeMs;
 
   /// 间奏占位展开进度（0=完全收起，1=完全展开）。仅测试用。
   @visibleForTesting
@@ -1353,6 +1355,10 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
     // 统一走 _syncEcoDriver 确定驱动源（eco 开关变化：锁定 → 60fps Timer；
     // 解锁/关闭 → Ticker 满帧），并确保偏好变化（如 useDuetLayout）触发重建
     _syncEcoDriver();
+    // 间奏点自定义参数（水平位置/圆点大小/间距）由 painter 在 paint 时即时读取，
+    // 但暂停冻结期间没有帧驱动重绘；这里主动补一次 repaint，
+    // 保证拖动「歌词动画」页滑块时正在显示的间奏点即时跟随。
+    _repaintNotifier.fireRepaint();
     setState(() {});
   }
 
@@ -1884,24 +1890,37 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
       // setInterlude 幂等保护无法区分"每帧重复调用"与"seek 回到同一间奏"，
       // 不重置会导致动画从旧进度继续、甚至超时隐藏（间奏点不显示）。
       final bool timeRewound = _authorityTimeMs < _lastInterludeCheckTimeMs;
+      // 权威时间是**连续推进**跨过间奏窗口终点（非 seek/点击大跳）→ 判定为
+      // 自然结束：即使帧时钟还没走到消失段（被驱动名义步长拖慢），也必须补帧
+      // 播完消失动画，而不是按 isInExitPhase 误判成"跳转离开"直接清除圆点。
+      final bool naturalAdvance =
+          !timeRewound &&
+          _lastInterludeCheckTimeMs >= 0 &&
+          _authorityTimeMs - _lastInterludeCheckTimeMs <= _smoothPosSeekJumpMs;
       _lastInterludeCheckTimeMs = _authorityTimeMs;
       _updateInterlude(
         forceDotsReset: timeRewound,
+        naturalAdvance: naturalAdvance,
         // Ticker 曾被 mute（切走 tab / 退后台）恢复：动画时钟滞后于真实进度，
         // 需对齐到当前间奏窗口内的真实偏移（而非重置从 0 重播入场动画）。
         alignDotsToRealTime: tickerGapResume,
       );
     }
 
-    // 6. 推进间奏点动画时钟（基于帧 dt，60fps 流畅，不受 positionStream 5fps 限制）
+    // 6. 推进间奏点动画时钟（基于帧 dt，逐帧）
     // 暂停时不推进动画时钟，让间奏点随播放器一起暂停
-    // P0: 降到 30fps 推进（累积帧时间，33ms 才 tick 一次），视觉无感但减半推进开销
+    //
+    // 这里曾被「累加帧 dt、满 33ms 才 tick 一次」降到 30fps（"视觉无感"）。
+    // 实测该降频在省电模式下**一个帧都省不掉**（占位收起弹簧逐帧变化，本帧
+    // 必然重绘），却把圆点的缩放/透明度量化成大台阶：eco 驱动按名义 16ms
+    // 步进，`16 × 2 = 32ms` 不足 33.3ms 阈值 → 实际每 3 帧才推进一次（20fps），
+    // 收起的最后 750ms 只剩 15 个缩放台阶、透明度只剩 8 档，且 easeInBack 末段
+    // 斜率最大，观感就是"一抽一抽地收"。tick 只是标量加法 + 3 个圆，成本可
+    // 忽略，故恢复逐帧推进，台阶消失。
+    // 帧时钟与播放时钟的系统性滞后（名义 16ms < 真实 vsync）不再靠这里降频
+    // 掩盖，改由权威位置**逐次按比例小步追平**（见 [_updateInterlude]）。
     if (widget.isPlaying) {
-      _interludeAccumulator += dt;
-      if (_interludeAccumulator >= 1.0 / 30.0) {
-        _interludeDots.tick(_interludeAccumulator);
-        _interludeAccumulator = 0;
-      }
+      _interludeDots.tick(dt);
     }
 
     // 7. 推进间奏占位 spring（_interludeExpandProgress）
@@ -2332,9 +2351,13 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
   /// `currentTimeMs - gapStart`（真实窗口内偏移）。用于 Ticker 被 mute
   /// （切走 tab / 退后台）后恢复：帧时钟冻结期间歌曲继续播放，动画时钟
   /// 滞后于真实进度，对齐后间奏点立即处于正确阶段，而非重置重播入场动画。
+  ///
+  /// [naturalAdvance] 为 true 表示权威时间是连续推进离开间奏窗口（自然结束），
+  /// 此时即使帧时钟尚未走到消失段也要补帧，保证圆点播完缩小动画而不是直接消失。
   void _updateInterlude({
     bool forceDotsReset = false,
     bool alignDotsToRealTime = false,
+    bool naturalAdvance = false,
   }) {
     int foundIdx = -1;
     int? gapStart;
@@ -2363,14 +2386,23 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
       // 先确保间奏状态正确（新间奏会重置时钟，幂等命中的相同间奏保留），
       // 再按需校正动画时钟。
       _interludeDots.setInterlude(gapStart, gapEnd, forceReset: forceDotsReset);
-      // 时钟漂移校正：帧时钟在 Ticker mute（切走 tab / 退后台）或页面重建
-      // （TabBarView 默认销毁 State，新 State 时钟从 0 开始）期间滞后于真实
-      // 进度。每次权威位置更新时比较偏差，超阈值（1s）即对齐到真实窗口偏移。
-      // 正常播放下偏差不超过 position 更新粒度（约 200ms），不会误触发，
-      // 因此不引入额外开销。
+      // 时钟漂移校正：帧时钟由驱动步进累积，省电模式下心智步长（名义 16ms）
+      // 慢于真实 vsync，会稳定落后真实进度。旧实现要落后满 1000ms 才一次性
+      // 硬对齐，收起前段表现为 scale 突跳一档；现改为每次权威位置更新
+      // （约 200ms 一次）**单向按比例追前**（补掉残差的一半，单次 ≤100ms）：
+      // 追平速率恒高于漂移速率，稳态残差约 16ms（肉眼不可见），因此正常播放
+      // 几乎不会再触发下面的硬对齐分支。
+      //
+      // 仅当滞后达到**粗粒度**（Ticker mute / 页面重建，新 State 时钟从 0 起）
+      // 时才一次性硬对齐：这种场景下小步追永远追不上，而硬跳不产生可见跳变
+      // （圆点尚未按旧时钟画过，或本就停在错误阶段）。
       if (alignDotsToRealTime ||
           _interludeDots.shouldRealignTo(_authorityTimeMs, driftMs: 1000)) {
+        // Ticker mute / 页面重建：滞后可能是整段（数秒），需一次性对齐，
+        // 否则圆点会停留在错误阶段（表现为"跟不上进度"）。
         _interludeDots.alignToRealTime(_authorityTimeMs);
+      } else {
+        _interludeDots.correctDriftGently(_authorityTimeMs);
       }
       // 记录最后激活的 anchor 行索引（用于间奏结束后继续计算占位偏移）
       if (foundIdx < _interludeAfterIndices.length) {
@@ -2388,9 +2420,18 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
       // 这种情况直接清除圆点（_lastActiveAnchorIdx 不在此重置：占位偏移
       // 仍由 _interludeExpandProgress 平滑收起，避免下方行瞬间跳位）。
       //
-      // 占位收起完成后的收尾（clear + 释放 anchor）统一在推进循环的
-      // 归零分支处理——那里不受本方法的调用时机限制。
-      if (!_interludeDots.isInExitPhase) {
+      // 判定分两条：
+      // 1. 权威时间连续推进跨过窗口终点（naturalAdvance）= 自然结束 →
+      //    只前进地补到消失段起点，圆点从当前尺寸连续播完消失动画。这是
+      //    省电模式收起卡顿的直接修复点：帧时钟被驱动名义步长拖慢后，长间奏
+      //    自然结束时可能还没走进消失段，旧的 isInExitPhase 二元判定会把这种
+      //    自然结束误判成"跳转离开"而立即 clear（圆点没有缩小过程直接消失）。
+      // 2. 时间大跳（seek / 点击其他行）离开 → 维持原严格语义：时钟未到消失段
+      //    就立即清除。满尺寸圆点若继续显示，会在占位收起期间悬浮在已切换的
+      //    歌词上（穿帮回归护栏的场景）。
+      if (naturalAdvance) {
+        _interludeDots.snapToExitPhase();
+      } else if (!_interludeDots.isInExitPhase) {
         _interludeDots.clear();
       }
     }
@@ -3678,12 +3719,16 @@ class _LyricsPainter extends CustomPainter {
           interludePlaceholderHeight * interludeExpandProgress;
       // 间奏点 centerY 居中在占位区域内
       final double centerY = anchorBottomY + placeholderH / 2;
-      // 点半径与间距跟随 fontSize 缩放（AMLL 风格：直径约 6-8px @ fontSize=24）
-      final double dotRadius = fontSize * 0.18;
-      final double dotSpacing = fontSize * 0.9;
-      // 间奏点单独右移：startX * 1.5（比歌词左对齐右移 0.5em）
-      // 让点整体居中偏右，视觉更平衡
-      final double dotsStartX = fontSize * 1.5;
+      // 点半径与间距跟随 fontSize 缩放，系数由用户在「歌词动画」页调节
+      // （默认 0.18 / 0.9 = 历史写死值，AMLL 风格：直径约 8.6px @ fontSize=24）
+      final double dotRadius =
+          fontSize * LyricPreferences.instance.interludeDotRadius;
+      final double dotSpacing =
+          fontSize * LyricPreferences.instance.interludeDotSpacing;
+      // 间奏点整体水平起点 = fontSize × 系数（默认 1.5：比歌词左对齐
+      // 右移 0.5em，让点整体居中偏右，视觉更平衡）
+      final double dotsStartX =
+          fontSize * LyricPreferences.instance.interludeDotsStartX;
       interludeDots.paintAtLineY(
         canvas,
         dotsStartX,

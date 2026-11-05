@@ -25,7 +25,7 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose") version "2.3.20" apply false
 }
 
-// JAudioTagger 社区分叉（com.github.AdrienPoupa:jaudiotagger）托管在 JitPack，
+// SuperLyricApi / lyricon 等依赖托管在 JitPack，
 // 国内镜像源（aliyun）不代理 JitPack，必须显式在 settings 中声明。
 dependencyResolutionManagement {
     repositoriesMode.set(org.gradle.api.initialization.resolve.RepositoriesMode.PREFER_PROJECT)

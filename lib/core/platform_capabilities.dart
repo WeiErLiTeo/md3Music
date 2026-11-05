@@ -64,8 +64,14 @@ bool get isWindowsDesktop {
 /// `kTvBuild` 是 const，TV 包内本表达式可被树摇折叠。
 bool get supportsUsbExclusive => isAndroidPlatform && !kTvBuild;
 
-/// 听歌识曲（依赖 Android `MediaSession`/麦克风采集链路与 RMS 分析）。
-bool get supportsSongRecognition => isAndroidPlatform;
+/// 听歌识曲：Android 走 `record` 的 unprocessed 采集，
+/// Windows 走 `record_windows`（MediaFoundation）+ 本地 Rust PCM 前处理；
+/// 两者共用同一套指纹链路（`/audio/match`），故桌面端只放行 Windows。
+bool get supportsSongRecognition => isAndroidPlatform || isWindowsDesktop;
+
+/// 悬浮窗识曲：依赖 Android 悬浮窗权限 + MediaProjection 授权，只有 Android 有。
+/// 桌面端页面必须隐藏该入口（点了就是死路）。
+bool get supportsFloatingSongRecognition => isAndroidPlatform;
 
 /// 预测性手势（横滑切歌 / 长按识别等，依赖 Android 系统的
 /// `MotionEvent` 手势与振动反馈配合）。

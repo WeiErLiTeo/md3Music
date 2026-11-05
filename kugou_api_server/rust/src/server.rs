@@ -525,7 +525,13 @@ fn handle_request(mut request: Request, _data_dir: &str) -> Result<(), String> {
         || matches!(
             path.as_str(),
             "/login/qr/check" | "/login/wx/check" | "/login/qq/qr/check"
-        );
+        )
+        // 伴奏对齐：结果完全取决于请求体里的两路 PCM，但 apicache 的 key 只有
+        // `host + url`（不含 body），URL 又是恒定的 → 第一次算出的偏移会被复用
+        // 给之后所有歌曲。真机实测：四首不同的歌返回完全相同的
+        // offset/conf/bpm 四元组（-79/0.777/131.8/131.8 重复出现），
+        // 表现为"有的歌永远对不齐"。这类"输入在 body 里"的接口必须绕过缓存。
+        || matches!(path.as_str(), "/accompaniment/align");
 
     if !bypass {
         if let Some(entry) = CACHE.get_or_init(crate::cache::Cache::new).get(&cache_key) {

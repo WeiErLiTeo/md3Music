@@ -13,10 +13,12 @@ import 'core/build_flags.dart';
 import 'core/remote/tv_focus_debug.dart';
 import 'core/layout/responsive_layout.dart';
 import 'core/utils/app_haptics.dart';
+import 'core/services/accompany/accompany_source.dart';
 import 'core/services/desktop_lyric_service.dart';
 import 'core/services/diagnostic_logger.dart';
 import 'core/services/windows_default_font.dart';
 import 'core/services/windows_app_lifecycle.dart' as windows_lifecycle;
+import 'core/services/windows_window_controls.dart';
 import 'modules/recognition/floating_recognition_service.dart';
 import 'core/services/equalizer_service.dart';
 import 'core/services/viper_master_service.dart';
@@ -97,8 +99,7 @@ Future<void> _main() async {
 
 /// 启动引导：并行初始化无依赖服务、恢复偏好、预取 SharedPreferences。
 /// 返回 onboarding / 用户协议状态，以及首帧使用的背景图开关值。
-/// 公开入口（main）与私有入口（lib/private/main_private）复用同一流程，
-/// 私有入口在此基础上安装扩展钩子后 runApp。
+/// 各入口（main 与其它入口）复用同一流程，其它入口在此基础上安装扩展钩子后 runApp。
 /// 返回 (是否首次引导, 是否需用户协议, 背景图开关, 主题模式播种值)。
 /// 主题模式为 null 时表示从未持久化，由 ThemeProvider 保持初值 ThemeMode.system。
 Future<(bool, bool, bool, ThemeMode?)> runBootstrap() async {
@@ -106,6 +107,8 @@ Future<(bool, bool, bool, ThemeMode?)> runBootstrap() async {
   final windowsFontFuture = WindowsDefaultFont.load();
   if (Platform.isWindows) {
     _windowsTrayChannel.setMethodCallHandler((call) async {
+      // snap layouts 的悬停/按压状态回传（标题栏三键高亮驱动）。
+      if (WindowsWindowControls.handleNativeCall(call)) return;
       if (call.method != 'requestQuit' || _windowsExitInProgress) return;
       _windowsExitInProgress = true;
       try {
@@ -134,7 +137,7 @@ Future<(bool, bool, bool, ThemeMode?)> runBootstrap() async {
   // 内部自带失败兜底，不会中断启动。
   await DiagnosticLogger.instance.init();
   markStartup('diagnostics_ready');
-  // 在runBootstrap注册，公开与私有入口都可记录真正的首帧时间。
+  // 在 runBootstrap 注册，所有入口都可记录真正的首帧时间。
   WidgetsBinding.instance.addPostFrameCallback((_) {
     markStartup('first_frame');
   });
@@ -142,7 +145,7 @@ Future<(bool, bool, bool, ThemeMode?)> runBootstrap() async {
   // 全局 ErrorWidget 兜底：release 版默认 ErrorWidget 是纯灰块，横竖屏切换时
   // 某个 widget 构建异常会让整屏变纯灰且无任何线索（问题③）。改为可读占位
   // （非灰、带图标与提示），并把异常写入诊断日志，便于 adb logcat / 导出定位。
-  // 双入口（main / main_private）共用 runBootstrap，一处生效两端。
+  // 各入口共用 runBootstrap，一处生效两端。
   ErrorWidget.builder = (FlutterErrorDetails details) {
     DiagnosticLogger.instance.e(
       'ErrorWidget: ${details.exceptionAsString()}\n${details.stack}',
@@ -357,6 +360,15 @@ Future<void> _restoreLyricPushPref() async {
     final settings = SettingsRepository();
     // 逐字歌词时间偏移：加载到内存缓存（播放页每帧读取），默认 0
     await settings.getLyricTimeOffset();
+    // 伴唱伴奏来源：加载到内存镜像（默认在线伴奏）
+    // lite 包不含端侧分离，且设置页的来源单选块已随之树摇；若存量偏好仍是
+    // on_device，播放页伴唱入口会永久不可见且无法改回，故启动时自愈为在线伴奏。
+    final source = await settings.getAccompanySource();
+    if (!kStemSeparationAvailable && source == AccompanySource.onDevice) {
+      await settings.setAccompanySource(AccompanySource.online);
+    }
+    // 伴唱功能开关：默认关闭，关闭时播放页不显示伴唱入口
+    await settings.getAccompanyFeatureEnabled();
 
     // 蓝牙歌词（独立开关）
     final btLyricEnabled = await settings.getBluetoothLyricEnabled();

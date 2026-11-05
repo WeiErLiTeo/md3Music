@@ -773,6 +773,9 @@ import java.util.concurrent.TimeoutException;
     if (artworkBitmap != null) {
       builder.putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, artworkBitmap);
       builder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, artworkBitmap);
+      // 一些车机（包括 CarWith）只读取标准 ART 键，不回退到 DISPLAY_ICON/ALBUM_ART。
+      // 与现有封面共用同一 Bitmap，避免引入另一份解码/缩放或改动其他播放元数据。
+      builder.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, artworkBitmap);
     }
 
     if (metadata.folderType != null && metadata.folderType != MediaMetadata.FOLDER_TYPE_NONE) {

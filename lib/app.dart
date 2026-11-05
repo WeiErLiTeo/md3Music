@@ -24,6 +24,8 @@ import 'core/layout/tv_shell.dart';
 import 'core/layout/ui_density.dart';
 import 'core/remote/tv_exit_confirm_dialog.dart';
 import 'core/remote/tv_focus_highlight.dart';
+import 'core/remote/tv_ime_guard.dart';
+import 'core/remote/tv_ime_proxy_bridge.dart';
 import 'core/remote/tv_key_repeat.dart';
 // tv: 播放页返回键兜底（焦点丢回路由 FocusScope 时页内拦截器收不到按键）。
 import 'core/remote/tv_player_back_focus.dart';
@@ -35,6 +37,7 @@ import 'core/services/lyricon_provider_service.dart';
 import 'core/services/media_notification_service.dart';
 import 'core/services/music_haptics_service.dart';
 import 'core/services/vivo_mix_sync.dart';
+import 'core/services/voice_search_bridge.dart';
 import 'core/services/startup_auto_play.dart';
 import 'core/services/windows_fullscreen.dart';
 import 'core/services/windows_taskbar_sync.dart';
@@ -133,7 +136,6 @@ import 'providers/car_mode_provider.dart';
 import 'providers/listen_together_provider.dart';
 import 'services/kugou_server.dart';
 import 'widgets/dlna_casting_overlay.dart';
-import 'core/widgets/local_server_down_banner.dart';
 
 /// 形态交棒取证日志的生效档（debug + profile）。
 ///
@@ -214,8 +216,8 @@ class MyApp extends StatelessWidget {
   /// 主题模式的启动播种值：null = 从未持久化，保持 ThemeProvider 初值 ThemeMode.system。
   final ThemeMode? initialThemeMode;
 
-  /// 可选扩展：额外注册的 Provider 列表（默认无，由私有构建注入，
-  /// 用于注册私有功能 Provider）。
+  /// 可选扩展：额外注册的 Provider 列表（默认无，由宿主注入，
+  /// 用于注册额外的功能 Provider）。
   final List<SingleChildWidget>? extraProviders;
 
   const MyApp({
@@ -339,7 +341,7 @@ class MyApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => CarModeProvider()),
         // 一起听（众乐房）：广场列表 + 房间会话（心跳/轮询/播放同步）
         ChangeNotifierProvider(create: (_) => ListenTogetherProvider()),
-        // 可选扩展：私有构建注入的额外 Provider（默认无）
+        // 可选扩展：宿主注入的额外 Provider（默认无）
         ...?extraProviders,
       ],
       // Windows 键鼠快捷键（空格播放/暂停、F 播放页、Esc 返回、侧键前进后退）。
@@ -500,6 +502,10 @@ class _AppViewState extends State<_AppView> {
       player: context.read<PlayerProvider>(),
       favorites: context.read<FavoritesProvider>(),
       library: context.read<LibraryProvider>(),
+    );
+    // MD3Music fork v66：车机语音点歌（playFromSearch / legacy browse 搜索）。
+    VoiceSearchBridge.instance.attach(
+      player: context.read<PlayerProvider>(),
     );
   }
 
@@ -693,18 +699,24 @@ class _AppViewState extends State<_AppView> {
   /// 优先用比例自适应（按屏宽取约 5%、封顶 [kTvOverscanInset]）而不是固定
   /// 48dp 恢复。焦点特效溢出由 Dpad.wrap 的 scrollPadding(64) 兜底。
   Widget _tvContentScope(BuildContext context, Widget? child) {
-    return Builder(
-      builder: (mqContext) {
-        final mq = MediaQuery.of(mqContext);
-        return MediaQuery(
-          data: mq.copyWith(
-            textScaler: mq.textScaler.clamp(
-              minScaleFactor: kTvMinTextScale,
-              maxScaleFactor: kMaxSystemTextScale,
+    // tv: 输入法会话桥（见 TvImeProxyBridge）：本层常驻 MaterialApp.builder
+    // 子树，把「输入框是否持焦」(kTextInputFocused) 转发给原生代理 View
+    // (TvImeProxyView)，让低内存 Android TV（config_preventImeStartupUnlessText
+    // Editor=true，Flutter #177360）肯给本窗口绑定输入法会话——否则遥控器按键
+    // 一个都到不了软键盘，无法选字。非 TV 构建整体不编入。
+    return TvImeProxyBridge(
+      child: Builder(
+        builder: (mqContext) {
+          final mq = MediaQuery.of(mqContext);
+          return MediaQuery(
+            data: mq.copyWith(
+              textScaler: mq.textScaler.clamp(
+                minScaleFactor: kTvMinTextScale,
+                maxScaleFactor: kMaxSystemTextScale,
+              ),
             ),
-          ),
-          child: Stack(
-            children: [
+            child: Stack(
+              children: [
               // tv: 滚动不产生 FocusManager 通知——播放列表切歌后的「自动滚到
               // 当前曲」等程序化 animateTo 在红框 Ticker 静音后不会被跟随，红框
               // 会滞留旧位置（焦点与页面元素错位）。统一接住滚动通知唤醒红框；
@@ -731,10 +743,17 @@ class _AppViewState extends State<_AppView> {
                   onBack: _handleTvBack,
                 )(
                   context,
-                  // tv: 方向键连发层（见 TvKeyRepeatLayer）：必须包在 Dpad 之内、
-                  // Navigator 之外——本层 Focus 节点是全部焦点节点的祖先，且位于
-                  // Dpad 的 Shortcuts 之下（按键先经本层，才到 dpad 遍历）。
-                  TvKeyRepeatLayer(child: child ?? const SizedBox.shrink()),
+                  // tv: 输入法保活守卫（见 TvImeGuard）：包在 Dpad 之内、
+                  // TvKeyRepeatLayer 之外。按键沿 primaryFocus 向上冒泡时本层
+                  // 先于 dpad 根部 Shortcuts 拿到方向键，输入框持焦时把四方向
+                  // 键就地吃掉——防止 dpad「单行输入框上下键=移出字段」的逃逸
+                  // 把 TextField 挤失焦、连带收起系统输入法（TV 键盘"一按就
+                  // 没"的直接触发层；Flutter #177360 同族）。退出输入框靠 BACK。
+                  TvImeGuard(
+                    child: TvKeyRepeatLayer(
+                      child: child ?? const SizedBox.shrink(),
+                    ),
+                  ),
                 ),
               ),
               // 焦点红框叠在最上层（IgnorePointer，不拦按键）。
@@ -743,6 +762,7 @@ class _AppViewState extends State<_AppView> {
           ),
         );
       },
+    ),
     );
   }
 
@@ -821,6 +841,8 @@ class _AppViewState extends State<_AppView> {
     MediaNotificationService.onOpenCardLyric = null;
     // v40：原子随身听列表同步一并解绑（去抖 Timer、provider 监听、点播回调）。
     VivoMixSync.instance.dispose();
+    // v66：语音点歌回调一并摘除（旧 State 的闭包不得滞留）。
+    VoiceSearchBridge.instance.dispose();
     _shortcutConfig?.removeListener(_applyDesktopShortcuts);
     _playerProvider?.removeListener(_onPlayerChanged);
     _backgroundThemeProvider?.removeListener(_onBackgroundChanged);
@@ -1397,7 +1419,9 @@ class _MainLayoutState extends State<_MainLayout>
         page = const DiscoverPage();
         break;
       case 'coverflow':
-        page = const CoverFlowPage();
+        page = CoverFlowPage(
+          onBack: () => unawaited(_dispatchBack(allowExitAtRoot: false)),
+        );
         break;
       case 'library':
         page = const LibraryPage();
@@ -1570,8 +1594,8 @@ class _MainLayoutState extends State<_MainLayout>
         return NavigationDestination(
           icon: _AnimatedTabIcon(
             selected: isSelected,
-            outlinedIcon: Icons.dynamic_feed_outlined,
-            filledIcon: Icons.dynamic_feed,
+            outlinedIcon: Icons.podcasts_outlined,
+            filledIcon: Icons.podcasts,
           ),
           label: tab.label,
         );
@@ -1712,8 +1736,8 @@ class _MainLayoutState extends State<_MainLayout>
         );
       case 'channel':
         return NavigationRailDestination(
-          icon: const Icon(Icons.dynamic_feed_outlined),
-          selectedIcon: const Icon(Icons.dynamic_feed),
+          icon: const Icon(Icons.podcasts_outlined),
+          selectedIcon: const Icon(Icons.podcasts),
           label: label,
         );
       case 'sheet':
@@ -1843,8 +1867,8 @@ class _MainLayoutState extends State<_MainLayout>
         );
       case 'channel':
         return NavigationDrawerDestination(
-          icon: const Icon(Icons.dynamic_feed_outlined),
-          selectedIcon: const Icon(Icons.dynamic_feed),
+          icon: const Icon(Icons.podcasts_outlined),
+          selectedIcon: const Icon(Icons.podcasts),
           // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
           label: const Text(''),
         );
@@ -2495,7 +2519,9 @@ class _MainLayoutState extends State<_MainLayout>
         page = const DiscoverPage();
         break;
       case 'coverflow':
-        page = const CoverFlowPage();
+        page = CoverFlowPage(
+          onBack: () => unawaited(_dispatchBack(allowExitAtRoot: false)),
+        );
         break;
       case 'library':
         page = const LibraryPage();
@@ -2857,12 +2883,7 @@ class _MainLayoutState extends State<_MainLayout>
                   selectedIndex: _selectedIndex,
                   railDestinations: railDestinations,
                   pageBuilder: _buildPageForTab,
-                  header: ValueListenableBuilder<bool>(
-                    valueListenable: KugouApiClient.localServerAvailable,
-                    builder: (context, available, _) => available
-                        ? const SizedBox.shrink()
-                        : LocalServerDownBanner(onRetry: KugouApiServer.start),
-                  ),
+                  header: const SizedBox.shrink(),
                   onDestinationSelected: (index) {
                     if (isFullPlayerOnTop) return;
                     setState(() {
@@ -3456,18 +3477,11 @@ class _MainLayoutState extends State<_MainLayout>
     bool immersive,
   ) {
     // tv: 迷你播放器已移入顶部第一层（tv_shell.dart），底部常驻条与悬浮
-    // 宿主整套退场；本地服务器启动失败横幅保留（诊断信息不丢）。
+    // 宿主整套退场；本地 API 故障只写后台诊断日志并自动重试。
     if (kTvBuild) {
       return Column(
         children: [
-          // 本地 API 服务器启动失败提示：在线内容全部不可用，但页面本身仍能渲染
-          // 成空列表/转圈，用户无从判断原因。这里把状态显式摆到所有 tab 顶部。
-          ValueListenableBuilder<bool>(
-            valueListenable: KugouApiClient.localServerAvailable,
-            builder: (context, available, _) => available
-                ? const SizedBox.shrink()
-                : LocalServerDownBanner(onRetry: KugouApiServer.start),
-          ),
+          // 本地 API 异常只记后台日志，由服务层自动重试。
           Expanded(
             child: ResponsiveShell(
               key: _responsiveShellKey,
@@ -3494,14 +3508,7 @@ class _MainLayoutState extends State<_MainLayout>
       tabId: _currentTabId(visibleTabs),
       child: Column(
         children: [
-          // 本地 API 服务器启动失败提示：在线内容全部不可用，但页面本身仍能渲染
-          // 成空列表/转圈，用户无从判断原因。这里把状态显式摆到所有 tab 顶部。
-          ValueListenableBuilder<bool>(
-            valueListenable: KugouApiClient.localServerAvailable,
-            builder: (context, available, _) => available
-                ? const SizedBox.shrink()
-                : LocalServerDownBanner(onRetry: KugouApiServer.start),
-          ),
+          // 本地 API 异常只记后台日志，由服务层自动重试。
           Expanded(
             child: ResponsiveShell(
               key: _responsiveShellKey,

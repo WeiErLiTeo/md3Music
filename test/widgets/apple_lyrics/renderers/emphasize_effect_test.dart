@@ -406,6 +406,74 @@ void main() {
     });
   });
 
+  group('computeState - 辉光字符缩放开关', () {
+    // duration=10000ms、t=5000ms（凸起峰值）：
+    //   amount = 1.2（封顶）、transX = 1.0
+    //   开启：scale = 1 + 1*0.1*1.2 = 1.12，offsetXEm 随字符位置外扩
+    //   关闭：scale = 1.0，offsetXEm = 0，其余（上浮 / 浮层 / 辉光）不变
+    EmphasizeState stateAt({
+      required bool? charScaleEnabled,
+      int wordIndex = 0,
+      int anchorCharCount = 1,
+    }) {
+      return effect.computeState(
+        word: makeWord(duration: 10000, text: '运'),
+        currentTimeMs: 5000,
+        isLastWord: false,
+        wordIndex: wordIndex,
+        anchorCharCount: anchorCharCount,
+        charScaleEnabled: charScaleEnabled,
+      );
+    }
+
+    test('关闭后 scale 恒 1.0、offsetXEm 恒 0', () {
+      final state = stateAt(charScaleEnabled: false);
+      expect(state.scale, closeTo(1.0, 1e-9));
+      expect(state.offsetXEm, closeTo(0.0, 1e-9));
+    });
+
+    test('关闭后上浮与辉光亮度不受影响', () {
+      final on = stateAt(charScaleEnabled: true);
+      final off = stateAt(charScaleEnabled: false);
+      // 上浮 / 正弦浮层 / 辉光亮度 / 阴影相对强度全部保持一致
+      expect(off.offsetYEm, closeTo(on.offsetYEm, 1e-9));
+      expect(off.floatYEm, closeTo(on.floatYEm, 1e-9));
+      expect(off.glowLevel, closeTo(on.glowLevel, 1e-9));
+      expect(off.shadowBlurEm, closeTo(on.shadowBlurEm, 1e-9));
+      // 确实仍有上浮与发光（不是整体退回 idle）
+      expect(off.offsetYEm, lessThan(0.0));
+      expect(off.glowLevel, greaterThan(0.0));
+    });
+
+    test('开启时沿用历史公式（scale 1.12、offsetXEm 非 0）', () {
+      // anchorCharCount=2、wordIndex=1：offsetX = -1*0.03*1.2*(1-1) = 0，
+      // 故取 wordIndex=0 才能观察到非零外扩。
+      final state = stateAt(charScaleEnabled: true, anchorCharCount: 2);
+      expect(state.scale, closeTo(1.12, 1e-9));
+      // offsetXEm = -1 * 0.03 * 1.2 * (2/2 - 0) = -0.036
+      expect(state.offsetXEm, closeTo(-0.036, 1e-9));
+    });
+
+    test('不传参数时回退到偏好（默认开启 = 历史行为）', () {
+      final state = stateAt(charScaleEnabled: null, anchorCharCount: 2);
+      expect(state.scale, closeTo(1.12, 1e-9));
+      expect(state.offsetXEm, closeTo(-0.036, 1e-9));
+    });
+
+    test('窗口外（idle）分支不受开关影响', () {
+      final word = makeWord(startTime: 1000, duration: 1000, text: '运');
+      final state = effect.computeState(
+        word: word,
+        currentTimeMs: 500,
+        isLastWord: false,
+        wordIndex: 0,
+        anchorCharCount: 1,
+        charScaleEnabled: false,
+      );
+      expect(state, equals(EmphasizeState.idle));
+    });
+  });
+
   group('computeState - 末尾字加强', () {
     test('isLastWord=true 时 scale 大于 isLastWord=false 时', () {
       // duration=1000ms, t=0.5：

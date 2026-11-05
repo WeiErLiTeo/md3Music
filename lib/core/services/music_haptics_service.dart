@@ -610,6 +610,34 @@ class MusicHapticsService with WidgetsBindingObserver {
     await _pushConfig();
   }
 
+  /// 原始硬件播放头快照（诊断用）。
+  ///
+  /// 返回 `sessionId:framePos:nanoTimeUs:writtenFrames:latencyMs`（多条用 `;` 分隔）。
+  /// 与 [queryOutputLatencyTracks] 的区别：这里的 framePos/nanoTime 直接来自
+  /// `AudioTrack.getTimestamp()`，不含任何累计量，可用来判定后者报出的排队深度
+  /// 是否为累计误差（真机曾稳定报 975ms 这种伪值）。
+  Future<String?> queryOutputLatencyRaw() async {
+    if (!_isAndroid) return null;
+    try {
+      return await _channel.invokeMethod<String>('outputLatencyRaw');
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 所有已登记 AudioTrack 的排队深度快照（诊断用）。
+  ///
+  /// 返回形如 `"sessionId:latencyMs,..."`；伴奏与主曲各有自己的 AudioTrack，
+  /// 两路各自的排队深度差即为「听到的错位」。不可用时返回 null。
+  Future<String?> queryOutputLatencyTracks() async {
+    if (!_isAndroid) return null;
+    try {
+      return await _channel.invokeMethod<String>('outputLatencyTracks');
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// 实测输出排队深度（毫秒）。不可用返回 null。
   ///
   /// 播放中才有意义：没在播音时 AudioTrack 未挂载，原生侧返回 -1。

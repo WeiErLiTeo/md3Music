@@ -497,6 +497,71 @@ void main() {
     });
   });
 
+  // ==================== 辉光字符缩放开关 ====================
+  group('强调波浪 - 辉光字符缩放开关', () {
+    // 单字强调字 '运'（时长 4000ms）：tick 到凸起峰值附近，
+    // 逐字符状态应反映"放大 + 外扩"是否被开关关掉。
+    const scaleLine = LyricLine(
+      startTime: 0,
+      duration: 4000,
+      text: '运',
+      words: [
+        LyricWord(startTime: 0, duration: 4000, text: '运'),
+      ],
+    );
+
+    /// 推进到凸起峰值（t≈2000ms，du=max(1000,4000)=4000 → phase≈0.5）。
+    Future<List<EmphasizeState>> statesAtPeak() async {
+      renderer.emphasizeEffect = EmphasizeEffect();
+      renderer.setLineState(isActive: true, scale: LyricLayout.activeScale);
+      renderer.paintLine(makeCanvas(), ui.Offset.zero, scaleLine, 24);
+      for (int t = 0; t <= 2000; t += 16) {
+        renderer.tick(0.016, t, isPlaying: true);
+      }
+      return renderer.debugCharStatesRef(0);
+    }
+
+    test('开启时字符被放大（历史行为）', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      addTearDown(() => LyricPreferences.instance.reset());
+      await LyricPreferences.instance.setUseGlowEffect(true);
+      await LyricPreferences.instance.setUseGlowCharScale(true);
+
+      final states = await statesAtPeak();
+      expect(states, isNotEmpty);
+      expect(
+        states.any((s) => s.scale > 1.0),
+        isTrue,
+        reason: '开关开启时凸起应放大字符',
+      );
+    });
+
+    test('关闭时不再放大，但仍保留辉光与上浮', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      addTearDown(() => LyricPreferences.instance.reset());
+      await LyricPreferences.instance.setUseGlowEffect(true);
+      await LyricPreferences.instance.setUseGlowCharScale(false);
+
+      final states = await statesAtPeak();
+      expect(states, isNotEmpty);
+      for (final s in states) {
+        expect(s.scale, closeTo(1.0, 1e-9), reason: '关闭后不应放大');
+        expect(s.offsetXEm, closeTo(0.0, 1e-9), reason: '关闭后不应左右外扩');
+      }
+      // 仍处于逐字符辉光路径：光晕与上浮还在
+      expect(
+        states.any((s) => s.glowLevel > 0),
+        isTrue,
+        reason: '关闭缩放不应关掉辉光',
+      );
+      expect(
+        states.any((s) => s.offsetYEm != 0),
+        isTrue,
+        reason: '关闭缩放不应关掉上浮',
+      );
+    });
+  });
+
   // ==================== 翻译副行日历式翻转 ====================
   group('翻译副行翻转', () {
     // 带逐字时间戳的当前行（WordRenderer 的正常调用场景）+ 翻译副行

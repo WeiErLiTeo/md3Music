@@ -369,7 +369,7 @@ class DiagnosticExporter {
         renderEngine = v == 'impeller' ? 'impeller' : 'skia';
       } catch (_) {}
     } else if (!kIsWeb) {
-      // Windows 桌面（私有版）等非 Android 平台
+      // Windows 桌面等非 Android 平台
       osVersion = Platform.operatingSystemVersion;
       deviceModel = Platform.operatingSystem;
     }

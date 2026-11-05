@@ -37,18 +37,18 @@ import 'playlist_songs_loader.dart';
 import '../../services/kugou_api/playlist_track_order.dart';
 
 class PlaylistPage extends StatefulWidget {
-  /// 可选扩展：对显示列表应用变换（默认关闭，由私有构建注入，用于筛选等）。
-  /// [pageKey] 为页面标识（'playlist'），供私有状态按页隔离。
+  /// 可选扩展：对显示列表应用变换（默认关闭，由宿主注入，用于筛选等）。
+  /// [pageKey] 为页面标识（'playlist'），供扩展状态按页隔离。
   static List<Song> Function(String pageKey, List<Song> songs)? songFilterHook;
 
-  /// 可选扩展：筛选状态变更的监听信号（默认关闭，由私有构建注入，
+  /// 可选扩展：筛选状态变更的监听信号（默认关闭，由宿主注入，
   /// 用于筛选按钮切换后触发本页重建）。
   static Listenable? songFilterListenable;
 
-  /// 可选扩展：顶栏额外操作按钮（默认关闭，由私有构建注入）。
+  /// 可选扩展：顶栏额外操作按钮（默认关闭，由宿主注入）。
   static List<Widget> Function(BuildContext context)? extraAppBarActionsBuilder;
 
-  /// 可选扩展：多选栏的额外操作按钮（默认关闭，由私有构建注入，用于批量下载等）。
+  /// 可选扩展：多选栏的额外操作按钮（默认关闭，由宿主注入，用于多选批量操作）。
   static List<Widget> Function(
     BuildContext context,
     ColorScheme colorScheme,
@@ -510,8 +510,6 @@ class _PlaylistPageState extends State<PlaylistPage> {
       }
     });
   }
-
-  // ==================== 批量下载（未移植：公开库不包含下载功能） ====================
 
   // tv: TV 构建下歌曲行的 OK 键激活（播放 / 多选切换选中）。与触屏
   // SliverM3ESegmentedList.onTap 完全同一逻辑，供 TV SliverList 分支复用。
@@ -1664,7 +1662,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
       surfaceTintColor: Colors.transparent,
       scrolledUnderElevation: 0,
       actions: [
-        // 可选扩展：私有构建注入的额外操作按钮（默认无）
+        // 可选扩展：宿主注入的额外操作按钮（默认无）
         ...?PlaylistPage.extraAppBarActionsBuilder?.call(context),
         if (showTrackOrder)
           IconButton(
@@ -2098,7 +2096,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
                 onPressed: _toggleSelectAll,
                 tooltip: allSelected ? '取消全选' : '全选',
               ),
-              // 可选扩展：私有构建注入的额外操作按钮（默认无）
+              // 可选扩展：宿主注入的额外操作按钮（默认无）
               ...?PlaylistPage.extraMultiSelectActions?.call(
                 context,
                 colorScheme,

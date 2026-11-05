@@ -145,6 +145,19 @@ class AutomixAnalyzer {
     }
   }
 
+  /// 解码曲首 PCM（单声道 Int16），供其它分析（如伴唱自动对齐）复用。
+  ///
+  /// 平台门控与 [AutomixAnalyzer] 一致：非 Android 或无解码通道时返回 null，
+  /// 调用方按「自动对齐不可用」回退，不要当异常处理。
+  Future<DecodedPcmHead?> decodeHeadPcm({
+    required String url,
+    int windowMs = kAutomixWindowMs,
+  }) async {
+    final window = await _decodeHead(url: url, windowMs: windowMs);
+    if (window == null || window.pcm.isEmpty) return null;
+    return DecodedPcmHead(sampleRate: window.sampleRate, pcm: window.pcm);
+  }
+
   Future<_PcmWindow?> _decodeHead({
     required String url,
     required int windowMs,
@@ -179,6 +192,14 @@ class AutomixAnalyzer {
 
 class _PcmWindow {
   const _PcmWindow({required this.sampleRate, required this.pcm});
+  final int sampleRate;
+  final Int16List pcm;
+}
+
+/// 公开的曲首 PCM 解码结果（单声道 Int16）。
+class DecodedPcmHead {
+  const DecodedPcmHead({required this.sampleRate, required this.pcm});
+
   final int sampleRate;
   final Int16List pcm;
 }

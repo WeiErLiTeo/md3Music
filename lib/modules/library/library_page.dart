@@ -143,7 +143,7 @@ class _LibraryPageState extends State<LibraryPage>
           '本地音乐',
           style: textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600),
         ),
-        actions: isLandscape
+        actions: isLandscape && !hasMusic && !isScanning
             ? [
                 Padding(
                   padding: EdgeInsets.only(right: sideGutter + AppSpacing.lg),
@@ -175,7 +175,8 @@ class _LibraryPageState extends State<LibraryPage>
                               const Gap(AppSpacing.lg),
                               Expanded(
                                 flex: 3,
-                                child: _buildCategoryTabs(textTheme),
+                                child: _buildCategoryRow(textTheme, colorScheme,
+                                    showScan: isLandscape),
                               ),
                             ],
                           )
@@ -184,8 +185,10 @@ class _LibraryPageState extends State<LibraryPage>
                             children: [
                               _buildSearchField(libraryProvider, colorScheme),
                               const Gap(AppSpacing.sm),
-                              _buildCategoryTabs(
+                              _buildCategoryRow(
                                 textTheme,
+                                colorScheme,
+                                showScan: isLandscape,
                                 centered: !isLandscape,
                               ),
                             ],
@@ -295,6 +298,17 @@ class _LibraryPageState extends State<LibraryPage>
         : Focus(descendantsAreFocusable: _searchInputEnabled, child: field);
   }
 
+  Widget _buildCategoryRow(TextTheme textTheme, ColorScheme colorScheme,
+      {required bool showScan, bool centered = false}) => Row(
+    children: [
+      Expanded(child: _buildCategoryTabs(textTheme, centered: centered)),
+      if (showScan) ...[
+        const Gap(AppSpacing.sm),
+        _buildScanToolbarAction(colorScheme),
+      ],
+    ],
+  );
+
   Widget _buildCategoryTabs(TextTheme textTheme, {bool centered = false}) => TabBar(
     controller: _tabController,
     tabs: const [
@@ -311,7 +325,7 @@ class _LibraryPageState extends State<LibraryPage>
     dividerColor: Colors.transparent,
   );
 
-  /// 横屏把扫描入口固定在右上角，不遮挡歌曲行；与竖屏 FAB 共用菜单和焦点保护。
+  /// 横屏扫描入口放在分类行右侧；空库时留在标题栏，与竖屏 FAB 共用菜单和焦点保护。
   Widget _buildScanToolbarAction(ColorScheme colorScheme) => _tvSheetRow(
     () => _showScanMenu(context),
     ExcludeFocus(

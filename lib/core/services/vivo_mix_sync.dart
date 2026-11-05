@@ -11,7 +11,8 @@ import 'media_notification_service.dart';
 /// vivo 原子随身听（vivomusicmix）列表快照推送与点播回调。
 ///
 /// 岛（com.vivo.musicwidgetmix）在能力位放行后，会经 MediaBrowserServiceCompat
-/// 绑定取三棵列表树（播放列表 / 收藏列表 / 下载列表）。原生侧只读内存快照，
+/// 绑定取三棵列表树（岛面板标签为「播放列表 / 收藏列表 / 下载列表」；
+/// 本 App 对应「当前队列 / 云端收藏 / 本地音乐」）。原生侧只读内存快照，
 /// 由本类把 Dart 侧三份列表（去抖 + 内容指纹去重 + 条数上限）推送过去；
 /// 同时承接岛端点播回调，按 `<来源>:<songId>` 稳定寻址回播。
 ///
@@ -66,7 +67,7 @@ class VivoMixSync {
     debugPrint('[VivoMixSync] attach: player=${player.hashCode} '
         'fav=${favorites.hashCode} lib=${library.hashCode}');
     // 本地库默认懒加载（只有进"本地音乐"页才读）——主动补一次缓存读取，
-    // 让"下载列表"树在冷启动后也有内容。
+    // 让岛上的本地列表树（面板标签「下载列表」）在冷启动后也有内容。
     unawaited(library.loadSavedSongs());
     // MD3Music fork v65：收藏树同样主动拉云端「我喜欢」整表——FavoritesProvider
     // 的 _favorites 只装 App 内点过红心的歌（云端收藏仅同步 id 集合），不主动拉

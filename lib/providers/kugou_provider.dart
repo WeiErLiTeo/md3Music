@@ -81,8 +81,8 @@ class HotSearchState {
 
 class KugouProvider extends ChangeNotifier {
   // —— 歌词持久化可选扩展点（默认关闭）——
-  // 由私有构建（lib/private）注入实现：歌词的读取/存储旁路。
-  // 公开构建不注入，均为空操作。
+  // 由宿主注入实现：歌词的读取/存储旁路。
+  // 默认不注入，均为空操作。
   static Future<KugouLyric?> Function(String hash)? restoreLyric;
   static void Function(String hash, KugouLyric lyric)? storeLyric;
 
@@ -212,6 +212,8 @@ class KugouProvider extends ChangeNotifier {
   bool _isLoggedIn = false;
   KugouUserDetail? _userInfo;
   List<KugouSongDetail> _rankSongs = [];
+  String? _rankSongsKey;
+  int _rankSongsRequestGeneration = 0;
   List<KugouSongDetail> _currentPlaylistSongs = [];
 
   /// 手机验证码登录时，手机号绑定多个账号的待选择候选列表。
@@ -1060,7 +1062,7 @@ class KugouProvider extends ChangeNotifier {
       // getter 暴露，调用方通过 KugouLyric.displayKrcLyric / displayLrcLyric
       // 显式分别取两种文本。
       final result = await _lyricRequests.run(requestKey, () async {
-        // 私有构建可注入持久化歌词恢复；失败不缓存，继续在线查询。
+        // 宿主可注入持久化歌词恢复；失败不缓存，继续在线查询。
         KugouLyric? restored;
         if (hash.isNotEmpty) {
           try {
@@ -2629,8 +2631,23 @@ class KugouProvider extends ChangeNotifier {
     int pagesize = 30,
     bool forceRefresh = false,
   }) async {
-    final freshnessKey = 'rankSongs_$rankId';
-    if (!forceRefresh && page == 1 && _isDataFresh(freshnessKey)) return;
+    final rankKey = '$rankId:$rankCid';
+    final freshnessKey = 'rankSongs_$rankKey';
+    if (!forceRefresh &&
+        page == 1 &&
+        _rankSongsKey == rankKey &&
+        _isDataFresh(freshnessKey)) {
+      return;
+    }
+    final requestGeneration = ++_rankSongsRequestGeneration;
+    _dataTimestamps.remove(freshnessKey);
+    if (page == 1) {
+      _rankSongs = [];
+      _rankSongsKey = rankKey;
+    } else if (_rankSongsKey != rankKey) {
+      _rankSongs = [];
+      _rankSongsKey = rankKey;
+    }
     _beginLoading();
     _error = null;
     try {
@@ -2639,6 +2656,7 @@ class KugouProvider extends ChangeNotifier {
         const batchSize = 30;
         const maxPages = 100;
         final all = <KugouSongDetail>[];
+        var failed = false;
         for (int p = 1; p <= maxPages; p++) {
           final songs = await _apiClient.getRankAudio(
             rankId: rankId,
@@ -2646,15 +2664,21 @@ class KugouProvider extends ChangeNotifier {
             page: p,
             pagesize: batchSize,
           );
+          if (requestGeneration != _rankSongsRequestGeneration) break;
           if (songs == null) {
-            if (all.isEmpty) _error = '获取排行榜歌曲失败';
+            failed = true;
+            if (all.isEmpty && requestGeneration == _rankSongsRequestGeneration) {
+              _error = '获取排行榜歌曲失败';
+            }
             break;
           }
           all.addAll(songs);
           if (songs.length < batchSize) break;
         }
-        _rankSongs = all;
-        _dataTimestamps[freshnessKey] = DateTime.now();
+        if (requestGeneration == _rankSongsRequestGeneration) {
+          _rankSongs = all;
+          if (!failed) _dataTimestamps[freshnessKey] = DateTime.now();
+        }
       } else {
         final songs = await _apiClient.getRankAudio(
           rankId: rankId,
@@ -2662,16 +2686,22 @@ class KugouProvider extends ChangeNotifier {
           page: page,
           pagesize: pagesize,
         );
-        if (songs != null) {
-          _rankSongs = songs;
-        } else {
-          _error = '获取排行榜歌曲失败';
+        if (requestGeneration != _rankSongsRequestGeneration) return;
+        if (requestGeneration == _rankSongsRequestGeneration) {
+          if (songs != null) {
+            _rankSongs = songs;
+          } else {
+            _error = '获取排行榜歌曲失败';
+          }
         }
       }
     } catch (e) {
-      _error = e.toString();
+      if (requestGeneration == _rankSongsRequestGeneration) {
+        _error = e.toString();
+      }
+    } finally {
+      _endLoading();
     }
-    _endLoading();
   }
 
   Future<void> getPlaylistTrackAll({

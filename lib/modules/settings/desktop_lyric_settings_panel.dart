@@ -106,12 +106,24 @@ class _DesktopLyricSettingsPanelState
         _buildSurfaceSection(),
       ],
     );
+    // 本文件 import 的是 **flutter/material**，面板却挂在设置页的
+    // material_ui `Scaffold` 之下：后者给 body 包的是 material_ui 自家的
+    // 同名 `Material`（类型不同），子树里的 `InkWell` / `SwitchListTile`
+    // 按**类型**找祖先 Material 找不到 → build 期抛 `No Material widget found`，
+    // 再被全局 `_FallbackErrorWidget` 顶成「此处内容加载出错」。见
+    // docs/agents/troubleshooting.md §4.13。
+    //
+    // 修法就是这层透明 Material。不要改成给 InkWell 外面套别的容器，也不要
+    // 把 import 换成 material_ui —— M3ESlider / M3ECard 等 m3e_core 组件跨在
+    // 两套之间，换 import 会让整片 m3e 组件解析失败。
+    // regression: test/modules/settings/desktop_lyric_panel_material_host_test.dart
+    final surfaces = Material(type: MaterialType.transparency, child: child);
     // tv: 整块面板是一个焦点区，四个色板与两条操作行是区里的停点
-    if (!kTvBuild) return child;
+    if (!kTvBuild) return surfaces;
     return DpadRegion(
       memoryKey: 'settings/desktop-lyric',
       debugLabel: 'desktop-lyric-panel',
-      child: child,
+      child: surfaces,
     );
   }
 

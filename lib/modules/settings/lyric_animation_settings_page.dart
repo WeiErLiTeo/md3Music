@@ -11,6 +11,7 @@ import '../../core/utils/app_haptics.dart';
 ///
 /// 集中调节 AM 歌词的逐行动画参数与歌词效果强度，全部为**无极**滑块（无档位小圆点）：
 /// - 当前行细节：已播字上浮高度
+/// - 间奏点（节奏点）：水平位置 / 圆点大小 / 点间距（均为 × 字号系数）
 /// - 歌词非当前行缩放
 /// - 歌词当前行位置（滚动锚位）
 /// - 级联错峰上限 / 步长 / 衰减
@@ -21,7 +22,7 @@ import '../../core/utils/app_haptics.dart';
 ///   字内渐变样式（经典 / 扫光二选一）
 ///
 /// AppBar 的重置按钮可**二次确认后**把本页全部参数恢复默认——
-/// 注意只重置本页 14 个参数，绝不调用 [LyricPreferences.reset]
+/// 注意只重置本页 17 个参数，绝不调用 [LyricPreferences.reset]
 /// （那会把字号/行距/动态颜色开关等不在本页的设置一并清掉）。
 ///
 /// 监听 [LyricPreferences] 实时刷新；拖动中只刷新标签（onChanged），
@@ -84,6 +85,47 @@ class LyricAnimationSettingsPage extends StatelessWidget {
                 max: LyricPreferences.maxLiftHeightPx,
                 label: '${prefs.liftHeightPx.toStringAsFixed(1)} px',
                 onChanged: (v) => prefs.setLiftHeightPx(v),
+              ),
+              const Divider(height: 24),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16),
+                child: Text('间奏点（节奏点）',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+              ),
+              _buildSliderTile<double>(
+                prefs: prefs,
+                title: '间奏点水平位置',
+                subtitle: '整组圆点左边缘相对视口的水平起点（× 字号；'
+                    '1.5 = 默认，比歌词左边界右移 0.5em）',
+                value: prefs.interludeDotsStartX,
+                min: LyricPreferences.minInterludeDotsStartX,
+                max: LyricPreferences.maxInterludeDotsStartX,
+                label:
+                    '${prefs.interludeDotsStartX.toStringAsFixed(2)} ×字号',
+                onChanged: (v) => prefs.setInterludeDotsStartX(v),
+              ),
+              _buildSliderTile<double>(
+                prefs: prefs,
+                title: '间奏点圆点大小',
+                subtitle: '单个圆点的半径（× 字号；0.18 = 默认）',
+                value: prefs.interludeDotRadius,
+                min: LyricPreferences.minInterludeDotRadius,
+                max: LyricPreferences.maxInterludeDotRadius,
+                label:
+                    '${prefs.interludeDotRadius.toStringAsFixed(2)} ×字号',
+                onChanged: (v) => prefs.setInterludeDotRadius(v),
+              ),
+              _buildSliderTile<double>(
+                prefs: prefs,
+                title: '间奏点间距',
+                subtitle: '相邻圆点圆心到圆心的距离（× 字号；0.9 = 默认）',
+                value: prefs.interludeDotSpacing,
+                min: LyricPreferences.minInterludeDotSpacing,
+                max: LyricPreferences.maxInterludeDotSpacing,
+                label:
+                    '${prefs.interludeDotSpacing.toStringAsFixed(2)} ×字号',
+                onChanged: (v) => prefs.setInterludeDotSpacing(v),
               ),
               const Divider(height: 24),
               const Padding(
@@ -298,7 +340,7 @@ class LyricAnimationSettingsPage extends StatelessWidget {
 
   /// 二次确认后把本页全部参数恢复默认。
   ///
-  /// **只重置本页 14 个参数**，绝不调用 [LyricPreferences.reset]
+  /// **只重置本页 17 个参数**，绝不调用 [LyricPreferences.reset]
   /// （那会把字号/行距/动态颜色开关等不在本页的设置一并清掉）。
   Future<void> _confirmResetAll(
     BuildContext context,
@@ -311,6 +353,7 @@ class LyricAnimationSettingsPage extends StatelessWidget {
           title: const Text('恢复本页默认值'),
           content: const Text(
             '将把本页全部参数（非当前行缩放、当前行位置、已播字上浮高度、'
+            '间奏点水平位置、间奏点圆点大小、间奏点间距、'
             '错峰上限/步长/衰减、错峰起点开关、歌词模糊强度、'
             '动态颜色混色比例、辉光强度、辉光触发阈值、'
             '辉光判定方式、辉光固定时长、字内渐变样式）'
@@ -337,6 +380,11 @@ class LyricAnimationSettingsPage extends StatelessWidget {
         LyricPreferences.defaultAlignPositionForCurrentPlatform);
     await prefs.setLiftHeightPx(
         LyricPreferences.defaultLiftHeightPxForCurrentPlatform);
+    await prefs.setInterludeDotsStartX(
+        LyricPreferences.defaultInterludeDotsStartX);
+    await prefs.setInterludeDotRadius(LyricPreferences.defaultInterludeDotRadius);
+    await prefs.setInterludeDotSpacing(
+        LyricPreferences.defaultInterludeDotSpacing);
     await prefs.setCascadeMaxDelayMs(
         LyricPreferences.defaultCascadeMaxDelayMsForCurrentPlatform);
     await prefs.setCascadeBaseStepMs(

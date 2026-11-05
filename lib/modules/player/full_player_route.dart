@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform;
 import 'package:provider/provider.dart';
 
 import '../../core/theme/motion_constants.dart';
@@ -464,6 +465,7 @@ DraggablePlayerRoute<void> fullPlayerRoute(
   double? dragOriginBottom,
 }) {
   return DraggablePlayerRoute<void>(
+    lightweightDesktopEntry: context.read<ThemeProvider>().useAmStylePlayer,
     builder: (_) => Consumer<ThemeProvider>(
       builder: (context, theme, _) => buildActiveFullPlayer(theme.playerStyle),
     ),
@@ -536,6 +538,7 @@ class PlayerSystemUiScope extends StatelessWidget {
 class DraggablePlayerRoute<T> extends PageRoute<T> {
   DraggablePlayerRoute({
     required this.builder,
+    this.lightweightDesktopEntry = false,
     this.scene,
     this.dragOriginTop,
     this.screenHeight,
@@ -543,6 +546,13 @@ class DraggablePlayerRoute<T> extends PageRoute<T> {
   });
 
   final WidgetBuilder builder;
+
+  /// Windows AM 点击入口使用固定布局合成，不参与迷你条到全屏的轮廓形变。
+  /// 显式拖拽或顶栏下拉接管时仍走原来的跟手路径。
+  final bool lightweightDesktopEntry;
+  bool get usesLightweightDesktopEntry => lightweightDesktopEntry &&
+      defaultTargetPlatform == TargetPlatform.windows && !isDragMode &&
+      topBarDragTotal == null;
 
   /// 进栈那一刻的底部形态快照（含展开起点矩形），见 [PlayerMorphScene]。
   ///
@@ -740,8 +750,8 @@ class DraggablePlayerRoute<T> extends PageRoute<T> {
   AnimationController createAnimationController() {
     controller = AnimationController(
       vsync: navigator!,
-      duration: kPlayerExpandDuration,
-      reverseDuration: kPlayerCollapseDuration,
+      duration: transitionDuration,
+      reverseDuration: reverseTransitionDuration,
       lowerBound: 0.0,
       upperBound: 1.0,
     );
@@ -766,6 +776,7 @@ class DraggablePlayerRoute<T> extends PageRoute<T> {
   @override
   void dispose() {
     if (identical(activePlayerRoute, this)) {
+      PlayerCoverMorphBus.instance.simplePageTransition = false;
       activePlayerRoute = null;
       // 播放器关闭 → 信号复位。
       //
@@ -846,6 +857,29 @@ class DraggablePlayerRoute<T> extends PageRoute<T> {
     // 目标端点（playerExpansion 仍被写成端点值，迷你条不会停在半透明）。
     // 松手前的 1:1 跟手拖拽属于用户直接操纵，不在此列，保持原样。
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final simpleEntry = usesLightweightDesktopEntry;
+    PlayerCoverMorphBus.instance.simplePageTransition = simpleEntry;
+    if (simpleEntry) {
+      // 页面只布局一次，逐帧仅合成平移/透明度，不再改变整屏裁剪轮廓。
+      return AnimatedBuilder(
+        animation: animation,
+        child: RepaintBoundary(child: child),
+        builder: (context, content) {
+          final progress = reduceMotion
+              ? (_animDirection > 0 ? 1.0 : 0.0)
+              : _easedPosition(animation.value);
+          if (progress != playerExpansion.value) {
+            scheduleMicrotask(() {
+              if (identical(activePlayerRoute, this)) playerExpansion.value = progress;
+            });
+          }
+          final offset = Offset(0, 16 * (1 - progress));
+          PlayerCoverMorphBus.instance.pageOffset = offset;
+          return Opacity(opacity: progress, child: Transform.translate(
+            offset: offset, child: content));
+        },
+      );
+    }
     return AnimatedBuilder(
       animation: animation,
       builder: (context, _) {
@@ -975,10 +1009,18 @@ class DraggablePlayerRoute<T> extends PageRoute<T> {
   bool get maintainState => true;
 
   @override
-  Duration get transitionDuration => kPlayerExpandDuration;
+  Duration get transitionDuration =>
+      usesLightweightDesktopEntry ? const Duration(milliseconds: 180) :
+      defaultTargetPlatform == TargetPlatform.windows && !isDragMode
+          ? const Duration(milliseconds: 220)
+          : kPlayerExpandDuration;
 
   @override
-  Duration get reverseTransitionDuration => kPlayerCollapseDuration;
+  Duration get reverseTransitionDuration =>
+      usesLightweightDesktopEntry ? const Duration(milliseconds: 160) :
+      defaultTargetPlatform == TargetPlatform.windows && !isDragMode
+          ? const Duration(milliseconds: 180)
+          : kPlayerCollapseDuration;
 
   @override
   bool didPop(T? result) {

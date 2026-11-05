@@ -364,6 +364,10 @@ class KugouPlaylistBrief {
     // list_create_listid 是原歌单 listid（不可用）。两者通常不同；
     // 但部分场景下 server 只返回 listid，所以 listCreateListid 兜底用 listid。
     final listid = _str(json['listid'] ?? '');
+    // 收藏专辑的 musiclib_id / list_create_listid 指向具体发行版本；
+    // specialid 在本地缓存中可能是收藏编号，不能当作专辑编号。
+    final isCollectedAlbum =
+        _parseInt(json['type'] ?? 0) == 1 && _parseInt(json['source'] ?? 0) == 2;
     return KugouPlaylistBrief(
       id: _str(
         json['specialid'] ?? json['id'] ?? json['global_collection_id'] ?? '',
@@ -385,7 +389,12 @@ class KugouPlaylistBrief {
       ),
       globalCollectionId: _strNull(json['global_collection_id'] ?? json['gid']),
       numericId: _strNull(
-        json['specialid'] ?? json['albumid'] ?? json['album_id'],
+        isCollectedAlbum
+            ? json['musiclib_id'] ??
+                  json['albumid'] ??
+                  json['album_id'] ??
+                  json['list_create_listid']
+            : json['specialid'] ?? json['albumid'] ?? json['album_id'],
       ),
       listId: listid,
       listCreateUserid: _strNull(json['list_create_userid']),
@@ -476,14 +485,16 @@ class KugouSongDetail {
   /// 创建副本并覆盖指定字段（用于补全 albumName 等缺失字段）
   KugouSongDetail copyWith({
     String? albumName,
+    String? albumId,
+    String? artistId,
     String? artworkUri,
     String? curMark,
   }) {
     return KugouSongDetail(
       hash: hash,
-      albumId: albumId,
+      albumId: albumId ?? this.albumId,
       albumName: albumName ?? this.albumName,
-      artistId: artistId,
+      artistId: artistId ?? this.artistId,
       artistName: artistName,
       songName: songName,
       duration: duration,
@@ -666,6 +677,7 @@ class KugouSongDetail {
         json2['album_id'] ??
             json2['AlbumID'] ??
             json2['albumid'] ??
+            json2['ori_album_id'] ??
             json2['album_info']?['id'] ??
             json2['base']?['album_id'],
       ),

@@ -462,6 +462,13 @@ import org.checkerframework.checker.initialization.qual.Initialized;
 
   @Override
   public void onPlayFromSearch(@Nullable String query, @Nullable Bundle extras) {
+    // MD3Music fork v66：车机语音点歌。App 队列由 Dart 自维护，默认实现会把
+    // 「只有 searchQuery、没有 URI」的 item 塞进 ExoPlayer（播不出且污染
+    // media3 时间线）。钩子返回 true 表示已消费（App 侧自行搜索后起播）。
+    MediaSessionService.PlayFromSearchHook hook = MediaSessionService.playFromSearchHook;
+    if (hook != null && hook.onPlayFromSearch(query, extras)) {
+      return;
+    }
     handleMediaRequest(
         createMediaItemForMediaRequest(/* mediaId= */ null, /* mediaUri= */ null, query, extras),
         /* play= */ true);

@@ -631,8 +631,37 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
         seekResult = null;
     }
 
+    /**
+     * MD3Music fork（伴唱）：必须在 ExoPlayer 初始化前生效的两个开关。
+     *
+     * <p>返回 true 表示已处理并已回 result，调用方不要再走常规 onMethodCall 流程。
+     */
+    private boolean handlePreInitMethodCall(MethodCall call, Result result) {
+        switch (call.method) {
+        case "setSilentSession": {
+            Boolean silent = (Boolean) call.argument("silent");
+            setSilentSession(silent != null && silent);
+            result.success(new HashMap<String, Object>());
+            return true;
+        }
+        case "setSharedAudioSessionId": {
+            Object rawSession = call.argument("sessionId");
+            Integer sharedSession = rawSession == null ? null : ((Number) rawSession).intValue();
+            setSharedAudioSessionId(sharedSession);
+            result.success(new HashMap<String, Object>());
+            return true;
+        }
+        default:
+            return false;
+        }
+    }
+
     @Override
     public void onMethodCall(final MethodCall call, final Result result) {
+        // MD3Music fork（伴唱）：这两个开关必须赶在 ensurePlayerInitialized 之前生效——
+        // 静默会话要跳过 MediaSession 创建（否则会在媒体栈里多出第二个会话），
+        // 共享 session id 也必须赶在 AudioTrack 创建前落地。
+        if (handlePreInitMethodCall(call, result)) return;
         ensurePlayerInitialized();
 
         try {
@@ -1123,6 +1152,10 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                                     new AdaptiveAudioTrackBufferSizeProvider())
                             .setAudioProcessorChain(
                                     new DefaultAudioSink.DefaultAudioProcessorChain(
+                                            // MD3Music fork: 端侧人声/伴奏分离放在链首。
+                                            // 分离结果再进蝰蛇母带，音效作用于「伴奏」而不是原曲；
+                                            // 未启用时逐字节透传，不影响 USB 独占的 bit-perfect。
+                                            new StemSeparateProcessor(),
                                             new ViperMasterProcessor()))
                             // MD3Music fork: 硬件解码播放（offload）能力收窄 + 实际状态回报。
                             // provider 只用「设备能力探测快照 + 机型黑名单」收窄，不随开关变化
@@ -1214,7 +1247,11 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
             try {
                 AudioManager am = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
                 if (am != null && android.os.Build.VERSION.SDK_INT >= 21) {
-                    player.setAudioSessionId(am.generateAudioSessionId());
+                    // MD3Music fork（伴唱）：Dart 侧已指定共享 session id 时优先采用，
+                    // 让伴唱轨挂到主播放器的 MediaSession 上（hasUid=true）。
+                    Integer fixed = sharedAudioSessionId;
+                    player.setAudioSessionId(
+                            fixed != null && fixed != 0 ? fixed : am.generateAudioSessionId());
                 }
             } catch (Exception e) {
                 android.util.Log.w("AudioFocusFork", "setAudioSessionId failed: " + e);
@@ -1240,7 +1277,10 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
             // MD3Music fork（方向1）：createMediaSession=false（headless 播放器）或进程级
             // 媒体会话开关关闭时，整体跳过建会话，使系统只暴露前台 UI 播放器的一个媒体会话，
             // 杜绝跨引擎播放/暂停不同步。
-            if (createMediaSession && sMediaSessionEnabled) {
+            // MD3Music fork（伴唱·静默会话）：伴唱轨不建自己的 MediaSession（它改为共享
+            // 活动播放器的 audio session id，靠对方的会话拿到 hasUid），否则媒体栈里会
+            // 多出第二个会话、通知栏可能跳到伴奏。
+            if (createMediaSession && sMediaSessionEnabled && !silentSession) {
                 buildAndHostMediaSession();
             }
         }
@@ -1324,9 +1364,15 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                             // 系统通知/媒体键的暂停可能发生在 Dart 侧换源 Future 等待期间。
                             // 先把明确的暂停意图送回 PlayerProvider，使其取消旧请求；
                             // 返回 SUCCESS 保留 Media3 原生即时暂停，避免等待 Dart channel。
+                            // 播放同理：暂停会作废播放请求，若恢复只由 Media3 改
+                            // playWhenReady，Dart 不会重建请求，曲尾 completed 会被
+                            // 空请求检查忽略（Issue #190）。显式回传 PLAY 让 Dart 走 resume()。
                             if (player.getPlayWhenReady()) {
                                 Log.i("AudioFocusFork", "onPlayerCommandRequest PAUSE -> App intent");
                                 listener.onPause();
+                            } else {
+                                Log.i("AudioFocusFork", "onPlayerCommandRequest PLAY -> App intent");
+                                listener.onPlay();
                             }
                             return SessionResult.RESULT_SUCCESS;
                         case Player.COMMAND_SEEK_TO_NEXT:
@@ -1419,6 +1465,49 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
     // MD3Music fork（方向1）：进程级「媒体3会话总开关」。headless 引擎创建时由原生置 false，
     // 前台 UI 引擎置 true；配合 createMediaSession 双条件，确保系统只暴露前台 UI 播放器的一个会话。
     private static volatile boolean sMediaSessionEnabled = true;
+
+    // MD3Music fork（伴唱·静默会话）：本播放器是否为「背景伴唱」角色。
+    //
+    // 伴唱播放器（伴奏轨）与主播放器**同时出声**，但它不应出现在系统媒体会话里：
+    // play() 的 syncSingleSessionToHost 会把本实例的会话设为唯一 host 会话并
+    // release 其它会话 —— 若伴唱播放器走这条路径，通知栏/媒体卡片会切成伴奏，
+    // 锁屏与桌面歌词也跟着跳到伴奏轨。
+    //
+    // 置 true 后：play() 不改写 sActivePlayer、不收敛会话归属、不构建 MediaSession，
+    // 系统侧始终只有主播放器那一个会话（与原曲一致）。
+    private boolean silentSession = false;
+
+    /// MD3Music fork（伴唱·共享 audioSessionId）：本播放器应使用的固定 session id。
+    /// null = 自行生成。伴唱轨由 Dart 侧传入主播放器的 session id，使其 AudioTrack
+    /// 与主播放器的 MediaSession 关联（hasUid 判定），避免系统在原曲出声时
+    /// 把这条「没有 MediaSession」的伴奏 AudioTrack 自动 duck 到无声。
+    private volatile Integer sharedAudioSessionId;
+
+    /// MD3Music fork（伴唱·静默会话）：切换本播放器的静默会话角色。
+    /// 由 Dart 侧 setSilentSession 下发；播放器未就绪时 Dart 侧会缓存并补发。
+    public void setSilentSession(boolean silent) {
+        this.silentSession = silent;
+        android.util.Log.i("AudioFocusFork", "setSilentSession=" + silent
+                + " sessionId=" + sessionId);
+    }
+
+    /// MD3Music fork（伴唱·共享 audioSessionId）：指定本播放器使用的 session id。
+    ///
+    /// 必须在 AudioTrack 创建前（load/prepare 前）下发；播放器尚未初始化时只记字段，
+    /// 由 ensurePlayerInitialized 在创建 ExoPlayer 时采用。已初始化但还没开始播放时
+    /// 也允许直接设置（ExoPlayer 会在下一次 sink configure 生效）。
+    public void setSharedAudioSessionId(Integer sessionId) {
+        this.sharedAudioSessionId = sessionId;
+        android.util.Log.i("AudioFocusFork", "setSharedAudioSessionId=" + sessionId
+                + " playerReady=" + (player != null));
+        if (player != null && sessionId != null && sessionId != 0) {
+            try {
+                player.setAudioSessionId(sessionId);
+            } catch (Exception e) {
+                android.util.Log.w("AudioFocusFork", "shareAudioSessionId apply failed: " + e);
+            }
+        }
+    }
 
     /// 由 App 设置：headless 引擎传 false（禁用媒体会话），前台 UI 引擎传 true。
     public static void setMediaSessionEnabled(boolean enabled) {
@@ -2128,6 +2217,9 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
         // vivomusicmix.media.action.PLAY_MODE（extras 带目标 LOOP_MODE 1/2/3）。
         void onPlayMode(int loopMode);
         void onPause();
+        // Issue #190：Media3 媒体卡片/锁屏/蓝牙的恢复播放必须回传 App，
+        // 否则原生只改 playWhenReady，Dart 侧播放请求仍为空。
+        void onPlay();
     }
 
     private static volatile CustomActionListener sCustomActionListener;
@@ -2666,6 +2758,23 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
         everPlayed = true;
         if (player.getPlayWhenReady()) {
             result.success(new HashMap<String, Object>());
+            return;
+        }
+        // MD3Music fork（伴唱·静默会话）：伴唱播放器只出声、不进系统媒体会话。
+        // 走常规路径会让 syncSingleSessionToHost 把伴奏会话设为唯一 host 会话并
+        // release 主播放器的会话 —— 通知栏/媒体卡片会切成伴奏，锁屏与桌面歌词错位。
+        // 因此这里既不改写 sActivePlayer，也不构建/收敛 MediaSession。
+        if (silentSession) {
+            if (playResult != null) {
+                playResult.success(new HashMap<String, Object>());
+            }
+            playResult = result;
+            player.setPlayWhenReady(true);
+            updatePosition();
+            if (processingState == ProcessingState.completed && playResult != null) {
+                playResult.success(new HashMap<String, Object>());
+                playResult = null;
+            }
             return;
         }
         // MD3Music fork: 真正开始播放时把当前实例设为活跃播放器，

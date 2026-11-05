@@ -183,4 +183,95 @@ void main() {
       expect(prefs.getBool('lyric_above_lines_played_color'), isNull);
     });
   });
+
+  /// 间奏点（节奏点）自定义：水平起点 / 单点半径 / 点间距，均为 × 字号系数。
+  ///
+  /// 默认值 = 历史写死值（1.5 / 0.18 / 0.9），保证升级用户视觉不变；
+  /// 渲染侧在 _LyricsPainter.paint 即时读取，setter 通知是拖滑块实时生效的前提。
+  group('⑧ 间奏点自定义 interludeDots*', () {
+    test('默认值等于历史写死系数（1.5 / 0.18 / 0.9）', () {
+      expect(LyricPreferences.instance.interludeDotsStartX,
+          equals(LyricPreferences.defaultInterludeDotsStartX));
+      expect(LyricPreferences.instance.interludeDotsStartX, equals(1.5));
+      expect(LyricPreferences.instance.interludeDotRadius,
+          equals(LyricPreferences.defaultInterludeDotRadius));
+      expect(LyricPreferences.instance.interludeDotRadius, equals(0.18));
+      expect(LyricPreferences.instance.interludeDotSpacing,
+          equals(LyricPreferences.defaultInterludeDotSpacing));
+      expect(LyricPreferences.instance.interludeDotSpacing, equals(0.9));
+    });
+
+    test('setter 生效并 clamp 到声明范围', () async {
+      await LyricPreferences.instance.setInterludeDotsStartX(3.2);
+      expect(LyricPreferences.instance.interludeDotsStartX, equals(3.2));
+      await LyricPreferences.instance.setInterludeDotsStartX(99);
+      expect(LyricPreferences.instance.interludeDotsStartX,
+          equals(LyricPreferences.maxInterludeDotsStartX));
+      await LyricPreferences.instance.setInterludeDotsStartX(-1);
+      expect(LyricPreferences.instance.interludeDotsStartX,
+          equals(LyricPreferences.minInterludeDotsStartX));
+
+      await LyricPreferences.instance.setInterludeDotRadius(0.3);
+      expect(LyricPreferences.instance.interludeDotRadius, equals(0.3));
+      await LyricPreferences.instance.setInterludeDotRadius(99);
+      expect(LyricPreferences.instance.interludeDotRadius,
+          equals(LyricPreferences.maxInterludeDotRadius));
+      await LyricPreferences.instance.setInterludeDotRadius(0);
+      expect(LyricPreferences.instance.interludeDotRadius,
+          equals(LyricPreferences.minInterludeDotRadius));
+
+      await LyricPreferences.instance.setInterludeDotSpacing(1.4);
+      expect(LyricPreferences.instance.interludeDotSpacing, equals(1.4));
+      await LyricPreferences.instance.setInterludeDotSpacing(99);
+      expect(LyricPreferences.instance.interludeDotSpacing,
+          equals(LyricPreferences.maxInterludeDotSpacing));
+      await LyricPreferences.instance.setInterludeDotSpacing(0);
+      expect(LyricPreferences.instance.interludeDotSpacing,
+          equals(LyricPreferences.minInterludeDotSpacing));
+    });
+
+    test('setter 值变化时 notifyListeners 且同值不重复通知', () async {
+      int notified = 0;
+      void listener() => notified++;
+      LyricPreferences.instance.addListener(listener);
+      addTearDown(() => LyricPreferences.instance.removeListener(listener));
+
+      await LyricPreferences.instance.setInterludeDotRadius(0.25);
+      expect(notified, 1,
+          reason: '值变化必须通知，间奏点才能随滑块实时变化');
+
+      await LyricPreferences.instance.setInterludeDotRadius(0.25);
+      expect(notified, 1);
+    });
+
+    test('持久化到 lyric_interlude_dots_start_x / _dot_radius / _dot_spacing',
+        () async {
+      await LyricPreferences.instance.setInterludeDotsStartX(2.25);
+      await LyricPreferences.instance.setInterludeDotRadius(0.22);
+      await LyricPreferences.instance.setInterludeDotSpacing(1.1);
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getDouble('lyric_interlude_dots_start_x'), equals(2.25));
+      expect(prefs.getDouble('lyric_interlude_dot_radius'), equals(0.22));
+      expect(prefs.getDouble('lyric_interlude_dot_spacing'), equals(1.1));
+    });
+
+    test('reset 后回到默认值且 key 被移除', () async {
+      await LyricPreferences.instance.setInterludeDotsStartX(4);
+      await LyricPreferences.instance.setInterludeDotRadius(0.35);
+      await LyricPreferences.instance.setInterludeDotSpacing(2);
+
+      await LyricPreferences.instance.reset();
+
+      expect(LyricPreferences.instance.interludeDotsStartX,
+          equals(LyricPreferences.defaultInterludeDotsStartX));
+      expect(LyricPreferences.instance.interludeDotRadius,
+          equals(LyricPreferences.defaultInterludeDotRadius));
+      expect(LyricPreferences.instance.interludeDotSpacing,
+          equals(LyricPreferences.defaultInterludeDotSpacing));
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getDouble('lyric_interlude_dots_start_x'), isNull);
+      expect(prefs.getDouble('lyric_interlude_dot_radius'), isNull);
+      expect(prefs.getDouble('lyric_interlude_dot_spacing'), isNull);
+    });
+  });
 }

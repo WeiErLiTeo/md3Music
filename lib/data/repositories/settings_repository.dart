@@ -5,6 +5,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../core/services/accompany/accompany_source.dart';
 import '../../core/services/audio_service_io.dart';
 import '../../core/services/spectrum_service.dart';
 import '../../core/services/volume_normalization_service.dart';
@@ -152,6 +153,11 @@ class SettingsRepository {
       'settings_upload_listening_duration';
   // 逐字歌词时间偏移（ms，默认 0；仅在线音乐生效，正值 = 歌词延后显示）
   static const String _keyLyricTimeOffset = 'lyric_time_offset_ms';
+  // 伴唱功能开关（默认关闭；关闭时播放页不显示任何伴唱入口）
+  static const String _keyAccompanyFeatureEnabled =
+      'settings_accompany_feature_enabled';
+  // 伴唱伴奏来源（'online' = 在线伴奏 / 'on_device' = 端侧分离；默认在线）
+  static const String _keyAccompanySource = 'settings_accompany_source';
 
   /// 新版本提醒开关：启动时检查 GitHub Release，发现新版本 toast 提醒。默认开启。
   static const String _keyUpdateReminderEnabled =
@@ -816,6 +822,50 @@ class SettingsRepository {
     lyricTimeOffsetMs.value = clamped;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_keyLyricTimeOffset, clamped);
+  }
+
+  /// 伴唱伴奏来源（内存镜像，默认在线伴奏）。
+  ///
+  /// 用 ValueNotifier：设置页切换后播放页的伴唱按钮可用性与当前会话要即时响应，
+  /// 不必重进页面。
+  static final ValueNotifier<AccompanySource> accompanySource =
+      ValueNotifier<AccompanySource>(AccompanySource.online);
+
+  /// 读取伴唱伴奏来源（默认 [AccompanySource.online]）。
+  Future<AccompanySource> getAccompanySource() async {
+    final prefs = await SharedPreferences.getInstance();
+    final v = AccompanySource.parse(prefs.getString(_keyAccompanySource));
+    accompanySource.value = v;
+    return v;
+  }
+
+  /// 保存伴唱伴奏来源，并同步内存镜像。
+  Future<void> setAccompanySource(AccompanySource v) async {
+    accompanySource.value = v;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_keyAccompanySource, v.wireValue);
+  }
+
+  /// 伴唱功能开关（内存镜像，默认关闭）。
+  ///
+  /// 关闭时播放页的伴唱按钮与比例胶囊整体不渲染；开关状态变化通过
+  /// [ValueNotifier] 即时通知已打开的播放页，无需重进页面。
+  static final ValueNotifier<bool> accompanyFeatureEnabled =
+      ValueNotifier<bool>(false);
+
+  /// 读取伴唱功能开关（默认 false）。
+  Future<bool> getAccompanyFeatureEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    final v = prefs.getBool(_keyAccompanyFeatureEnabled) ?? false;
+    accompanyFeatureEnabled.value = v;
+    return v;
+  }
+
+  /// 保存伴唱功能开关，并同步内存镜像。
+  Future<void> setAccompanyFeatureEnabled(bool v) async {
+    accompanyFeatureEnabled.value = v;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyAccompanyFeatureEnabled, v);
   }
 
   // ===== 桌面歌词配置 =====
@@ -2262,6 +2312,26 @@ class SettingsRepository {
   Future<void> setCarModeAutoScreenEnabled(bool value) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_keyCarModeAutoScreen, value);
+  }
+
+  /// 车机下电（熄火 / 关机）自动暂停：默认 **关闭**。
+  ///
+  /// 开启后原生 `AudioPlaybackService` 收到厂商下电广播或 `ACTION_SHUTDOWN` 时暂停播放；
+  /// 关闭时信号到达即静默返回，行为与历史版本完全一致（接收器仍注册，
+  /// 以保证开关改完即时生效，不需要重启进程）。
+  /// 原生侧读的是同一个 key（带 `flutter.` 前缀），见
+  /// `AudioPlaybackService.isCarPowerOffPauseEnabled`。
+  static const String _keyCarModePowerOffPause =
+      'settings_car_mode_power_off_pause';
+
+  Future<bool> getCarModePowerOffPause() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_keyCarModePowerOffPause) ?? false;
+  }
+
+  Future<void> setCarModePowerOffPause(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyCarModePowerOffPause, value);
   }
 
   /// 常驻播放器面板的宽度占比，默认 0.30。

@@ -72,6 +72,12 @@ class AudioOffloadService extends ChangeNotifier {
   /// 音乐频谱原生采集是否在进行。
   bool Function()? spectrumCapturing;
 
+  /// 端侧人声/伴奏分离是否在进行。
+  ///
+  /// offload 的样本不经过应用进程，分离的 AudioProcessor 根本收不到 PCM，
+  /// 两者天然互斥（与 [spectrumCapturing] 同一模式）。
+  bool Function()? stemSeparationActive;
+
   /// USB 独占 / 系统 Direct PCM 是否生效。
   bool Function()? usbOrDirectPcmActive;
 
@@ -597,6 +603,7 @@ class AudioOffloadService extends ChangeNotifier {
     if (_hit(equalizerActive)) return '均衡器已开启';
     if (_hit(volumeNormalizationActive)) return '音量均衡已开启';
     if (_hit(spectrumCapturing)) return '音乐频谱采集中';
+    if (_hit(stemSeparationActive)) return '端侧分离中';
     if (!(speedIsNormal?.call() ?? true)) return '当前不在 1.0 倍速';
     if (_hit(usbOrDirectPcmActive)) return 'USB 独占输出已开启';
     if (_hit(crossfadeEnabled)) return '交叉淡化已开启';

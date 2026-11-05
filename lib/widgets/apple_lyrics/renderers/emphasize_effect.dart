@@ -24,6 +24,9 @@ import 'package:md3music/widgets/apple_lyrics/models/lyric_line.dart';
 @immutable
 class EmphasizeState {
   /// 缩放比例，1.0~1.12（含末尾字加强后可能略高）。
+  ///
+  /// 关闭「辉光字符缩放」时恒为 1.0（见
+  /// [LyricPreferences.useGlowCharScale]）。
   final double scale;
 
   /// 辉光强度 0~1.2（作为辉光层的整体 alpha）。
@@ -39,6 +42,8 @@ class EmphasizeState {
   final double shadowBlurEm;
 
   /// 水平外扩位移（em 单位）：左字向左、右字向右，随凸起涨落。
+  ///
+  /// 关闭「辉光字符缩放」时恒为 0。
   final double offsetXEm;
 
   /// 上浮位移（em 单位，向上为负）：随凸起涨落（放大时上浮，回落时还原）。
@@ -409,6 +414,9 @@ class EmphasizeEffect {
   ///
   /// [bumpPhase] 凸起进度（0~1 窗口内激活，t<0.5 用 bezIn 渐入、t>=0.5 用 bezOut 渐出）。
   /// [floatPhase] 正弦浮层进度（-sin(π·x)·0.05em，与凸起独立）。
+  /// [charScaleEnabled] 字符放大与水平外扩开关；null 时取
+  /// [LyricPreferences.useGlowCharScale]（供测试显式传入）。关闭时 `scale` 恒 1.0、
+  /// `offsetXEm` 恒 0，上浮 / 浮层 / 辉光亮度不受影响。
   /// 其余参数同 [computeState]。
   ///
   /// 返回 [EmphasizeState]：scale / glowLevel / shadowBlurEm / offsetXEm /
@@ -420,6 +428,7 @@ class EmphasizeEffect {
     required bool isLastWord,
     required int wordIndex,
     required int anchorCharCount,
+    bool? charScaleEnabled,
   }) {
     // 边界保护：duration 为 0 会触发除零，anchorCharCount 为 0 同理
     if (word.duration <= 0) return EmphasizeState.idle;
@@ -479,11 +488,19 @@ class EmphasizeEffect {
     // shadowBlurEm = min(0.3, blur * 0.3)
     // offsetXEm = -transX * 0.03 * amount * (n/2 - i)（左字向左、右字向右外扩）
     // offsetYEm = -transX * 0.025 * amount（上浮）
-    final double scale = 1 + transX * _scaleTransFactor * amount;
+    //
+    // 「辉光字符缩放」关闭时只停掉放大与水平外扩：scale 归 1、offsetXEm 归 0，
+    // 上浮 / 正弦浮层 / 辉光亮度照常，发光仍在但字不再被顶大。
+    final bool scaleOn =
+        charScaleEnabled ?? LyricPreferences.instance.useGlowCharScale;
+    final double scale = scaleOn
+        ? 1 + transX * _scaleTransFactor * amount
+        : 1.0;
     final double glowLevel = transX * amount;
     final double shadowBlurEm = min(_shadowBlurEmCap, blur * 0.3);
-    final double offsetXEm =
-        -transX * _offsetXFactor * amount * (anchorCharCount / 2 - wordIndex);
+    final double offsetXEm = scaleOn
+        ? -transX * _offsetXFactor * amount * (anchorCharCount / 2 - wordIndex)
+        : 0.0;
     final double offsetYEm = -transX * _offsetYFactor * amount;
 
     return EmphasizeState(
@@ -506,6 +523,7 @@ class EmphasizeEffect {
     required bool isLastWord,
     required int wordIndex,
     required int anchorCharCount,
+    bool? charScaleEnabled,
   }) {
     final EmphasizePhases phases = phasesAt(
       word: word,
@@ -520,6 +538,7 @@ class EmphasizeEffect {
       isLastWord: isLastWord,
       wordIndex: wordIndex,
       anchorCharCount: anchorCharCount,
+      charScaleEnabled: charScaleEnabled,
     );
   }
 

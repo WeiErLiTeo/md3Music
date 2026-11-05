@@ -38,6 +38,16 @@ class MediaNotificationService {
   /// Windows SMTC 循环（Repeat）按钮：系统算好目标循环模式后回传
   /// （'off' / 'one' / 'all'），App 直接精确设定而非自行循环切换。
   static void Function(String)? onSetLoopMode;
+  /// Windows SMTC 随机（Shuffle）按钮：系统把目标态算好后回传。
+  ///
+  /// 与 [onSetLoopMode] 同一套路数（系统给目标值，App 服从），差别是随机
+  /// 只有两个状态，故直接传 bool。
+  static void Function(bool)? onSetShuffle;
+  /// Windows SMTC 倍速按钮：回传系统请求的目标倍速（double）。
+  ///
+  /// 只来自 `ISystemMediaTransportControls2::PlaybackRateChangeRequested`；
+  /// 老系统拿不到该接口时永远不会触发。
+  static void Function(double)? onSetPlaybackSpeed;
   /// 媒体键快进/快退（TV 遥控器）；由 desktop_lyric_service.registerNativeCallbacks 装配。
   static void Function()? onSeekForward;
   static void Function()? onSeekBack;
@@ -72,6 +82,19 @@ class MediaNotificationService {
   static void Function(String)? onWidgetAction;
   // MD3Music fork v21：车机卡片点入（投屏屏判据由原生侧把控），直达全屏歌词
   static void Function()? onOpenCardLyric;
+  /// MD3Music fork v66：车机语音点歌。原生把 framework
+  /// `MediaController.TransportControls.playFromSearch()` 的 query 转来
+  /// （media3 1.4.1 的 `MediaSession.Callback` 没有该回调，只能经 legacy stub 钩子到达）。
+  static void Function(String query)? onPlayFromSearch;
+  /// MD3Music fork v67：legacy browse 搜索（`MediaBrowserCompat.search`）。
+  ///
+  /// 返回值即原生侧收到的候选列表：**必须返回列表**，空列表表示「0 条结果」。
+  /// 返回 null 会被原生兜底成空列表，但不要让这条契约依赖兜底。
+  static Future<List<Map<String, Object?>>> Function(String query)? onBrowseSearch;
+  /// MD3Music fork v67：桥接端点回候选条目（payload 含 hash/albumId/albumAudioId）。
+  static void Function(Map<String, Object?> payload)? onSearchResultPlay;
+  /// MD3Music fork v67：候选条目已失效（进程重启 / TTL 过期 / 无引擎）。
+  static void Function()? onSearchResultExpired;
   static final MediaCommandAckRouter _mediaCommandAckRouter =
       MediaCommandAckRouter();
 
@@ -145,6 +168,17 @@ class MediaNotificationService {
           final mode = call.arguments as String?;
           if (mode != null) onSetLoopMode?.call(mode);
           break;
+        // Windows SMTC 随机按钮（ISystemMediaTransportControls2）：系统把目标
+        // 态算好后以 bool 回传，App 直接设定而非自行取反。
+        case 'setShuffle':
+          final shuffle = call.arguments;
+          if (shuffle is bool) onSetShuffle?.call(shuffle);
+          break;
+        // Windows SMTC 倍速按钮：回传目标倍速，夹取由 setSpeed 自己负责。
+        case 'setPlaybackSpeed':
+          final rate = call.arguments;
+          if (rate is num) onSetPlaybackSpeed?.call(rate.toDouble());
+          break;
         case 'openCardLyricView':
           // MD3Music fork v30：回调未装配（首帧前送达）时不清 pending——
           // 由 _AppView postFrame 的消费兜底接住；装配后才投递并清零。
@@ -178,6 +212,51 @@ class MediaNotificationService {
           final args = call.arguments as Map<dynamic, dynamic>?;
           final favorite = args?['favorite'] as bool?;
           if (favorite != null) onVivoMixRating?.call(favorite);
+          break;
+        // MD3Music fork v66：车机语音点歌——原生把 playFromSearch 的 query 转来。
+        // 暖启动直投不带 commandId，直接执行；带 commandId 时走 AckRouter 去重。
+        // 注意 ack 语义是「已受理」而非「已播出」：真正的搜索/起播是异步的，
+        // 原生不重试（playFromSearch 也没有标准失败回调）。
+        case 'playFromSearch':
+          final args = call.arguments as Map<dynamic, dynamic>?;
+          final query = args?['query'] as String?;
+          if (query == null || query.isEmpty) return false;
+          final callback = onPlayFromSearch;
+          if (callback == null) return false;
+          final commandId = _commandIdFromArguments(call.arguments);
+          if (commandId == null) {
+            callback(query);
+            return true;
+          }
+          return _mediaCommandAckRouter.dispatch(
+            commandId,
+            () => callback(query),
+          );
+        // MD3Music fork v67：legacy 搜索——返回值即原生侧收到的候选列表。
+        // 任何失败都必须回空列表（原生据此回 emptyList，桥接端看到的是「0 条结果」
+        // 而不是错误，不会因此关闭搜索入口）。
+        case 'browseSearch':
+          final args = call.arguments as Map<dynamic, dynamic>?;
+          final query = args?['query'] as String?;
+          final handler = onBrowseSearch;
+          if (query == null || query.isEmpty || handler == null) {
+            return <Map<String, Object?>>[];
+          }
+          try {
+            return await handler(query);
+          } catch (e) {
+            debugPrint('[VoiceSearch] browseSearch 失败: $e');
+            return <Map<String, Object?>>[];
+          }
+        // MD3Music fork v67：桥接端点回候选条目。
+        case 'searchResultPlay':
+          final args = call.arguments as Map<dynamic, dynamic>?;
+          if (args != null && args.isNotEmpty) {
+            onSearchResultPlay?.call(Map<String, Object?>.from(args));
+          }
+          break;
+        case 'searchItemExpired':
+          onSearchResultExpired?.call();
           break;
         case 'toggleDesktopLyric':
           onToggleDesktopLyric?.call();
@@ -247,6 +326,9 @@ class MediaNotificationService {
     bool isFavorited = false,
     String loopMode = 'off',
     bool shuffleEnabled = false,
+    String album = '',
+    String albumArtist = '',
+    double playbackRate = 1.0,
   }) async {
     try {
       await _channel.invokeMethod('updateNotification', {
@@ -262,6 +344,14 @@ class MediaNotificationService {
         'isFavorited': isFavorited,
         'loopMode': loopMode,
         'shuffleEnabled': shuffleEnabled,
+        // 专辑 / 专辑歌手：Windows 侧发布到 SMTC 的 AlbumTitle / AlbumArtist，
+        // 是第三方任务栏歌词工具（TaskbarLyrics、AF Media Bar）的歌曲身份
+        // 与歌词匹配维度之一。Android 侧现有实现忽略这两个字段。
+        'album': album,
+        'albumArtist': albumArtist,
+        // 实际播放倍速：SMTC 不发布 PlaybackRate 时，外部工具一律按 1.0x
+        // 外推时间轴，1.25x/1.5x 播放会让歌词持续漂移。
+        'playbackRate': playbackRate,
       });
     } catch (_) {}
   }

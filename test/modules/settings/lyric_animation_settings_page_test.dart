@@ -27,12 +27,16 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  /// 把本页 8 个参数全部设成非默认值（错峰起点开关设为 false）。
+  /// 把本页参数全部设成非默认值（错峰起点开关设为 false）。
   Future<void> setAllNonDefault() async {
     final prefs = LyricPreferences.instance;
     await prefs.setInactiveScale(0.9);
     await prefs.setAlignPosition(0.5);
     await prefs.setLiftHeightPx(8.0);
+    // 间奏点三项默认 1.5 / 0.18 / 0.9 → 全部取非默认值
+    await prefs.setInterludeDotsStartX(3.0);
+    await prefs.setInterludeDotRadius(0.3);
+    await prefs.setInterludeDotSpacing(1.5);
     await prefs.setCascadeMaxDelayMs(300);
     await prefs.setCascadeBaseStepMs(120);
     await prefs.setCascadeDecayX(1.5);
@@ -48,7 +52,7 @@ void main() {
     await prefs.setGlowIntensity(1.6);
   }
 
-  /// 断言 8 个参数 + 错峰起点开关 + 字内渐变样式全部等于默认值。
+  /// 断言本页全部参数（含间奏点三项、错峰起点开关、字内渐变样式）等于默认值。
   void expectAllDefaults() {
     final prefs = LyricPreferences.instance;
     expect(prefs.inactiveScale, equals(LyricPreferences.defaultInactiveScale));
@@ -56,6 +60,12 @@ void main() {
         equals(LyricPreferences.defaultAlignPositionForCurrentPlatform));
     expect(prefs.liftHeightPx,
         equals(LyricPreferences.defaultLiftHeightPxForCurrentPlatform));
+    expect(prefs.interludeDotsStartX,
+        equals(LyricPreferences.defaultInterludeDotsStartX));
+    expect(prefs.interludeDotRadius,
+        equals(LyricPreferences.defaultInterludeDotRadius));
+    expect(prefs.interludeDotSpacing,
+        equals(LyricPreferences.defaultInterludeDotSpacing));
     expect(prefs.cascadeMaxDelayMs,
         equals(LyricPreferences.defaultCascadeMaxDelayMsForCurrentPlatform));
     expect(prefs.cascadeBaseStepMs,
@@ -71,12 +81,15 @@ void main() {
         equals(LyricPreferences.defaultGlowIntensity));
   }
 
-  /// 断言 8 个参数 + 开关 + 字内渐变样式仍是非默认值（用于取消路径）。
+  /// 断言本页参数 + 开关 + 字内渐变样式仍是非默认值（用于取消路径）。
   void expectAllNonDefault() {
     final prefs = LyricPreferences.instance;
     expect(prefs.inactiveScale, equals(0.9));
     expect(prefs.alignPosition, equals(0.5));
     expect(prefs.liftHeightPx, equals(8.0));
+    expect(prefs.interludeDotsStartX, equals(3.0));
+    expect(prefs.interludeDotRadius, equals(0.3));
+    expect(prefs.interludeDotSpacing, equals(1.5));
     expect(prefs.cascadeMaxDelayMs, equals(300.0));
     expect(prefs.cascadeBaseStepMs, equals(120.0));
     expect(prefs.cascadeDecayX, equals(1.5));
@@ -262,6 +275,88 @@ void main() {
       await tester.tap(find.text('恢复默认'));
       await tester.pumpAndSettle();
       expect(prefs.fillMode, equals(LyricFillMode.sweep));
+    });
+
+    testWidgets('间奏点三项：本页常驻显示，标签按 ×字号 显示偏好值', (tester) async {
+      await pumpPage(tester);
+
+      // 三项不依赖任何开关，进页即应存在（与「歌词模糊强度」不同）。
+      // ListView 懒构建：滚出视口的 tile 会被销毁，所以标题与标签必须
+      // 在同一次可见窗口内一起断言。
+      const Map<String, String> expectedLabel = <String, String>{
+        '间奏点水平位置': '1.50 ×字号',
+        '间奏点圆点大小': '0.18 ×字号',
+        '间奏点间距': '0.90 ×字号',
+      };
+      for (final entry in expectedLabel.entries) {
+        await tester.scrollUntilVisible(
+          find.text(entry.key),
+          300,
+          scrollable: find.byType(Scrollable).first,
+        );
+        await tester.ensureVisible(find.text(entry.key));
+        await tester.pumpAndSettle();
+        expect(find.text(entry.key), findsOneWidget,
+            reason: '「${entry.key}」应出现在本页');
+        // 默认标签 = 历史写死系数（升级后视觉不变的契约）
+        expect(find.text(entry.value), findsOneWidget,
+            reason: '「${entry.key}」默认标签应为 ${entry.value}');
+      }
+    });
+
+    testWidgets('间奏点三项：改动写入偏好并落盘', (tester) async {
+      final prefs = LyricPreferences.instance;
+      await pumpPage(tester);
+
+      // 直接调 setter 验落盘（滑块的 onChanged→setter 接线由上面 tile 存在性
+      // + 本组 prefs 单测共同覆盖；滑块拖动在 800×600 视口里命中不稳定）
+      await prefs.setInterludeDotsStartX(2.4);
+      await prefs.setInterludeDotRadius(0.26);
+      await prefs.setInterludeDotSpacing(1.2);
+      await tester.pumpAndSettle();
+
+      // 逐个滚动到可见再断言标签（ListTile 懒构建，同时最多只有一项在屏上）
+      await tester.scrollUntilVisible(
+        find.text('间奏点水平位置'),
+        300,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('2.40 ×字号'), findsOneWidget);
+      await tester.scrollUntilVisible(
+        find.text('间奏点圆点大小'),
+        300,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('0.26 ×字号'), findsOneWidget);
+      await tester.scrollUntilVisible(
+        find.text('间奏点间距'),
+        300,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('1.20 ×字号'), findsOneWidget);
+
+      final storage = await SharedPreferences.getInstance();
+      expect(storage.getDouble('lyric_interlude_dots_start_x'), equals(2.4));
+      expect(storage.getDouble('lyric_interlude_dot_radius'), equals(0.26));
+      expect(storage.getDouble('lyric_interlude_dot_spacing'), equals(1.2));
+    });
+
+    testWidgets('重置确认弹窗列出间奏点三项', (tester) async {
+      await pumpPage(tester);
+
+      await tester.tap(find.byIcon(Icons.restart_alt));
+      await tester.pumpAndSettle();
+
+      // 弹窗正文必须列出本次新增的三项（用户点「恢复默认」前要知情）
+      expect(find.textContaining('间奏点水平位置'), findsWidgets);
+      expect(find.textContaining('间奏点圆点大小'), findsWidgets);
+      expect(find.textContaining('间奏点间距'), findsWidgets);
+
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
     });
   });
 }

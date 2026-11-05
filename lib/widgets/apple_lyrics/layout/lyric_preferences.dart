@@ -269,6 +269,59 @@ class LyricPreferences extends ChangeNotifier {
   /// 确保升级后视觉不变。
   static const double defaultGlowIntensity = 1.0;
 
+  // ============== 辉光字符缩放开关 ==============
+
+  /// 辉光字符缩放开关默认值。
+  ///
+  /// true = 历史行为：强调字凸起时放大（最高 1.12×）并左右外扩。
+  /// false = 只停掉放大与水平外扩，仍保留上浮、正弦浮层与辉光呼吸——
+  /// 让不喜欢"字被顶大"的用户能保留发光但不要弹跳。
+  static const bool defaultGlowCharScale = true;
+
+  // ============== 间奏点（节奏点）自定义 ==============
+
+  /// 间奏点水平起点系数下限（× 字号）。0 = 贴左边缘（与歌词左边界对齐）。
+  static const double minInterludeDotsStartX = 0.0;
+
+  /// 间奏点水平起点系数上限（× 字号）。
+  ///
+  /// 6em 已明显超过一行的常用字数，再大在中窄屏上会把整组点推出可视区
+  /// （由 ClipRect 裁掉，等于看不见），故以此为上限。
+  static const double maxInterludeDotsStartX = 6.0;
+
+  /// 间奏点水平起点系数默认值（× 字号）。
+  ///
+  /// 1.5 = 历史写死值（比歌词左对齐起点右移 0.5em，让整组点视觉更居中），
+  /// 确保升级后视觉不变。
+  static const double defaultInterludeDotsStartX = 1.5;
+
+  /// 单个间奏点半径系数下限（× 字号）。0.04 时点几乎是一个像素，接近"看不见"。
+  static const double minInterludeDotRadius = 0.04;
+
+  /// 单个间奏点半径系数上限（× 字号）。
+  ///
+  /// 0.40 时整组点直径 0.8em，仍在间奏占位行（约 2.2em 高）内不溢出。
+  static const double maxInterludeDotRadius = 0.40;
+
+  /// 单个间奏点半径系数默认值（× 字号）。
+  ///
+  /// 0.18 = 历史写死值（AMLL 风格：fontSize=24 时直径约 8.6px），
+  /// 确保升级后视觉不变。
+  static const double defaultInterludeDotRadius = 0.18;
+
+  /// 间奏点间距系数下限（× 字号，圆心到圆心）。
+  ///
+  /// 0.3 时三点几乎叠成一个整体，是"合并成一坨"的下限。
+  static const double minInterludeDotSpacing = 0.3;
+
+  /// 间奏点间距系数上限（× 字号，圆心到圆心）。
+  static const double maxInterludeDotSpacing = 2.5;
+
+  /// 间奏点间距系数默认值（× 字号，圆心到圆心）。
+  ///
+  /// 0.9 = 历史写死值，确保升级后视觉不变。
+  static const double defaultInterludeDotSpacing = 0.9;
+
   // ============== 按设备类型的默认值（手机 / Pad） ==============
 
   /// 按设备类型的字号默认：手机 29px，Pad 40px。
@@ -313,6 +366,7 @@ class LyricPreferences extends ChangeNotifier {
   static const String _keyBlurIntensity = 'lyric_blur_intensity';
   static const String _keyUseGlowEffect = 'lyric_use_glow_effect';
   static const String _keyGlowIntensity = 'lyric_glow_intensity';
+  static const String _keyGlowCharScale = 'lyric_glow_char_scale';
   static const String _keyUseFlowingBackground = 'lyric_use_flowing_background';
   static const String _keyFontSource = 'lyric_font_source';
   static const String _keyCustomFontPath = 'lyric_custom_font_path';
@@ -341,6 +395,9 @@ class LyricPreferences extends ChangeNotifier {
   static const String _keyFillMode = 'lyric_fill_mode';
   static const String _keyHideLyricCredits = 'lyric_hide_credits';
   static const String _keyCreditPattern = 'lyric_credit_pattern';
+  static const String _keyInterludeDotsStartX = 'lyric_interlude_dots_start_x';
+  static const String _keyInterludeDotRadius = 'lyric_interlude_dot_radius';
+  static const String _keyInterludeDotSpacing = 'lyric_interlude_dot_spacing';
 
   // ============== 当前值 ==============
 
@@ -353,6 +410,8 @@ class LyricPreferences extends ChangeNotifier {
   bool _useGlowEffect = false;
   // 辉光强度倍数（默认 1.0 = 历史行为）
   double _glowIntensity = defaultGlowIntensity;
+  // 辉光字符缩放开关（默认开启 = 历史行为：凸起放大 + 左右外扩）
+  bool _glowCharScale = defaultGlowCharScale;
   bool _useFlowingBackground = false;
   bool _useDuetLayout = false;
   // 平衡行换行默认关闭：保持歌词布局的原始自动换行行为。
@@ -395,6 +454,11 @@ class LyricPreferences extends ChangeNotifier {
   bool _hideLyricCredits = false;
   // 自定义过滤正则（空串 = 用 LyricCreditFilter.defaultPattern）。
   String _creditPattern = '';
+  // AM 间奏点（节奏点）自定义：水平起点 / 单点半径 / 间距，均为 × 字号系数。
+  // 默认值 = 历史写死值，升级用户视觉不变。
+  double _interludeDotsStartX = defaultInterludeDotsStartX;
+  double _interludeDotRadius = defaultInterludeDotRadius;
+  double _interludeDotSpacing = defaultInterludeDotSpacing;
   // 运行时加载成功后填充的 family（仅 custom 模式且加载成功时非 null）
   String? _loadedCustomFontFamily;
   bool _loaded = false;
@@ -422,6 +486,14 @@ class LyricPreferences extends ChangeNotifier {
   /// 辉光层每帧的 alpha = `EmphasizeState.glowLevel × 本倍数`（clamp 到 1.0），
   /// 只影响亮度、不改剖面半径，保证"贴笔画"的光形不随强度变形。
   double get glowIntensity => _glowIntensity;
+
+  /// 辉光字符缩放开关（默认 true = 历史行为）。
+  ///
+  /// 只控制强调字凸起时的**放大**（`EmphasizeState.scale`）与**水平外扩**
+  /// （`EmphasizeState.offsetXEm`）。关闭后字符尺寸与横向位置不变，
+  /// 上浮（`offsetYEm`）、正弦浮层（`floatYEm`）与辉光亮度（`glowLevel`）
+  /// 全部保留——发光仍在，只是不再"顶大"。
+  bool get useGlowCharScale => _glowCharScale;
   bool get useFlowingBackground => _useFlowingBackground;
   bool get useDuetLayout => _useDuetLayout;
 
@@ -513,6 +585,19 @@ class LyricPreferences extends ChangeNotifier {
   /// 自定义过滤正则（空串 = 内置默认模式，见 `LyricCreditFilter.defaultPattern`）。
   String get creditPattern => _creditPattern;
 
+  /// 间奏点水平起点系数（× 字号，范围 [minInterludeDotsStartX]~[maxInterludeDotsStartX]）。
+  ///
+  /// 整组 3 个点的左边缘 x = fontSize × 本值（相对视口左缘）。默认 1.5 =
+  /// 历史写死值（歌词左边界 1em 再右移 0.5em）。
+  double get interludeDotsStartX => _interludeDotsStartX;
+
+  /// 单个间奏点半径系数（× 字号，范围 [minInterludeDotRadius]~[maxInterludeDotRadius]）。
+  double get interludeDotRadius => _interludeDotRadius;
+
+  /// 间奏点间距系数（× 字号，圆心到圆心，范围
+  /// [minInterludeDotSpacing]~[maxInterludeDotSpacing]）。
+  double get interludeDotSpacing => _interludeDotSpacing;
+
   /// 自定义字体（[LyricFontSource.custom]）是否加载成功。
   ///
   /// 面板提示「已应用自定义字体 / 字体加载失败」必须用它：
@@ -567,6 +652,8 @@ class LyricPreferences extends ChangeNotifier {
     _glowIntensity =
         (prefs.getDouble(_keyGlowIntensity) ?? defaultGlowIntensity)
             .clamp(minGlowIntensity, maxGlowIntensity);
+    _glowCharScale =
+        prefs.getBool(_keyGlowCharScale) ?? defaultGlowCharScale;
     _useFlowingBackground = prefs.getBool(_keyUseFlowingBackground) ?? false;
     _useDuetLayout = prefs.getBool(_keyUseDuetLayout) ?? false;
     _lineBalance = prefs.getBool(_keyLineBalance) ?? false;
@@ -620,6 +707,15 @@ class LyricPreferences extends ChangeNotifier {
     _fillMode = _fillModeFromName(prefs.getString(_keyFillMode));
     _hideLyricCredits = prefs.getBool(_keyHideLyricCredits) ?? false;
     _creditPattern = prefs.getString(_keyCreditPattern) ?? '';
+    _interludeDotsStartX =
+        (prefs.getDouble(_keyInterludeDotsStartX) ?? defaultInterludeDotsStartX)
+            .clamp(minInterludeDotsStartX, maxInterludeDotsStartX);
+    _interludeDotRadius =
+        (prefs.getDouble(_keyInterludeDotRadius) ?? defaultInterludeDotRadius)
+            .clamp(minInterludeDotRadius, maxInterludeDotRadius);
+    _interludeDotSpacing =
+        (prefs.getDouble(_keyInterludeDotSpacing) ?? defaultInterludeDotSpacing)
+            .clamp(minInterludeDotSpacing, maxInterludeDotSpacing);
     _loaded = true;
     notifyListeners();
     // 若已配置自定义字体，立即尝试加载（Fire-and-forget，加载完成后会 notifyListeners）
@@ -694,6 +790,15 @@ class LyricPreferences extends ChangeNotifier {
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setDouble(_keyGlowIntensity, _glowIntensity);
+  }
+
+  /// 设置辉光字符缩放开关并持久化。
+  Future<void> setUseGlowCharScale(bool enabled) async {
+    if (_glowCharScale == enabled) return;
+    _glowCharScale = enabled;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyGlowCharScale, enabled);
   }
 
   /// 设置动态流光背景开关并持久化。
@@ -943,6 +1048,40 @@ class LyricPreferences extends ChangeNotifier {
     }
   }
 
+  // ============== 间奏点（节奏点）自定义 ==============
+
+  /// 设置间奏点水平起点系数（× 字号）并持久化。
+  ///
+  /// 渲染侧在 `paint()` 即时读取本值，调整无需切歌即生效。
+  Future<void> setInterludeDotsStartX(double value) async {
+    final clamped = value.clamp(minInterludeDotsStartX, maxInterludeDotsStartX);
+    if (clamped == _interludeDotsStartX) return;
+    _interludeDotsStartX = clamped;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_keyInterludeDotsStartX, _interludeDotsStartX);
+  }
+
+  /// 设置单个间奏点半径系数（× 字号）并持久化。
+  Future<void> setInterludeDotRadius(double value) async {
+    final clamped = value.clamp(minInterludeDotRadius, maxInterludeDotRadius);
+    if (clamped == _interludeDotRadius) return;
+    _interludeDotRadius = clamped;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_keyInterludeDotRadius, _interludeDotRadius);
+  }
+
+  /// 设置间奏点间距系数（× 字号，圆心到圆心）并持久化。
+  Future<void> setInterludeDotSpacing(double value) async {
+    final clamped = value.clamp(minInterludeDotSpacing, maxInterludeDotSpacing);
+    if (clamped == _interludeDotSpacing) return;
+    _interludeDotSpacing = clamped;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_keyInterludeDotSpacing, _interludeDotSpacing);
+  }
+
   // ============== 歌词字体来源 ==============
 
   /// 设置字体来源并持久化。
@@ -1069,6 +1208,7 @@ class LyricPreferences extends ChangeNotifier {
     _glowThresholdMode = GlowThresholdMode.fixed;
     _glowFixedThresholdMs = defaultGlowFixedThresholdMs;
     _glowIntensity = defaultGlowIntensity;
+    _glowCharScale = defaultGlowCharScale;
     _inactiveScale = defaultInactiveScale;
     _alignPosition = defaultAlignPositionForCurrentPlatform;
     _cascadeMaxDelayMs = defaultCascadeMaxDelayMsForCurrentPlatform;
@@ -1079,6 +1219,9 @@ class LyricPreferences extends ChangeNotifier {
     _fillMode = LyricFillMode.sweep;
     _hideLyricCredits = false;
     _creditPattern = '';
+    _interludeDotsStartX = defaultInterludeDotsStartX;
+    _interludeDotRadius = defaultInterludeDotRadius;
+    _interludeDotSpacing = defaultInterludeDotSpacing;
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setDouble(_keyFontSize, _fontSize);
@@ -1100,6 +1243,7 @@ class LyricPreferences extends ChangeNotifier {
     await prefs.remove(_keyGlowThresholdMode);
     await prefs.remove(_keyGlowFixedThresholdMs);
     await prefs.remove(_keyGlowIntensity);
+    await prefs.remove(_keyGlowCharScale);
     await prefs.remove(_keyInactiveScale);
     await prefs.remove(_keyAlignPosition);
     await prefs.remove(_keyCascadeMaxDelayMs);
@@ -1110,6 +1254,9 @@ class LyricPreferences extends ChangeNotifier {
     await prefs.remove(_keyFillMode);
     await prefs.remove(_keyHideLyricCredits);
     await prefs.remove(_keyCreditPattern);
+    await prefs.remove(_keyInterludeDotsStartX);
+    await prefs.remove(_keyInterludeDotRadius);
+    await prefs.remove(_keyInterludeDotSpacing);
     await prefs.remove(_keyFontSource);
     await prefs.remove(_keyCustomFontPath);
     await prefs.remove(_keyCustomTextColor);
