@@ -124,10 +124,9 @@ jobs:
           git rm -rf . > /dev/null
           git checkout upstream/rust-local-force -- .
 
-          # 仅保留 yt3 自己的 personal-test.yml 与 sync-upstream.yml，其余工作流（含 debug-build.yml）全部跟随上游最新代码同步
-          git checkout origin/yt3 -- \
-            .github/workflows/personal-test.yml \
-            .github/workflows/sync-upstream.yml
+          # 保持 .github/workflows 目录与 origin/yt3 完全一致（GitHub 禁止 GITHUB_TOKEN 修改任何 .github/workflows 文件）
+          git rm -rf .github/workflows > /dev/null 2>&1 || true
+          git checkout origin/yt3 -- .github/workflows
 
           # 恢复 YT 纯新增文件并更新上游基准 SHA 标记
           git checkout origin/yt3 -- \
