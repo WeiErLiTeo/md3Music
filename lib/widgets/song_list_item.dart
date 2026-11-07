@@ -11,14 +11,19 @@ import '../core/remote/tv_menu_key_shortcuts.dart';
 import '../core/services/lyrico_editor.dart';
 import '../core/utils/app_haptics.dart';
 import '../core/utils/app_toast.dart';
+import '../data/models/album.dart';
 import '../data/models/song.dart';
 import '../data/repositories/settings_repository.dart';
+import '../data/repositories/song_match_repository.dart';
+import '../modules/album/album_detail_page.dart';
+import '../modules/artist/artist_detail_page.dart';
 import '../modules/library/song_match_sheet.dart';
 import '../modules/player/comments_view.dart';
 import '../modules/player/song_accompany_sheet.dart';
 import '../modules/player/song_ranking_sheet.dart';
 import '../modules/sheet/song_sheet_sheet.dart';
-import '../modules/player/full_player_route.dart' show activePlayerRoute;
+import '../modules/player/full_player_route.dart'
+    show activePlayerRoute, openFullPlayer;
 import '../modules/player/mv_player_page.dart';
 import '../modules/player/player_cover_morph.dart' show PlayerCoverMorphBus;
 import '../providers/favorites_provider.dart';
@@ -26,6 +31,7 @@ import '../providers/blacklist_provider.dart';
 import '../providers/kugou_provider.dart';
 import '../providers/local_favorites_provider.dart';
 import '../providers/player_provider.dart';
+import '../services/kugou_api/kugou_api_client.dart';
 import 'add_to_playlist_dialog.dart';
 import 'menu_action_cell.dart';
 import 'play_next_flight.dart';
@@ -142,6 +148,155 @@ class SongListItem extends StatelessWidget {
     } on ProviderNotFoundException {
       return null;
     }
+  }
+
+  /// 本地歌曲命中匹配记忆时返回对应的在线歌曲（歌手/专辑跳转用在线 id）。
+  /// 在线歌曲或未匹配时原样返回（口径同播放页 full_player 的同名方法）。
+  Song _resolveMatchedSong(Song song) {
+    if (song.isOnline) return song;
+    final info = SongMatchRepository().get(song.id);
+    return (info != null && info.isMatched) ? info.toSong() : song;
+  }
+
+  /// 从菜单跳转到歌曲所在歌手页（多歌手处理同播放页口径）：
+  /// 单歌手直接用 song.artistId 跳转；多位歌手弹二级 Sheet 让用户选择，
+  /// 非首位歌手通过 searchArtists 接口查询 ID 后跳转。
+  void _viewArtist(BuildContext itemContext) {
+    // 本地歌曲命中匹配记忆时用在线歌手信息（本地文件通常无 artistId）
+    final resolved = _resolveMatchedSong(song);
+    final artists = splitSongArtistNames(resolved.artist);
+    if (artists.isEmpty) {
+      showToast('暂无歌手信息', long: true);
+      return;
+    }
+    // 单歌手：直接跳转
+    if (artists.length == 1) {
+      _pushArtistPage(itemContext, resolved.artistId, artists.first);
+      return;
+    }
+    // 多位歌手：弹出二级菜单让用户选择
+    _showArtistSelector(itemContext, resolved, artists);
+  }
+
+  /// 弹出歌手选择 BottomSheet（多位歌手场景，见播放页 _showArtistSelector）。
+  /// 第一位歌手直接使用 song.artistId 跳转；其他歌手按名搜索后跳转。
+  void _showArtistSelector(
+    BuildContext itemContext,
+    Song song,
+    List<String> artists,
+  ) {
+    showM3EModalBottomSheet(
+      context: itemContext,
+      // 与本菜单其他弹层一致用实色背景，避免压在封面/壁纸上时内容透底难辨。
+      backgroundColor: Theme.of(itemContext).colorScheme.surfaceContainerLow,
+      builder: (sheetCtx) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(
+                  '选择歌手',
+                  style: Theme.of(itemContext).textTheme.titleMedium,
+                ),
+              ),
+              ...artists.map((name) {
+                return ListTile(
+                  leading: const Icon(Icons.person),
+                  title: Text(name),
+                  onTap: () {
+                    Navigator.pop(sheetCtx);
+                    // 第一位歌手直接用 song.artistId（数据已存在）
+                    if (name == artists.first) {
+                      _pushArtistPage(itemContext, song.artistId, name);
+                    } else {
+                      // 其他歌手需要先搜索查询 ID
+                      _pushArtistPageByName(itemContext, name);
+                    }
+                  },
+                );
+              }),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// 通过歌手名搜索后跳转歌手详情页。
+  /// 显示 loading → 调用 searchArtists → 取第一个匹配 → 跳转。
+  Future<void> _pushArtistPageByName(
+    BuildContext itemContext,
+    String name,
+  ) async {
+    // 显示 loading
+    showDialog<void>(
+      context: itemContext,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: M3ELoadingIndicator()),
+    );
+    // showDialog 装在根 Navigator 上，await 后仍要关掉，先捕获引用
+    final navigator = Navigator.of(itemContext, rootNavigator: true);
+    void Function()? pendingPush;
+    try {
+      final api = KugouApiClient();
+      final result = await api.searchArtists(name, pagesize: 5);
+      if (result == null || result.isEmpty) {
+        showToast('未找到歌手「$name」', long: true);
+        return;
+      }
+      final artist = result.first;
+      // 跳转要用 context，且必须等 loading 关掉后再 push，故先存起来
+      pendingPush = () => _pushArtistPage(itemContext, artist.id, artist.name);
+    } catch (e) {
+      showToast('搜索歌手失败：$e', long: true);
+    } finally {
+      navigator.pop(); // 关闭 loading
+    }
+    pendingPush?.call();
+  }
+
+  /// 实际 push 歌手详情页（根 Navigator，与同菜单 MV 条目的跳转方式一致）。
+  void _pushArtistPage(
+    BuildContext itemContext,
+    String? artistId,
+    String artistName,
+  ) {
+    if (artistId == null || artistId.isEmpty) {
+      showToast('暂无歌手信息', long: true);
+      return;
+    }
+    Navigator.of(itemContext, rootNavigator: true).push(
+      MaterialPageRoute(
+        builder: (_) => ArtistDetailPage(
+          artistId: artistId,
+          artistName: artistName,
+          avatarUrl: null,
+        ),
+      ),
+    );
+  }
+
+  /// 从菜单跳转到歌曲所在专辑页。
+  /// 本地歌曲命中匹配记忆时用在线专辑信息（本地文件通常无 albumId）。
+  void _viewAlbum(BuildContext itemContext) {
+    final resolved = _resolveMatchedSong(song);
+    final albumId = resolved.albumId;
+    if (albumId == null || albumId.isEmpty) {
+      showToast('暂无专辑信息', long: true);
+      return;
+    }
+    final album = Album(
+      id: albumId,
+      name: resolved.album.isNotEmpty ? resolved.album : song.album,
+      artist: resolved.artist.isNotEmpty ? resolved.artist : song.artist,
+      artworkUri: resolved.artworkUri ?? song.artworkUri,
+      songCount: 0,
+    );
+    Navigator.of(itemContext, rootNavigator: true).push(
+      MaterialPageRoute(builder: (_) => AlbumDetailPage(album: album)),
+    );
   }
 
   void _showMoreMenu(BuildContext context) {
@@ -291,6 +446,27 @@ class SongListItem extends StatelessWidget {
                 },
               ),
           ],
+          // 跳转组：查看歌手 / 查看专辑（多歌手处理同播放页口径，见 _viewArtist）
+          <Widget>[
+            MenuActionCell(
+              icon: Icons.person_outline,
+              label: '查看歌手',
+              active: false,
+              onTap: () {
+                Navigator.pop(ctx);
+                _viewArtist(context);
+              },
+            ),
+            MenuActionCell(
+              icon: Icons.album_outlined,
+              label: '查看专辑',
+              active: false,
+              onTap: () {
+                Navigator.pop(ctx);
+                _viewAlbum(context);
+              },
+            ),
+          ],
           <Widget>[
             // 复制歌名与歌手：仅手机与桌面端展示（TV 端无剪贴板粘贴场景）
             if (!kTvBuild)
@@ -322,8 +498,9 @@ class SongListItem extends StatelessWidget {
                   }
                 },
               ),
-            // 本地音乐：匹配在线歌曲，补充封面兜底/歌词精确检索/评论区
-            if (isLocalWithFile)
+            // 本地音乐（有本地文件路径）/ 云盘歌曲：匹配在线歌曲，
+            // 补充封面兜底/歌词精确检索/评论区
+            if (isLocalWithFile || song.isCloud)
               MenuActionCell(
                 icon: Icons.manage_search,
                 label: '匹配在线',
@@ -644,7 +821,8 @@ class SongListItem extends StatelessWidget {
 
     // tv: TV 构建下整行单停点（DpadFocusable 默认 excludeChildFocus: true，
     // 内层 InkWell 不再产生第二个停点，无需 canRequestFocus=false 手法）；
-    // OK=播放/切换选中，OK 长按=上下文菜单（页面可经 onContextMenuOverride 重定向）。
+    // OK=播放/切换选中/当前播放行进 FullPlayer，OK 长按=上下文菜单
+    // （页面可经 onContextMenuOverride 重定向）。
     if (kTvBuild) {
       // tv: 遥控菜单键=直接开本行「更多菜单」（与行尾三个点同源
       // [_showMoreMenu]），不走 _tvContextAction 优先级链——那是 OK 长按的
@@ -657,6 +835,13 @@ class SongListItem extends StatelessWidget {
               ? null
               : () {
                   AppHaptics.click(HapticCategory.listItem);
+                  // tv: 焦点在「正在播放的歌」行上时，OK 直接进入
+                  // FullPlayer 而不是重播该行（[openFullPlayer] 自带
+                  // 防重复入栈与车机守卫）；多选模式保持切换选中语义。
+                  if (!isSelectMode && isCurrentSong) {
+                    openFullPlayer(context);
+                    return;
+                  }
                   tapHandler();
                 },
           onLongSelect: _tvContextAction(context),

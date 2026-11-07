@@ -101,11 +101,17 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
             (s.album?.toLowerCase().contains(q) ?? false);
       }).toList();
     }
+    // 预建 id→下标 map：「时间」排序用原列表位置做键，
+    // 避免 indexOf 在比较器里 O(N²) 扫描（与 playlist_song_sort 同一做法）。
+    final rank = <String, int>{
+      for (var i = 0; i < _songs.length; i++) _songs[i].id: i,
+    };
+    int indexRank(Song song) => rank[song.id] ?? _songs.length;
     list.sort((a, b) {
       int cmp;
       switch (_sortBy) {
         case _SortBy.time:
-          cmp = _songs.indexOf(a).compareTo(_songs.indexOf(b));
+          cmp = indexRank(a).compareTo(indexRank(b));
           break;
         case _SortBy.title:
           cmp = a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase());

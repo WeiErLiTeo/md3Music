@@ -43,7 +43,10 @@ MD3Music 是一款基于酷狗音乐 API 的 Flutter 音乐播放器，内置嵌
 <p align="center">
   <a href="https://trendshift.io/repositories/123225"><img src="https://trendshift.io/api/badge/repositories/123225" alt="Featured on GitHub Trending" /></a>
   <a href="https://trendshift.io/repositories/123225"><img src="https://trendshift.io/api/badge/trendshift/repositories/123225/daily?language=Dart" alt="#2 Dart Repository Of The Day on Trendshift" /></a>
+</p>
+<p align="center">
   <a href="https://trendshift.io/repositories/123225"><img src="https://trendshift.io/api/badge/trendshift/repositories/123225/weekly?language=Dart" alt="#5 Dart Repository Of The Week on Trendshift" /></a>
+  <a href="https://trendshift.io/repositories/123225?utm_source=trendshift-badge&utm_medium=badge&utm_campaign=badge-trendshift-123225" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/123225/monthly?language=Dart" alt="zzyoxml%2Fmd3Music | Trendshift" width="250" height="55"/></a>
 </p>
 
 ## 📈 GitHub Star 趋势

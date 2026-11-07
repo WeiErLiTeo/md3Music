@@ -433,7 +433,8 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                 update.artist,
                 update.lyricInfo,
                 update.btTitle,
-                update.btArtist);
+                update.btArtist,
+                update.retryCount + 1);
     }
 
     private boolean updateCurrentIndex() {
@@ -2397,7 +2398,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
             Handler handler = new Handler(p.getApplicationLooper());
             if (!registerExternalMetadataGeneration(generation)) return;
             handler.post(() -> doApplySessionTitleArtistAndLyricInfo(
-                    expectedMediaId, generation, title, artist, lyricInfo, btTitle, btArtist));
+                    expectedMediaId, generation, title, artist, lyricInfo, btTitle, btArtist, 0));
         } catch (Exception e) {
             Log.w("AudioFocusFork", "applySessionTitleArtistAndLyricInfo dispatch failed: " + e);
         }
@@ -2412,18 +2413,21 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
             String artist,
             String lyricInfo,
             String btTitle,
-            String btArtist) {
+            String btArtist,
+            int retryCount) {
         try {
             if (!isExternalMetadataGenerationCurrent(generation)) return;
             MediaItem cur = player.getCurrentMediaItem();
             if (cur == null) {
                 deferSessionMetadataUpdate(
-                        expectedMediaId, generation, title, artist, lyricInfo, btTitle, btArtist);
+                        expectedMediaId, generation, title, artist, lyricInfo, btTitle, btArtist,
+                        retryCount);
                 return;
             }
             if (!matchesExpectedMediaItem(cur, expectedMediaId, title, artist)) {
                 deferSessionMetadataUpdate(
-                        expectedMediaId, generation, title, artist, lyricInfo, btTitle, btArtist);
+                        expectedMediaId, generation, title, artist, lyricInfo, btTitle, btArtist,
+                        retryCount);
                 return;
             }
             MediaMetadata m = cur.mediaMetadata;
@@ -2485,10 +2489,25 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
             String artist,
             String lyricInfo,
             String btTitle,
-            String btArtist) {
+            String btArtist,
+            int retryCount) {
+        if (retryCount >= 12 || !isExternalMetadataGenerationCurrent(generation)) {
+            Log.i("AudioFocusFork", "drop deferred lyricInfo after retries=" + retryCount);
+            return;
+        }
         pendingSessionMetadataUpdate = new PendingSessionMetadataUpdate(
-                expectedMediaId, generation, title, artist, lyricInfo, btTitle, btArtist);
-        Log.i("AudioFocusFork", "deferred session metadata until matching media item transition");
+                expectedMediaId, generation, title, artist, lyricInfo, btTitle, btArtist, retryCount);
+        PendingSessionMetadataUpdate expected = pendingSessionMetadataUpdate;
+        Log.i("AudioFocusFork", "deferred lyricInfo retry=" + retryCount);
+        Handler handler = new Handler(player.getApplicationLooper());
+        handler.postDelayed(() -> {
+            if (pendingSessionMetadataUpdate != expected) return;
+            pendingSessionMetadataUpdate = null;
+            doApplySessionTitleArtistAndLyricInfo(
+                    expected.expectedMediaId, expected.generation, expected.title, expected.artist,
+                    expected.lyricInfo, expected.btTitle, expected.btArtist,
+                    expected.retryCount + 1);
+        }, 120L);
     }
 
     private static final class PendingSessionMetadataUpdate {
@@ -2499,6 +2518,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
         final String lyricInfo;
         final String btTitle;
         final String btArtist;
+        final int retryCount;
 
         PendingSessionMetadataUpdate(
                 String expectedMediaId,
@@ -2507,7 +2527,8 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                 String artist,
                 String lyricInfo,
                 String btTitle,
-                String btArtist) {
+                String btArtist,
+                int retryCount) {
             this.expectedMediaId = expectedMediaId;
             this.generation = generation;
             this.title = title;
@@ -2515,6 +2536,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
             this.lyricInfo = lyricInfo;
             this.btTitle = btTitle;
             this.btArtist = btArtist;
+            this.retryCount = retryCount;
         }
     }
 
@@ -2560,25 +2582,16 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                 mb.setArtworkData(baos.toByteArray(), MediaMetadata.PICTURE_TYPE_FRONT_COVER);
                 }
             }
-            MediaItem updated = cur.buildUpon().setMediaMetadata(mb.build()).build();
-            // 官方推荐：同 uri 替换 → 只更新 metadata，不打断播放
-            player.replaceMediaItem(index, updated);
-            // MD3Music fork v45：原子随身听循环模式回写（extras → LegacyConversions
-            // 拷为 framework 顶层键，岛据此渲染循环按钮状态：1=列表/2=单曲/3=随机）。
-            // Bundle 是 final：不能用双花括号匿名子类，用局部变量装配。
-            // v48：协议口径是 Long（岛端 getLong 读 Int 会拿 0），putInt 改 putLong。
-            // v50：值改用 Dart 权威状态（sVivoLoopMode）——Dart 自管队列下 player 的
-            // repeat/shuffle 恒为列表循环，按它回写岛永远显示"列表循环"。
-            android.os.Bundle loopExtras = new android.os.Bundle();
+            // 封面和循环模式一次发布，保留已写入的歌词和其他扩展字段。
+            android.os.Bundle originalExtras = cur.mediaMetadata.extras;
+            android.os.Bundle loopExtras = originalExtras == null
+                    ? new android.os.Bundle() : new android.os.Bundle(originalExtras);
             loopExtras.putLong(VMM_KEY_LOOP_MODE,
                     sVivoLoopMode >= 1 ? sVivoLoopMode
                     : player.getShuffleModeEnabled() ? 3
                     : player.getRepeatMode() == androidx.media3.common.Player.REPEAT_MODE_ONE ? 2 : 1);
-            androidx.media3.common.MediaMetadata withLoop =
-                    updated.mediaMetadata.buildUpon()
-                        .setExtras(loopExtras)
-                        .build();
-            player.replaceMediaItem(index, updated.buildUpon().setMediaMetadata(withLoop).build());
+            player.replaceMediaItem(index,
+                    cur.buildUpon().setMediaMetadata(mb.setExtras(loopExtras).build()).build());
             Log.d("AudioFocusFork", "applySessionMetadata OK title=" + title + " art=" + (art != null)
                     + " onMainThread=" + (Thread.currentThread() == Looper.getMainLooper().getThread()));
         } catch (Exception e) {

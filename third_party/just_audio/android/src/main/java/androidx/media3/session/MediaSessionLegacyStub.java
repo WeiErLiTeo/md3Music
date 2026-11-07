@@ -1479,6 +1479,11 @@ import org.checkerframework.checker.initialization.qual.Initialized;
       updateLegacySessionPlaybackState(sessionImpl.getPlayerWrapper());
     }
 
+    @Nullable
+    private static String legacyLyricInfo(MediaMetadata metadata) {
+      return metadata.extras == null ? null : metadata.extras.getString("lyricInfo");
+    }
+
     private void updateMetadataIfChanged() {
       PlayerWrapper player = sessionImpl.getPlayerWrapper();
       @Nullable MediaItem currentMediaItem = player.getCurrentMediaItemWithCommandCheck();
@@ -1496,6 +1501,7 @@ import org.checkerframework.checker.initialization.qual.Initialized;
               : null;
 
       if (Objects.equals(lastMediaMetadata, newMediaMetadata)
+          && Objects.equals(legacyLyricInfo(lastMediaMetadata), legacyLyricInfo(newMediaMetadata))
           && Objects.equals(lastMediaId, newMediaId)
           && Objects.equals(lastMediaUri, newMediaUri)
           && lastDurationMs == newDurationMs) {

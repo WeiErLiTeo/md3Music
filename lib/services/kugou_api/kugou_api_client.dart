@@ -4707,6 +4707,10 @@ class KugouApiClient {
     String? globalCollectionId,
   }) async {
     String userid = listCreateUserid ?? _userid ?? '0';
+    // 默认 '0'：新建自有歌单时上游自分配 listid。注意 gid 兜底解析出来的
+    // 序号只在**收藏他人歌单**（type=1）时才是有效 list_create_listid，
+    // 新建场景把 gid 中段序号当 listid 会造出引用错位的空壳歌单
+    // （MCP 实测：create 返回的 gid 内嵌序号被当 listid 用，加歌报"上游无响应"）。
     String listid = listCreateListid ?? '0';
 
     if (globalCollectionId != null && globalCollectionId.isNotEmpty) {
@@ -5265,6 +5269,8 @@ class KugouApiClient {
   Future<KugouAlbumSongs?> getAlbumSongsAll(String albumId) async {
     const pageSize = 30;
     const maxPages = 1000;
+    // total 异常为 0（服务端未返回）时的兜底页数上限，防止请求风暴。
+    const noTotalMaxPages = 50;
     final songs = <KugouSongDetail>[];
     var total = 0;
     for (var page = 1; page <= maxPages; page++) {
@@ -5280,6 +5286,9 @@ class KugouApiClient {
           result.songs.length < pageSize) {
         break;
       }
+      // total≤0 时无法用 total 判断结尾，靠连续满页推断；
+      // 超过兜底上限就停，避免无限翻页。
+      if (total <= 0 && page >= noTotalMaxPages) break;
     }
     return KugouAlbumSongs(songs: songs, total: total);
   }

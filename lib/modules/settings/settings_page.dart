@@ -6053,11 +6053,11 @@ class _SettingsPageState extends State<SettingsPage>
             context.read<PlayerProvider>().setCloseLocalMusicComments(value);
           },
         ),
-        // 本地歌曲在线信息匹配：自动匹配开关（关闭时终止进行中的轮次）
+        // 本地/云盘歌曲在线信息匹配：自动匹配开关（关闭时终止进行中的轮次）
         // search: 自动匹配 在线信息 匹配 封面 歌词 评论 本地歌曲
         SwitchListTile(
           title: const Text('自动匹配在线信息'),
-          subtitle: const Text('为本地歌曲搜索匹配在线歌曲，补充封面、歌词与评论区'),
+          subtitle: const Text('为本地与云盘歌曲搜索匹配在线歌曲，补充封面、歌词与评论区'),
           value: _autoMatchOnlineInfo,
           onChanged: (value) {
             AppHaptics.lightImpact(HapticCategory.control);

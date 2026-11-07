@@ -1912,6 +1912,14 @@ class AudioPlaybackService : Service() {
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "media command dispatch failed: $e")
+                // 此前只进 logcat，环形与落盘双盲（2026-11-05 报告问题 #3）：
+                // 信号到了但派发炸掉时，诊断包同样无从判断，这里补齐。
+                // 罕见事件（派发重试全失败才走到），不违反 RingLog 低频约束。
+                RingLog.e("MediaCmd", "media command dispatch failed", e)
+                CarPowerLogFile.write(
+                    this@AudioPlaybackService,
+                    "dispatch failed (cmd queue): ${e.message}"
+                )
                 mediaCommandQueue.discardPending()
             } finally {
                 if (mediaCommandQueue.finishDispatch()) launchMediaCommandDispatcher()
@@ -1966,6 +1974,12 @@ class AudioPlaybackService : Service() {
             if (!delivered) {
                 mediaCommandQueue.dropIfPending(command.id)
                 Log.e(TAG, "media command ${command.method} exhausted retries")
+                // 罕见事件（重试全失败），走 RingLog 合规；落盘供断电后取证。
+                RingLog.e("MediaCmd", "media command ${command.method} exhausted retries")
+                CarPowerLogFile.write(
+                    this@AudioPlaybackService,
+                    "dispatch exhausted retries: ${command.method}"
+                )
             }
         }
     }
@@ -2445,10 +2459,13 @@ class AudioPlaybackService : Service() {
      */
     private fun registerCarPowerReceiver() {
         if (carPowerReceiver != null) return
+        val enabled = isCarPowerOffPauseEnabled(this)
         RingLog.i(
             "CarPower",
-            "receiver init: pauseEnabled=${isCarPowerOffPauseEnabled(this)}"
+            "receiver init: pauseEnabled=$enabled"
         )
+        // 落盘留证：环形缓冲随进程死亡灭失，熄火前的注册状态必须留到下次上电
+        CarPowerLogFile.write(this, "receiver init: pauseEnabled=$enabled")
         val candidate = CarPowerReceiver { action -> handleCarPowerSignal(action) }
         val filter = IntentFilter().apply {
             CarPowerSignal.ALL_ACTIONS.forEach { addAction(it) }
@@ -2462,8 +2479,10 @@ class AudioPlaybackService : Service() {
             }
             carPowerReceiver = candidate
             RingLog.i("CarPower", "receiver registered: ${CarPowerSignal.ALL_ACTIONS}")
+            CarPowerLogFile.write(this, "receiver registered: ${CarPowerSignal.ALL_ACTIONS}")
         } catch (t: Throwable) {
             RingLog.e("CarPower", "receiver register failed", t)
+            CarPowerLogFile.write(this, "receiver register failed: ${t.message}")
         }
     }
 
@@ -2479,25 +2498,33 @@ class AudioPlaybackService : Service() {
     /**
      * 车机信号总入口：判开关 → 写诊断日志 → 判播放态 → 派发。
      *
-     * 开关关闭时**直接静默返回**：连日志都不写，保证"关闭 = 与旧版本无差别"
-     * （RingLog 只给排查问题用，功能没开就不该产生痕迹）。
+     * 开关关闭时**内存/Logcat 保持静默**（RingLog 不写，保证"关闭 = 与旧版本无差别"），
+     * 但落盘文件 [CarPowerLogFile] 仍记一行到达：否则下次拿诊断包无法区分
+     * "开关没开所以没动作" 与 "车机压根没发广播"——这正是 2026-11-05 报告的问题 #2 盲区。
+     * 频度=厂商广播到达次数（熄火一次 ≤3 行），成本可忽略。
      *
-     * 开关开启时的日志走 [RingLog]（Log.i + 进程内环形缓冲双写），用户在设置页
-     * 「导出诊断日志」里就能拿到，无需 adb、无需现场取证。
+     * 开关开启时的日志走 [RingLog]（Log.i + 进程内环形缓冲双写）+ 落盘双通道：
+     * 环形给"当场看"，落盘给"断电后看"。
      */
     private fun handleCarPowerSignal(action: String) {
-        if (!isCarPowerOffPauseEnabled(this)) return
+        if (!isCarPowerOffPauseEnabled(this)) {
+            CarPowerLogFile.write(this, "signal arrived (switch off): action=$action")
+            return
+        }
         // 仅观测类（SCREEN_OFF/ON）：只留时序证据，绝不动作
         if (CarPowerSignal.shouldObserve(action)) {
             RingLog.i("CarPower", "observe $action playing=$isNowPlaying")
+            CarPowerLogFile.write(this, "observe $action playing=$isNowPlaying")
             return
         }
         val command = CarPowerSignal.commandFor(action, enabled = true) ?: return
         if (!isNowPlaying) {
             RingLog.i("CarPower", "signal ignored (not playing): action=$action")
+            CarPowerLogFile.write(this, "signal ignored (not playing): action=$action")
             return
         }
         RingLog.i("CarPower", "power-down -> dispatch $command (action=$action)")
+        CarPowerLogFile.write(this, "power-down -> dispatch $command (action=$action)")
         // 复用线控同一条 Dart 派发链：Dart 侧 pause 会同步通知、媒体会话与播放状态，
         // 直接在原生层 pause 播放器会造成「通知栏还在播 / 进度条不动」的状态撕裂。
         handleMediaButtonCommand(command)

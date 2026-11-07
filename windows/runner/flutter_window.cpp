@@ -661,6 +661,14 @@ bool FlutterWindow::OnCreate() {
               StringArg(args, "loopMode"), BoolArg(args, "shuffleEnabled", false),
               DoubleArg(args, "playbackRate", 1.0));
           result->Success(flutter::EncodableValue(true));
+        } else if (method == "updateNotificationPosition") {
+          // 每秒一次的位置推进轻量路径：只写时间轴与播放状态，不触碰
+          // DisplayUpdater。若走全量 UpdateMetadata，`DisplayUpdater.Update()`
+          // 会让系统每秒重建媒体卡片，播控中心封面随之闪烁。
+          media_controls_.UpdateTimeline(IntArg(args, "position", 0),
+                                         IntArg(args, "duration", 0),
+                                         BoolArg(args, "isPlaying", false));
+          result->Success(flutter::EncodableValue(true));
         } else if (method == "hideNotification") {
           // 主动停止（退出 App / 空闲停播）：置 Stopped 并清空显示。
           // 只置 Paused 会让播控中心与第三方歌词工具一直挂着上一首的

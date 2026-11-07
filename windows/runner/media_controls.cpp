@@ -339,6 +339,50 @@ RandomAccessStreamReference MediaControlsController::ThumbnailForLocalFile(
   return reference;
 }
 
+void MediaControlsController::UpdateTimeline(int64_t position_ms,
+                                             int64_t duration_ms,
+                                             bool is_playing) {
+  if (!initialized_ || !smtc_) return;
+  try {
+    int64_t clamped_position = position_ms;
+    int64_t clamped_duration = duration_ms;
+    if (smtc_metadata::ResolveTimeline(position_ms, duration_ms,
+                                       &clamped_position, &clamped_duration)) {
+      SystemMediaTransportControlsTimelineProperties timeline;
+      timeline.StartTime(ToTimeSpan(0));
+      timeline.MinSeekTime(ToTimeSpan(0));
+      timeline.Position(ToTimeSpan(clamped_position));
+      timeline.EndTime(ToTimeSpan(clamped_duration));
+      timeline.MaxSeekTime(ToTimeSpan(clamped_duration));
+      smtc_.UpdateTimelineProperties(timeline);
+    } else {
+      // 时长未知（duration<=0）：**必须**把时间轴收成 0 长度，不能什么都不做。
+      //
+      // 切歌瞬间 Dart 侧 durationStream 还没给出新值，_pushNotification 会带着
+      // 上一首（或 0）的时长进来。若此时跳过更新，SMTC 的 EndTime 就停在**上一首**
+      // 的值上。第三方任务栏歌词工具（TaskbarLyrics / AF Media Bar）都按
+      // `EndTime - StartTime` 取曲长，并拿它做歌词候选打分（AF 的
+      // KugouLyricsProvider 按「候选时长与目标时长最接近」排序）与进度换算 ——
+      // 时长错就等于取不到词。
+      //
+      // 收成 0 是诚实的：工具看到「时长未知」会走它自己的兜底，比看到一串
+      // 错误的数字要好。Dart 侧 durationStream 回填后会立刻补推真实时长。
+      SystemMediaTransportControlsTimelineProperties timeline;
+      timeline.StartTime(ToTimeSpan(0));
+      timeline.MinSeekTime(ToTimeSpan(0));
+      timeline.Position(ToTimeSpan(0));
+      timeline.EndTime(ToTimeSpan(0));
+      timeline.MaxSeekTime(ToTimeSpan(0));
+      smtc_.UpdateTimelineProperties(timeline);
+    }
+
+    smtc_.PlaybackStatus(is_playing ? MediaPlaybackStatus::Playing
+                                    : MediaPlaybackStatus::Paused);
+  } catch (...) {
+    // SMTC 更新失败不致命。
+  }
+}
+
 void MediaControlsController::UpdateMetadata(
     const std::string& title, const std::string& artist,
     const std::string& album, const std::string& album_artist,
@@ -385,40 +429,8 @@ void MediaControlsController::UpdateMetadata(
       smtc_.AutoRepeatMode(MediaPlaybackAutoRepeatMode::None);
     }
 
-    int64_t clamped_position = position_ms;
-    int64_t clamped_duration = duration_ms;
-    if (smtc_metadata::ResolveTimeline(position_ms, duration_ms,
-                                       &clamped_position, &clamped_duration)) {
-      SystemMediaTransportControlsTimelineProperties timeline;
-      timeline.StartTime(ToTimeSpan(0));
-      timeline.MinSeekTime(ToTimeSpan(0));
-      timeline.Position(ToTimeSpan(clamped_position));
-      timeline.EndTime(ToTimeSpan(clamped_duration));
-      timeline.MaxSeekTime(ToTimeSpan(clamped_duration));
-      smtc_.UpdateTimelineProperties(timeline);
-    } else {
-      // 时长未知（duration<=0）：**必须**把时间轴收成 0 长度，不能什么都不做。
-      //
-      // 切歌瞬间 Dart 侧 durationStream 还没给出新值，_pushNotification 会带着
-      // 上一首（或 0）的时长进来。若此时跳过更新，SMTC 的 EndTime 就停在**上一首**
-      // 的值上。第三方任务栏歌词工具（TaskbarLyrics / AF Media Bar）都按
-      // `EndTime - StartTime` 取曲长，并拿它做歌词候选打分（AF 的
-      // KugouLyricsProvider 按「候选时长与目标时长最接近」排序）与进度换算 ——
-      // 时长错就等于取不到词。
-      //
-      // 收成 0 是诚实的：工具看到「时长未知」会走它自己的兜底，比看到一串
-      // 错误的数字要好。Dart 侧 durationStream 回填后会立刻补推真实时长。
-      SystemMediaTransportControlsTimelineProperties timeline;
-      timeline.StartTime(ToTimeSpan(0));
-      timeline.MinSeekTime(ToTimeSpan(0));
-      timeline.Position(ToTimeSpan(0));
-      timeline.EndTime(ToTimeSpan(0));
-      timeline.MaxSeekTime(ToTimeSpan(0));
-      smtc_.UpdateTimelineProperties(timeline);
-    }
-
-    smtc_.PlaybackStatus(is_playing ? MediaPlaybackStatus::Playing
-                                    : MediaPlaybackStatus::Paused);
+    // 时间轴 + 播放状态收敛在 UpdateTimeline（全量路径与每秒轻量路径共用）。
+    UpdateTimeline(position_ms, duration_ms, is_playing);
   } catch (...) {
     // SMTC 更新失败不致命。
   }

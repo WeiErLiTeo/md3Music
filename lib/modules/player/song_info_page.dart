@@ -208,8 +208,8 @@ class _SongInfoPageState extends State<SongInfoPage> {
       body: ListView(
         children: [
           _buildSongHeader(song, colorScheme, textTheme),
-          // 本地歌曲：在线信息（匹配记忆 / 专辑 / 歌手 / 评论入口）
-          if (song != null && !song.isOnline) ...[
+          // 本地/云盘歌曲：在线信息（匹配记忆 / 专辑 / 歌手 / 评论入口）
+          if (song != null && (!song.isOnline || song.isCloud)) ...[
             const SizedBox(height: 8),
             _buildSectionHeader('在线信息'),
             _buildOnlineMatchCard(song, colorScheme),
@@ -246,7 +246,7 @@ class _SongInfoPageState extends State<SongInfoPage> {
     );
   }
 
-  /// 本地歌曲的在线信息卡：已匹配展示专辑/歌手（可跳详情页）+ 评论/管理入口；
+  /// 本地/云盘歌曲的在线信息卡：已匹配展示专辑/歌手（可跳详情页）+ 评论/管理入口；
   /// 未匹配给出引导与「去匹配」。
   Widget _buildOnlineMatchCard(Song song, ColorScheme colorScheme) {
     final textTheme = Theme.of(context).textTheme;

@@ -29039,6 +29039,180 @@ _pendingUpdateVersion 来自 getUpdateLastNotifiedVersion()，语义是「上次
 from :2776
 commit refs/heads/rust-local-force
 mark :2778
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1793812049 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1793812049 +0800
+data 356
+fix(windows): 修复播控中心歌曲封面每秒闪烁
+
+位置上报改 1s 一次后仍走全量 updateNotification，每秒一次
+DisplayUpdater.Update() 重建媒体卡片导致封面闪烁。抽出
+UpdateTimeline 轻量通道（只写时间轴+播放态），Windows 每秒
+位置推送改走 updateNotificationPosition，不触碰元数据/封面。
+from :2777
+commit refs/heads/rust-local-force
+mark :2779
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1793812391 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1793812391 +0800
+data 261
+fix(discover): 屏蔽刷歌推荐歌手/专辑点击跳转
+
+发现页卡片与刷歌推荐详情页两处 SongListItem 不再传
+onArtistTap/onAlbumTap，副标题回退为纯文本；点歌行播放
+与补货器逻辑不变，其他区块跳转不受影响。
+from :2778
+commit refs/heads/rust-local-force
+mark :2780
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1793812943 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1793812943 +0800
+data 540
+feat(user): 年度总结页适配 PC 鼠标滚轮翻页
+
+横向 PageView 收不到纵向滚轮增量（框架只分发给同轴滚动物），
+故事区包 Listener.onPointerSignal 显式接收：一格滚轮（100 逻辑
+像素）翻一页，复用 320ms animateToPage，滚轮向下 = 下一页。
+
+照 coverflow W8 先例全套口径：触控板小步长累积到一格才翻、
+目标基址与动画位置解耦防快滚丢步、滚轮停 120ms 清基址、
+Shift+滚轮放行框架横轴机制、键盘/拖拽/换年入口清基址。
+from :2779
+commit refs/heads/rust-local-force
+mark :2781
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1793813273 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1793813273 +0800
+data 75
+feat(song-menu): 歌曲列表更多菜单支持查看歌手与查看专辑
+from :2780
+commit refs/heads/rust-local-force
+mark :2782
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1793813378 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1793813378 +0800
+data 62
+feat(playlist): 我创建的歌单不展示相似歌单按钮
+from :2781
+commit refs/heads/rust-local-force
+mark :2783
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1793813711 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1793813711 +0800
+data 941
+fix: Windows 鼠标滚轮在主页顶部无法拉出下拉刷新指示器
+
+ScrollPosition.pointerScroll 会把目标位置 clamp 到边界，列表顶部向上
+滚轮时一条滚动通知都不派发（其通知 dragDetails 也恒为 null），通知链
+完全感知不到滚轮下拉；触控板走 PointerPanZoom 拖拽路径故正常。
+
+- m3e_pull_to_refresh_fixed.dart 最外层挂 Listener（behavior: opaque，
+  W8 口径）拦截 PointerScrollEvent：顶部 + 滚轮向下视作下拉拖拽，复用
+  _updateDragDistance 累积距离，200ms 空闲 Timer 判停走触发/回弹
+- _isAtTop 由通知链反向喂状态，初始必须为 true（静止在顶部时无通知
+  可更新）；Shift+滚轮照例让位横向轴；触摸拖拽开始取消滚轮 Timer
+- 新增 3 个滚轮回归测试（拉出/超阈值触发/未达阈值回弹），全套 4/4 绿
+- windows-desktop.md W8 表格补记该场景与 _isAtTop 初始值陷阱
+from :2782
+commit refs/heads/rust-local-force
+mark :2784
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1793814480 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1793814480 +0800
+data 763
+fix(windows): 窗口模式 Zen 下补一条顶部透明窗口拖拽带
+
+右键封面进入的 Zen 不切窗口全屏，但 ZenFade 会把顶栏（窗口模式下唯一
+的拖动区）折叠掉，导致窗口无法移动（W14 已知缺口）。
+
+- 两套播放页 body 顶层 Stack 末尾条件挂 24dp 透明 startDrag 拖拽带
+  （isWindowsDesktop && !dockMode && _zenMode && !_zenWindowFullscreen），
+  不参与布局、不改 ZenFade 收起语义；
+- 全屏 Zen 不渲染；peek 期间顶栏拖动区已恢复；先手动全屏再右键进 Zen
+  时被原生 fullscreen_ 守卫忽略，退化为无害 no-op；
+- windows_player_window_controls_test.dart 补拖拽带接线契约；
+- windows-desktop.md W14 已知缺口段落更新为已修复口径。
+from :2783
+commit refs/heads/rust-local-force
+mark :2785
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1793815837 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1793815837 +0800
+data 705
+feat(cloud): 云盘歌曲接入匹配在线歌曲信息
+
+参考本地音乐的匹配体系，云盘歌曲复用 SongMatchRepository/SongMatchProvider：
+- 新增 matchInfoForSong 统一入口，本地/云盘查匹配记忆，纯在线恒 null
+- 云盘列表加载后触发自动匹配（复用开关/冷却/dismissed/限速）
+- 云盘页与播放器菜单新增「匹配在线」入口，可手动搜索/确认/取消
+- 歌词链路命中匹配后用官方 hash 精确检索（全屏播放器/桌面歌词/车机/Lyricon）
+- 评论区支持云盘匹配解析定位在线歌曲；封面支持单曲偏好在线封面
+- 歌曲信息页在线信息卡对云盘可见；测试新增 5 个云盘匹配用例
+from :2784
+commit refs/heads/rust-local-force
+mark :2786
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1793816262 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1793816262 +0800
+data 390
+feat(search): 搜索历史支持长按删除单条,清空增加二次确认
+
+- 历史词条长按即删该条并持久化,toast 提示;TV 遥控无长按手势,单条删除不覆盖 TV 端
+- 清空按钮先弹 AlertDialog 二次确认(展示条数,确认键 error 色),确认后才清空
+- 新增 search_history_manage_test 3 条 widget 测试(单删持久化/取消不清空/确认清空)
+from :2785
+commit refs/heads/rust-local-force
+mark :2787
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1793816462 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1793816462 +0800
+data 661
+fix(charts): 回退旧排行榜时错显示另一榜单的歌曲
+
+getRankSongs 的缓存命中按 rankId 分键（rankSongs_$rankId），
+但所有榜单共用单一 _rankSongs 缓冲区：第二次进入 TTL 内的
+旧榜单时直接 return，_rankSongs 仍是上个榜单的数据，UI
+读 kugou.rankSongs 即串榜。
+
+- 新增按 rankId 的 _rankSongsCache 与 _rankSongsCurrentId，
+  缓存命中且切换榜单时换入对应数据再通知
+- 拉取成功后同步写入缓存；失败不写缓存不改当前榜单标记
+- clearMemoryCache 一并清理新缓存
+- TV 滚动 memoryKey 按 rankId 区分，避免不同榜单恢复
+  彼此的滚动位置
+from :2786
+commit refs/heads/rust-local-force
+mark :2788
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1793837729 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1793837729 +0800
+data 779
+fix(detail): 排序不因分页加载不完整而静默截断
+
+听书/歌单/专辑详情页排序基于已加载数据，分页中途失败时原先静默
+按部分数据排序展示，且部分结果会覆盖本地全量缓存。
+
+- 听书详情页：全量加载失败标记不完整，footer 显示重试断点续传；
+  播放全部/随机播放时轻提示章节仍在加载；_buildSongs 按 id 去重
+- 歌单加载器：PlaylistSongsResult 增加 isComplete；部分数据不再
+  写回本地缓存；歌单页顶部显示未完整提示条 + 重新加载
+- 专辑接口：getAlbumSongsAll 在 total≤0 时按 50 页兜底，防请求风暴
+- 专辑/听书页 time 排序改预建 id→index map，消除 O(N²)
+- 新增 total 异常为 0 时分页兜底上限测试
+from :2787
+commit refs/heads/rust-local-force
+mark :2789
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1793840841 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1793840841 +0800
+data 216
+feat: 为电视端歌曲列表行添加OK键直接打开播放页的功能
+
+新增openFullPlayer方法的导入与调用逻辑
+添加对应测试用例验证电视端交互语义
+更新相关注释说明功能规则
+from :2788
+commit refs/heads/rust-local-force
+mark :2790
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1793852601 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1793852601 +0800
+data 237
+revert(charts): 撤销排行榜串榜修复 66c6111b
+
+- 移除了按 rankId 的 _rankSongsCache 与 _rankSongsCurrentId 换入逻辑
+- 移除了 clearMemoryCache 对新缓存的清理
+- 移除了 TV 滚动 memoryKey 按 rankId 的区分
+from :2789
+commit refs/heads/rust-local-force
+mark :2791
 author vcexml <3356141621@qq.com> 1793846291 +0800
 committer vcexml <3356141621@qq.com> 1793846291 +0800
 data 293
@@ -29047,7 +29221,7 @@ ci: 更新GitHub Actions工作流使用的第三方Action版本
 将所有工作流中的旧版Action（如actions/checkout、setup-python等）更新为指定的提交哈希版本，同时将原生库安装脚本从批处理文件迁移到PowerShell脚本，提升安全性和可维护性。
 from :2777
 commit refs/heads/rust-local-force
-mark :2779
+mark :2792
 author vcexml <3356141621@qq.com> 1793850426 +0800
 committer vcexml <3356141621@qq.com> 1793850426 +0800
 data 385
@@ -29057,9 +29231,9 @@ fix(rank): 排行榜歌曲按榜单隔离缓存并防过期响应覆盖
 - 请求代数计数：快速切换榜单时，先发后至的旧响应不再覆盖新榜单
 - 加载失败不写新鲜度时间戳，下次进入仍会重试
 - _endLoading 移入 finally，异常路径不再卡住加载态
-from :2778
+from :2791
 commit refs/heads/rust-local-force
-mark :2780
+mark :2793
 author vcexml <3356141621@qq.com> 1793850430 +0800
 committer vcexml <3356141621@qq.com> 1793850430 +0800
 data 428
@@ -29069,4 +29243,263 @@ fix(user): 账号切换防重复点击并修复嵌套导航误弹路由
 - 关闭面板改用面板自身 Navigator，rootNavigator 误弹用户中心/根页面
 - 确认框、切换、toast 各环节逐一判 mounted，等待期间手动关面板不再误弹
 - token 过期引导改用稳定的用户中心 context，面板已关也能正常弹出
-from :2779
+from :2792
+commit refs/heads/rust-local-force
+mark :2794
+author Little-White3110 <53994162+Little-White3110@users.noreply.github.com> 1793852661 +0800
+committer GitHub <noreply@github.com> 1793852661 +0800
+data 58
+Merge branch 'zzyoxml:rust-local-two' into rust-local-two
+from :2790
+merge :2793
+commit refs/heads/rust-local-force
+mark :2795
+author Little-White3110 <53994162+Little-White3110@users.noreply.github.com> 1793853385 +0800
+committer GitHub <noreply@github.com> 1793853385 +0800
+data 72
+Merge pull request #182 from Little-White3110/rust-local-two
+
+bug fixes
+from :2793
+merge :2794
+commit refs/heads/rust-local-force
+mark :2796
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1793855181 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1793855181 +0800
+data 623
+fix(playlist): 歌手名/歌曲名称排序改按拼音 A→Z
+
+排序维度此前用 String.compareTo，中文按 Unicode 码位序排——
+「张学友」排在「陈奕迅」前，与用户预期的拼音序不符。
+
+- 引入纯 Dart 包 pinyin ^3.3.0（BSD-2、无平台插件，三端可用）
+- 新增 pinyinSortKey：CJK 逐字转无声调拼音，ASCII/标点原样保留，
+  单字记忆化缓存避免翻页重排重复转换
+- artist 与 title 维度改用拼音键；未知歌手归一、indexRank 决胜不变
+- 单测按新语义修正 2 个旧断言，新增拼音序/中英混排/多歌手连写等 5 例
+from :2794
+commit refs/heads/rust-local-force
+mark :2797
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1793855296 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1793855296 +0800
+data 322
+fix(library): 本地音乐按标题/歌手排序改按拼音 A→Z
+
+与歌单详情页同一问题：String.compareTo 中文按 Unicode 码位序，
+与 A→Z 拼音预期不符。复用 pinyinSortKey（含单字记忆化缓存）；
+标题排序同时改用 displayName，剥离 .mp3 等后缀，与列表显示一致。
+from :2796
+commit refs/heads/rust-local-force
+mark :2798
+author Little-White3110 <53994162+Little-White3110@users.noreply.github.com> 1793866432 +0800
+committer GitHub <noreply@github.com> 1793866432 +0800
+data 81
+Merge pull request #183 from Little-White3110/rust-local-two
+
+排序算法修复
+from :2795
+merge :2797
+commit refs/heads/rust-local-force
+mark :2799
+author github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1793876510 +0000
+committer github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1793876510 +0000
+data 32
+chore: update GitHub star trend
+from :2798
+commit refs/heads/rust-local-force
+mark :2800
+author vcexml <3356141621@qq.com> 1793942029 +0800
+committer vcexml <3356141621@qq.com> 1793942029 +0800
+data 379
+feat: 歌词信息推送增加重试机制和会话生成控制
+
+实现 tryUpdateLyricInfo 方法，支持原生端失败后重试
+添加会话生成用 Unix 时间戳，避免引擎重建后会话误判
+增加推送去重和进度锁，防止重复推送
+修改原生端延迟重试逻辑，最多重试12次间隔120ms
+新增测试用例验证推送失败后重试成功逻辑
+from :2799
+commit refs/heads/rust-local-force
+mark :2801
+author vcexml <3356141621@qq.com> 1793942050 +0800
+committer vcexml <3356141621@qq.com> 1793942050 +0800
+data 269
+fix: 修复歌词信息未被检测到的元数据变更问题
+
+在比较媒体元数据变更时，新增对歌词信息（lyricInfo）的检查，因为 MediaMetadata.equals 不会比较 extras 中的内容，避免遗漏歌词变更导致的状态未更新问题。
+from :2800
+commit refs/heads/rust-local-force
+mark :2802
+author vcexml <3356141621@qq.com> 1793944919 +0800
+committer vcexml <3356141621@qq.com> 1793944919 +0800
+data 152
+fix(just_audio): 修复循环模式回写和元数据更新逻辑
+
+优化循环模式回写逻辑，复用原有扩展字段避免覆盖歌词等数据
+from :2801
+commit refs/heads/rust-local-force
+mark :2803
+author vcexml <3356141621@qq.com> 1794014935 +0800
+committer vcexml <3356141621@qq.com> 1794014935 +0800
+data 54
+docs: 更新 README.md 中的 Trendshift 徽章布局
+from :2802
+commit refs/heads/rust-local-force
+mark :2804
+author github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1793962781 +0000
+committer github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1793962781 +0000
+data 32
+chore: update GitHub star trend
+from :2802
+commit refs/heads/rust-local-force
+mark :2805
+author vcexml <3356141621@qq.com> 1794015145 +0800
+committer vcexml <3356141621@qq.com> 1794015145 +0800
+data 97
+Merge branch 'rust-local-two' of https://github.com/zzyoxml/private_md3music into rust-local-two
+from :2803
+merge :2804
+commit refs/heads/rust-local-force
+mark :2806
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1793970607 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1793970607 +0800
+data 613
+fix(mcp): 按hash播放误用audio_id致声曲不符，移除跨域兜底并补齐搜索候选ID (#216)
+
+- KugouSongDetail.fromJson 候选链移除 Audioid/audio_id（与 MixSongID 不同域，
+  错ID透传 /song/url 会解析到无关音源）
+- copyWith 支持覆盖 albumAudioId
+- MCP getSongDetail 补齐条件扩展为封面或 albumAudioId 任一缺失，
+  逐项回填封面/albumAudioId/albumId，播放/入队/详情三工具共用
+- md3_add_song_to_playlist 透传补齐后详情，歌单 mixsongid 不再错值入库
+- 新增 models/mcp 定向回归共 12 项，含 issue 复现 hash 端到端用例
+from :2797
+commit refs/heads/rust-local-force
+mark :2807
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1793982020 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1793982020 +0800
+data 412
+feat: 添加车机下电落盘日志取证功能
+
+新增 CarPowerLogFile 类实现车机下电事件的落盘日志记录，避免进程内存环形缓冲随断电灭失导致的取证盲区。
+在 MediaSessionService 暂停逻辑、AudioPlaybackService 的媒体命令派发、车机广播注册及信号处理处补充落盘日志。
+新增 CarPowerLogFileTest 单测覆盖核心逻辑，确保功能稳定。
+from :2806
+commit refs/heads/rust-local-force
+mark :2808
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1793983163 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1793983163 +0800
+data 1539
+fix(mcp): 歌单写闭环/专辑名补齐/控制命令防风暴挂起（实测跟进）
+
+Windows 实测 45 个 MCP 工具后跟进修复：
+
+- 新增 md3_get_my_playlists：暴露当前用户自建歌单及其可写 listid。
+  此前 md3_add_song_to_playlist 对 AI 实际不可用（md3_search_playlists
+  是全网搜索、list_id 恒空，拿全局 id 加歌必失败）；同步在两侧描述
+  中写清 listid 来源；投影口径与「添加到歌单」对话框一致（type=0，
+  排除系统「我喜欢」）
+- md3_create_playlist 回执透出上游新 listid（实测缺口：建完拿不到 ID
+  就无法接着加歌）；解析失败返回 null 不算创建失败
+- getSongDetail 补齐项增加 albumName（/audio 不返回专辑名，实测
+  md3_get_song_detail 的 album 为空），早退条件与扫描同步扩展
+- PlayerProviderBackedControl 控制命令加 5s 兜底超时：冷启动恢复
+  播放陷入 15s 加载重试风暴时，pause/resume/next 等会无限挂起并
+  拖死 MCP HTTP 殃及后续全部工具（实测）；用户意图在命令开头已
+  同步下发，超时静默成功，实际状态由 md3_get_player_state 查询
+- createPlaylist 注释固化「gid 中段序号只在收藏他人歌单时才是有效
+  list_create_listid」的实测结论，防新建路径误传引用错位
+- 测试：新增 9 项（listid 投影/过滤/空态提示/limit 钳制/create 回执），
+  工具总数断言 37/14/39/44 → 38/15/40/45；test/modules/mcp +
+  test/services/kugou_api 522 项全绿
+from :2807
+commit refs/heads/rust-local-force
+mark :2809
+author github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1793876999 +0000
+committer github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1793876999 +0000
+data 32
+chore: update GitHub star trend
+from :2797
+commit refs/heads/rust-local-force
+mark :2810
+author Little-White3110 <53994162+Little-White3110@users.noreply.github.com> 1793883934 +0800
+committer GitHub <noreply@github.com> 1793883934 +0800
+data 58
+Merge branch 'zzyoxml:rust-local-two' into rust-local-two
+from :2809
+merge :2799
+commit refs/heads/rust-local-force
+mark :2811
+author github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1793963218 +0000
+committer github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1793963218 +0000
+data 32
+chore: update GitHub star trend
+from :2810
+commit refs/heads/rust-local-force
+mark :2812
+author Little-White3110 <53994162+Little-White3110@users.noreply.github.com> 1793968449 +0800
+committer GitHub <noreply@github.com> 1793968449 +0800
+data 58
+Merge branch 'zzyoxml:rust-local-two' into rust-local-two
+from :2811
+merge :2804
+commit refs/heads/rust-local-force
+mark :2813
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1793987536 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1793987536 +0800
+data 106
+Merge branch 'rust-local-two' of https://github.com/Little-White3110/private_md3music into rust-local-two
+from :2808
+merge :2812
+commit refs/heads/rust-local-force
+mark :2814
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1793989725 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1793989725 +0800
+data 833
+feat(player): 播放页长按歌名/歌手·专辑复制完整歌曲信息
+
+长按全屏播放页标题区任意一行（歌名或「歌手 · 专辑」副标题），复制
+`歌名 歌手-专辑`（如 `晴天 周杰伦-叶惠美`）到剪贴板，带震动与 Toast
+提示；短按跳专辑行为不变。MD 与 AM 两套播放页样式均接线，TV 构建
+无长按语义不接线（kTvBuild 门控）。
+
+- song.dart 新增共享真值：isUnknownAlbum/kUnknownAlbumPlaceholder
+  专辑占位判定，formatSongFullCopyText 完整信息拼接（占位段省略、
+  displayName 剥扩展名、全缺返回空串）
+- 两套播放页 _copySongInfoToClipboard 复用 _resolveMatchedSong：
+  本地/云盘命中匹配记忆时用在线元数据，与专辑跳转同口径
+- 新增 formatSongFullCopyText 单元测试 13 项全过
+from :2813
+commit refs/heads/rust-local-force
+mark :2815
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1793990746 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1793990746 +0800
+data 678
+feat(player): 播放与输出面板输出页新增 USB 独占入口
+
+- 输出页音量与更多设备之间新增「USB 独占」托盘行（仅安卓手机，supportsUsbExclusive 门控）
+- 行尾外置开关直读 OutputModeCoordinator，与设置页/歌曲信息页三处联动一致；
+  切换走协调器，语义与 UsbExclusiveSection._toggle 同构（含失败回退提示消费）
+- 点开关外行体进入歌曲信息页（二级界面），返回后面板保持打开
+- 安卓 ⋯ 菜单移除「歌曲信息」入口（!supportsUsbExclusive 门控，Windows/TV 保留）
+- 防回归测试：入口门控方向 + 托盘行位置/置灰/开关与行体分击用例
+from :2814
+commit refs/heads/rust-local-force
+mark :2816
+author Little-White3110 <53994162+Little-White3110@users.noreply.github.com> 1794027243 +0800
+committer GitHub <noreply@github.com> 1794027243 +0800
+data 72
+Merge pull request #184 from Little-White3110/rust-local-two
+
+bug fixes
+from :2805
+merge :2815
+commit refs/heads/rust-local-force
+mark :2817
+author vcexml <3356141621@qq.com> 1794028747 +0800
+committer vcexml <3356141621@qq.com> 1794028747 +0800
+data 362
+fix: 调整 GitHub 网络重试策略为可变延迟并更新文档
+
+修改 Invoke-WithRetry 函数，将固定 2 秒延迟的 3 次重试改为使用可配置的延迟数组，依次等待 60s、120s、300s，适配网络偶发抖动场景；同步更新 common.ps1 中的函数注释和 build-and-test.md 文档，说明新的重试规则和自定义方式。
+from :2816

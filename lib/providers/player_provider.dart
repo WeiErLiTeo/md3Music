@@ -61,6 +61,7 @@ import '../data/repositories/history_repository.dart';
 import '../data/repositories/player_state_repository.dart';
 import '../data/repositories/settings_repository.dart';
 import '../data/repositories/song_match_repository.dart';
+import 'song_match_provider.dart';
 import '../main.dart';
 import '../services/kugou_server.dart';
 import 'package:md3music/widgets/apple_lyrics/models/lyric_line.dart';
@@ -4793,8 +4794,22 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
   /// 本地持久化封面提取扩展点：默认无实现（保持调用方兼容）。
   Future<void> _extractCloudArtwork(Song song, String audioUrl) async {
     try {
-      final extract = PlayerProvider.extractEmbeddedArtwork;
-      final path = extract != null ? await extract(song.id, audioUrl) : null;
+      // 单曲偏好「使用在线封面」且命中匹配记忆时：直接用在线封面，
+      // 跳过内嵌封面提取（与本地歌曲 preferOnlineCover 行为一致）。
+      final info = matchInfoForSong(song);
+      final onlineUri = (info != null &&
+              info.isMatched &&
+              info.preferOnlineCover &&
+              (info.artworkUri ?? '').isNotEmpty)
+          ? info.artworkUri
+          : null;
+      final String? path;
+      if (onlineUri != null) {
+        path = onlineUri;
+      } else {
+        final extract = PlayerProvider.extractEmbeddedArtwork;
+        path = extract != null ? await extract(song.id, audioUrl) : null;
+      }
       if (path == null) return;
       // 回填封面路径（file://），并同步通知栏/UI
       final updated = song.copyWith(artworkUri: path);
@@ -7210,6 +7225,21 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       return;
     }
     _lastNotificationUpdate = now;
+    // Windows 每秒只走轻量时间轴推送：全量 updateNotification 会触发原生
+    // `DisplayUpdater.Update()` 重建媒体卡片，播控中心封面随之每秒闪烁。
+    // 其它平台维持全量推送（30s 一次基线校正，系统自己外推进度）。
+    // 平台口径用 defaultTargetPlatform，与 notification_position_gate 一致，
+    // 避免 Platform.isWindows 在 flutter test 宿主上恒真。
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.windows) {
+      final song = _currentSong;
+      if (song == null) return;
+      MediaNotificationService.updateNotificationPosition(
+        position: _position,
+        duration: _duration ?? song.duration,
+        isPlaying: _isPlaying,
+      );
+      return;
+    }
     _updateNotification();
   }
 
@@ -7745,13 +7775,14 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       List<LyricLine> lines = const [];
       if (song != null) {
         // 这首歌自己的匹配记录：hash 精确检索 + 单曲偏好「使用在线歌词」
+        // 云盘歌曲同样可持有匹配记忆（云盘 hash 非官方 hash）
         await SongMatchRepository().ensureLoaded();
-        final matchInfo =
-            song.isOnline ? null : SongMatchRepository().get(song.id);
+        final matchInfo = matchInfoForSong(song);
         final preferOnlineLyrics = matchInfo?.preferOnlineLyrics == true;
 
-        // 本地歌曲优先读取内嵌歌词；单曲偏好开启时跳过，直接走在线
-        if (!song.isOnline && !preferOnlineLyrics) {
+        // 本地歌曲优先读取内嵌歌词；单曲偏好开启时跳过，直接走在线。
+        // 云盘歌曲无本地文件，跳过内嵌读取。
+        if (!song.isOnline && !song.isCloud && !preferOnlineLyrics) {
           final localPath = song.localPath;
           if (localPath != null && localPath.isNotEmpty) {
             String filePath = localPath;
@@ -7773,7 +7804,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
           if (ctx != null && ctx.mounted) {
             try {
               final kugou = ctx.read<KugouProvider>();
-              // 本地歌曲：命中匹配记忆时用在线 hash 精确检索；未命中传空 hash +
+              // 本地/云盘歌曲：命中匹配记忆时用在线 hash 精确检索；未命中传空 hash +
               // "歌名 艺术家" 关键词搜索。搜索词与播放器页面 full_player 保持一致，
               // 确保 Lyricon 推送与播放器页面命中同一版本歌词。
               final matchedHash = (matchInfo != null && matchInfo.isMatched)

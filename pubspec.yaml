@@ -93,6 +93,7 @@ dependencies:
   share_plus: ^13.3.0
   # 诊断日志导出：纯 Dart zip 打包（无原生代码，跨平台）
   archive: ^4.0.7
+  pinyin: ^3.3.0
 
 dependency_overrides:
   # 钉住 material_ui 1.7.0：1.8.0 新导出 RoundedPolygon/CornerRounding（src/shapes/），

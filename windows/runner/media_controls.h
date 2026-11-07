@@ -49,6 +49,14 @@ class MediaControlsController {
   // 释放 SMTC 与事件注册，幂等。
   void Shutdown();
 
+  // 仅更新时间轴与播放状态（每秒的位置推进轻量路径）。
+  //
+  // **绝不触碰 DisplayUpdater / Thumbnail**：`DisplayUpdater.Update()` 会让系统
+  // 重新发布整张媒体卡片，播控中心随之重绘封面。位置上报间隔为 1s 时若走全量
+  // `UpdateMetadata`，封面就会每秒重建一次 —— 表现为「封面固定 1s 闪烁」。
+  // `UpdateTimelineProperties` 只是属性写入，不重建卡片，可以安全地每秒调用。
+  void UpdateTimeline(int64_t position_ms, int64_t duration_ms, bool is_playing);
+
   // 更新元数据、时间轴与播放状态。duration_ms<=0 时跳过时间轴更新。
   // loop_mode 取 AppLoopMode.name（'off'/'one'/'all'），映射到 SMTC 循环按钮
   // 状态（off→None、one→Track、all→List）。

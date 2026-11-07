@@ -61,6 +61,7 @@ import 'speed_picker_sheet.dart';
 import 'song_info_page.dart';
 import '../../providers/favorites_provider.dart';
 import '../../data/repositories/song_match_repository.dart';
+import '../../providers/song_match_provider.dart';
 import '../../providers/kugou_provider.dart';
 import '../../providers/local_favorites_provider.dart';
 import '../../providers/player_provider.dart';
@@ -505,6 +506,29 @@ class _FullPlayerState extends State<FullPlayer>
     WindowsWindowControls.startDrag();
   }
 
+  /// 窗口模式 Zen 的窗口拖拽带是否可见。
+  ///
+  /// Zen 会把顶栏（窗口模式下唯一的拖动区）整体折叠掉（ZenFade），而右键封面
+  /// 进入的沉浸窗口仍是普通窗口 —— 没有拖动区窗口就挪不动（W14 已知缺口）。
+  /// 条件即「Windows 桌面 + 非车机 + Zen 中 + 未切窗口全屏」：
+  /// - 长按 / F11 进入的 Zen 已切真全屏（_zenWindowFullscreen=true），全屏没有
+  ///   「移动窗口」可言；
+  /// - peek 期间 _zenMode 已翻回 false，顶栏拖动区恢复，不需要补带；
+  /// - 用户先手动 F11 全屏再右键进 Zen 时条件仍为 true，但原生 startDrag 在
+  ///   fullscreen_ 下直接忽略（W3 守卫），拖拽带退化为无害 no-op。
+  bool get _zenWindowDragStripVisible =>
+      isWindowsDesktop && !widget.dockMode && _zenMode && !_zenWindowFullscreen;
+
+  /// 窗口模式 Zen 下贴窗口顶边的透明拖拽带：只补一条 startDrag 通道，
+  /// 不改 ZenFade 的收起语义（W14：不要动收起语义）。
+  Widget _buildZenWindowDragStrip() {
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onPanStart: _startWindowDrag,
+      child: const SizedBox(height: 24, width: double.infinity),
+    );
+  }
+
   /// 顶栏向下拖拽开始：接管路由 controller（路由已存在，无 push 事件流风险）。
   /// Zen 模式下禁用拖拽收起（退出需长按专辑图），避免误触直接关闭播放器。
   void _onTopBarDragStart(DragStartDetails details) {
@@ -613,12 +637,28 @@ class _FullPlayerState extends State<FullPlayer>
   /// 跳转到当前歌曲所在专辑页。
   /// 若 song.albumId 为空（如本地歌曲缺少元数据），提示用户无专辑信息。
   /// 跳转前先 dismiss FullPlayer，让 MiniPlayer 恢复显示。
-  /// 本地歌曲命中匹配记忆时返回对应的在线歌曲（专辑/歌手跳转用在线 id）。
-  /// 在线歌曲或未匹配时原样返回。
+  /// 本地/云盘歌曲命中匹配记忆时返回对应的在线歌曲（专辑/歌手跳转用在线 id）。
+  /// 纯在线歌曲或未匹配时原样返回。
   Song _resolveMatchedSong(Song song) {
-    if (song.isOnline) return song;
+    if (song.isOnline && !song.isCloud) return song;
     final info = SongMatchRepository().get(song.id);
     return (info != null && info.isMatched) ? info.toSong() : song;
+  }
+
+  /// 长按标题区：复制「歌名 歌手-专辑」完整信息（如 `晴天 周杰伦-叶惠美`）。
+  ///
+  /// TV 端无长按语义（接线处已用 kTvBuild 门控为 null），这里不再判平台。
+  /// 本地/云盘歌曲命中匹配记忆时用在线元数据，与专辑跳转同口径
+  /// （本地文件的 artist/album 常是「未知艺术家/未知专辑」占位）。
+  void _copySongInfoToClipboard(Song song) {
+    final text = formatSongFullCopyText(_resolveMatchedSong(song));
+    if (text.isEmpty) {
+      showToast('暂无可复制的歌曲信息', long: true);
+      return;
+    }
+    AppHaptics.click(HapticCategory.listItem);
+    Clipboard.setData(ClipboardData(text: text));
+    showToast('已复制: $text');
   }
 
   void _navigateToAlbum(Song song) {
@@ -1840,17 +1880,16 @@ class _FullPlayerState extends State<FullPlayer>
       String? romaText;
 
       // 这首歌自己的匹配记录：hash 精确检索 + 单曲偏好「使用在线歌词」
-      if (song is Song && !song.isOnline) {
+      // 云盘歌曲同样可持有匹配记忆（云盘 hash 非官方 hash）
+      if (song is Song) {
         await SongMatchRepository().ensureLoaded();
       }
-      final matchInfo = (song is Song && !song.isOnline)
-          ? SongMatchRepository().get(song.id)
-          : null;
+      final matchInfo = song is Song ? matchInfoForSong(song) : null;
       final preferOnlineLyrics = matchInfo?.preferOnlineLyrics == true;
 
       // 本地歌曲优先读取内嵌歌词（ID3 USLT / SYLT / Vorbis LYRICS / MP4 ©lyr）；
-      // 单曲偏好开启时跳过，直接走在线
-      if (song is Song && !song.isOnline && !preferOnlineLyrics) {
+      // 单曲偏好开启时跳过，直接走在线。云盘歌曲无本地文件，跳过内嵌读取。
+      if (song is Song && !song.isOnline && !song.isCloud && !preferOnlineLyrics) {
         final embedded = await LocalLyricLoader.loadForSongAsync(
           localPath: song.localPath,
           cachedLyrics: song.localLyrics,
@@ -1862,7 +1901,7 @@ class _FullPlayerState extends State<FullPlayer>
       if (lyricText.isEmpty) {
         if (!mounted || generation != _lyricFetchGeneration) return;
         final kugouProvider = context.read<KugouProvider>();
-        // 本地歌曲：命中匹配记忆时用在线 hash 精确检索；未命中传空 hash
+        // 本地/云盘歌曲：命中匹配记忆时用在线 hash 精确检索；未命中传空 hash
         // 让酷狗 API 完全基于 songName 搜索歌词
         final matchedHash =
             (matchInfo != null && matchInfo.isMatched) ? matchInfo.hash : null;
@@ -2181,6 +2220,15 @@ class _FullPlayerState extends State<FullPlayer>
               // tv: 键位提示条——焦点落在带遥控语义的控件上时，于画面下沿提示按键。
               // TvHintBar 自身是 Align(bottomCenter)+SafeArea，只需放在 Stack 最后一位。
               if (kTvBuild) const TvHintBar(),
+              // Windows 窗口模式 Zen：顶栏折叠后唯一拖动区消失，贴顶补一条
+              // 透明 startDrag 带（不参与布局，不影响 ZenFade 折叠后的居中）。
+              if (_zenWindowDragStripVisible)
+                Positioned(
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  child: _buildZenWindowDragStrip(),
+                ),
             ],
           ),
         ),
@@ -2293,6 +2341,7 @@ class _FullPlayerState extends State<FullPlayer>
                 if (_tabLayout.hasComments)
                   CommentsView(
                     songHash: currentSong.id,
+                    song: currentSong,
                     albumAudioId: currentSong.albumAudioId,
                     // 输入不在播放器里：长按评论段/点「回复」弹出仅输入框的托盘
                     showComposer: false,
@@ -2699,6 +2748,7 @@ class _FullPlayerState extends State<FullPlayer>
                               if (_tabLayout.hasComments)
                                 CommentsView(
                                   songHash: currentSong.id,
+                                  song: currentSong,
                                   albumAudioId: currentSong.albumAudioId,
                                   // 输入不在播放器里：长按评论段/点「回复」弹出仅输入框的托盘
                                   showComposer: false,
@@ -3079,6 +3129,7 @@ class _FullPlayerState extends State<FullPlayer>
                               if (_tabLayout.hasComments)
                                 CommentsView(
                                   songHash: currentSong.id,
+                                  song: currentSong,
                                   albumAudioId: currentSong.albumAudioId,
                                   // 输入不在播放器里：长按评论段/点「回复」弹出仅输入框的托盘
                                   showComposer: false,
@@ -3869,6 +3920,10 @@ class _FullPlayerState extends State<FullPlayer>
         children: [
           InkWell(
             onTap: () => _navigateToAlbum(currentSong as Song),
+            // 长按任意一行 = 复制完整歌曲信息（TV 端无长按语义，不接线）
+            onLongPress: kTvBuild
+                ? null
+                : () => _copySongInfoToClipboard(currentSong as Song),
             borderRadius: BorderRadius.circular(4),
             // 过长歌名不换行，改优雅滚动（两端停顿 + 缓动往返 + 边缘渐隐）。
             child: GentleScrollingText(
@@ -3880,6 +3935,9 @@ class _FullPlayerState extends State<FullPlayer>
           const SizedBox(height: 2),
           InkWell(
             onTap: () => _navigateToAlbum(currentSong as Song),
+            onLongPress: kTvBuild
+                ? null
+                : () => _copySongInfoToClipboard(currentSong as Song),
             borderRadius: BorderRadius.circular(4),
             child: GentleScrollingText(
               spec.subtitle,
@@ -4759,8 +4817,8 @@ class _FullPlayerState extends State<FullPlayer>
                     },
                   ),
                 ],
-                // 本地歌曲：匹配在线歌曲，补充封面兜底/歌词精确检索/评论区
-                if (!song.isOnline && song.localPath != null)
+                // 本地歌曲 / 云盘歌曲：匹配在线歌曲，补充封面兜底/歌词精确检索/评论区
+                if ((!song.isOnline && song.localPath != null) || song.isCloud)
                   ListTile(
                     leading: const Icon(Icons.manage_search),
                     title: const Text('匹配在线信息'),
@@ -4778,19 +4836,21 @@ class _FullPlayerState extends State<FullPlayer>
                       showAddToPlaylistDialog(rootContext, song);
                     },
                   ),
-                // 歌曲信息：采样频率/位深/声道/文件大小 + 本地歌曲在线信息入口。
-                // USB 独占区块只在 Android 手机显示（supportsUsbExclusive 已排除
-                // 桌面端与 TV 构建），其余内容在播放页没有等价展示，故恢复入口。
-                ListTile(
-                  leading: const Icon(Icons.info_outline),
-                  title: const Text('歌曲信息'),
-                  onTap: () {
-                    Navigator.pop(sheetContext);
-                    _pageNavigator(rootContext)?.push(
-                      MaterialPageRoute(builder: (_) => const SongInfoPage()),
-                    );
-                  },
-                ),
+                // 歌曲信息：安卓手机入口已移进「播放与输出」面板输出页的
+                // 「USB 独占」行（supportsUsbExclusive 门控，见
+                // playback_center_sheet.dart 的 UsbExclusiveTrayRow）；
+                // Windows/TV 无 USB 独占与等价的格式明细展示，此处保留入口。
+                if (!supportsUsbExclusive)
+                  ListTile(
+                    leading: const Icon(Icons.info_outline),
+                    title: const Text('歌曲信息'),
+                    onTap: () {
+                      Navigator.pop(sheetContext);
+                      _pageNavigator(rootContext)?.push(
+                        MaterialPageRoute(builder: (_) => const SongInfoPage()),
+                      );
+                    },
+                  ),
                 // Windows 输出设备选择已并入顶栏「播放与输出」面板的输出页
                 // （playback_center_sheet.dart 的 WindowsOutputDeviceSection），
                 // 这里不再重复放二级弹窗入口，免得两处状态各说一套。

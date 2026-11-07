@@ -489,6 +489,7 @@ class KugouSongDetail {
     String? artistId,
     String? artworkUri,
     String? curMark,
+    String? albumAudioId,
   }) {
     return KugouSongDetail(
       hash: hash,
@@ -503,7 +504,7 @@ class KugouSongDetail {
       hash320: hash320,
       hash128: hash128,
       lyrics: lyrics,
-      albumAudioId: albumAudioId,
+      albumAudioId: albumAudioId ?? this.albumAudioId,
       artworkUri: artworkUri ?? this.artworkUri,
       fileName: fileName,
       privilege: privilege,
@@ -759,14 +760,18 @@ class KugouSongDetail {
             json2['trans_param']?['ogg_128_hash'],
       ),
       lyrics: _strNull(json2['lyrics'] ?? json2['Lyrics'] ?? json2['Lyric']),
+      // 候选链只收 MixSongID/album_audio_id 同域键。禁止把 `Audioid`/`audio_id`
+      // 当兜底：/audio（kmr）响应里的 audio_id 与 MixSongID 是不同 ID 域，
+      // 误用时 /song/url 的 album_audio_id 参数会解析到无关音源
+      // （issue #216：按 hash 播《野心家》实播 48 分钟口播）。
+      // 正确 ID 由调用方（如 MCP getSongDetail）用同 hash 搜索候选补齐。
+      // 同类隐患：KugouComment.mixSongId 的 audio_id 兜底（评论域，暂不改）。
       albumAudioId: _strNull(
         json2['album_audio_id'] ??
             json2['AlbumAudioID'] ??
             json2['MixSongID'] ??
             json2['mixsongid'] ??
-            json2['add_mixsongid'] ??
-            json2['Audioid'] ??
-            json2['audio_id'],
+            json2['add_mixsongid'],
       ),
       artworkUri: _resolveArtworkUri(
         json2['sizable_cover'] ??

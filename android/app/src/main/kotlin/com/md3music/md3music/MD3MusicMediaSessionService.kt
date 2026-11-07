@@ -494,6 +494,11 @@ class MD3MusicMediaSessionService : MediaSessionService() {
             AudioPlaybackService.isCarPowerOffPauseEnabled(applicationContext)
         ) {
             RingLog.i("CarPower", "onTaskRemoved: pause before task cleanup")
+            // 落盘留证：清任务路径同样可能紧接断电，环形缓冲随进程灭失不可依赖
+            CarPowerLogFile.write(
+                applicationContext,
+                "onTaskRemoved: pause before task cleanup"
+            )
             AudioPlaybackService.dispatchUiAction(
                 applicationContext,
                 AudioPlaybackService.ACTION_PAUSE

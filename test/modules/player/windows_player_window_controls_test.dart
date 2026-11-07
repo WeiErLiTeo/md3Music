@@ -143,6 +143,34 @@ void main() {
     }
   });
 
+  /// 窗口模式 Zen（右键封面进入）的窗口拖拽带契约。
+  ///
+  /// Zen 把顶栏（唯一拖动区）折叠掉后，右键进入的沉浸窗口仍是普通窗口，
+  /// 必须有一条补位拖拽带，且只在「Windows + 非 dockMode + Zen 中 + 未持
+  /// 窗口全屏」渲染（全屏无可移动；peek 期间 _zenMode 已翻回 false）。
+  test('两套播放页都带窗口模式 Zen 的补位拖拽带', () {
+    for (final path in files) {
+      final code = codeOf(path);
+      expect(
+        code.contains(
+          'isWindowsDesktop && !widget.dockMode && _zenMode && !_zenWindowFullscreen',
+        ),
+        isTrue,
+        reason: '$path：拖拽带必须按「窗口模式 Zen」四条件门控',
+      );
+      expect(
+        code.contains('onPanStart: _startWindowDrag'),
+        isTrue,
+        reason: '$path：拖拽带必须走同一条原生 startDrag 通道',
+      );
+      expect(
+        code.contains('if (_zenWindowDragStripVisible)'),
+        isTrue,
+        reason: '$path：拖拽带必须条件渲染（非 Windows / 非 Zen 零布局变化）',
+      );
+    }
+  });
+
   test('每个竖向拖拽接线要么禁用、要么是窗口拖动/封面收起', () {
     for (final path in files) {
       final lines = codeOf(path).split('\n');

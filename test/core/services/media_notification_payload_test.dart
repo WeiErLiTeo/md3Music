@@ -43,20 +43,45 @@ void main() {
   Future<void> sendCommand(String method, [Object? arguments]) async {
     await messenger.handlePlatformMessage(
       channel.name,
-      const StandardMethodCodec()
-          .encodeMethodCall(MethodCall(method, arguments)),
+      const StandardMethodCodec().encodeMethodCall(
+        MethodCall(method, arguments),
+      ),
       (_) {},
     );
   }
 
   Map<Object?, Object?> lastPayload() {
-    final calls =
-        outbound.where((c) => c.method == 'updateNotification').toList();
+    final calls = outbound
+        .where((c) => c.method == 'updateNotification')
+        .toList();
     expect(calls, isNotEmpty, reason: '没有捕获到 updateNotification');
     return calls.last.arguments as Map<Object?, Object?>;
   }
 
   group('出站 payload：第三方歌词工具依赖的字段', () {
+    test('LyricInfo 通道失败会返回 false，后续成功可确认交付', () async {
+      var attempts = 0;
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        if (call.method == 'updateLyricInfo') {
+          attempts++;
+          if (attempts == 1) {
+            throw PlatformException(code: 'bridge_unavailable');
+          }
+        }
+        return true;
+      });
+
+      expect(
+        await MediaNotificationService.tryUpdateLyricInfo('[{"lyric":"x"}]'),
+        isFalse,
+      );
+      expect(
+        await MediaNotificationService.tryUpdateLyricInfo('[{"lyric":"x"}]'),
+        isTrue,
+      );
+      expect(attempts, 2);
+    });
+
     test('album / albumArtist / playbackRate 原样下发', () async {
       await MediaNotificationService.updateNotification(
         title: '晴天',
@@ -97,8 +122,7 @@ void main() {
       expect(payload['shuffleEnabled'], true);
     });
 
-    test('倍速边界值不被 Dart 侧改写（夹取由 setSpeed / 原生各负责一段）',
-        () async {
+    test('倍速边界值不被 Dart 侧改写（夹取由 setSpeed / 原生各负责一段）', () async {
       await MediaNotificationService.updateNotification(
         title: 't',
         artist: 'a',

@@ -7,6 +7,8 @@ import 'package:provider/provider.dart';
 import '../../core/platform_capabilities.dart';
 import '../../core/services/diagnostic_logger.dart';
 import '../../core/services/media_output_service.dart';
+import '../../core/services/output_mode_coordinator.dart';
+import '../../core/services/usb_audio_service.dart';
 import '../../core/services/windows_audio_output_device_service.dart';
 import '../../core/theme/app_dimens.dart';
 import '../../core/utils/app_toast.dart';
@@ -15,6 +17,7 @@ import '../../providers/player_provider.dart';
 import '../../widgets/player_volume_slider.dart';
 import 'audio_quality_dialog.dart';
 import 'dlna_cast_sheet.dart';
+import 'song_info_page.dart';
 
 /// 播放与输出面板：投屏 / 输出（含系统妙播）/ 音质，三件事一个入口。
 ///
@@ -22,6 +25,8 @@ import 'dlna_cast_sheet.dart';
 /// 但它们回答的是同一个问题 ——「声音现在从哪出、多大、多好」。合成一个面板后，
 /// 右上角只留一个入口，音质档位落在**面板底部**，与输出/音量同屏：换设备时常要
 /// 顺手降档，省的正是来回两趟。
+/// 输出页还带「USB 独占」行（仅安卓手机，`supportsUsbExclusive`）：原 ⋯ 菜单的
+/// 「歌曲信息」入口收编于此 —— 行尾开关直控独占，点行体进歌曲信息页看格式链。
 Future<void> showPlaybackCenterSheet(
   BuildContext context, {
   String? mvUrl,
@@ -47,6 +52,8 @@ class PlaybackCenterSheet extends StatefulWidget {
     this.probeSwitcherSupported = MediaOutputService.isSwitcherSupported,
     this.showSystemSwitcher = MediaOutputService.showSystemOutputSwitcher,
     this.showWindowsOutputDevices,
+    this.showUsbExclusive,
+    this.usbExclusiveRow,
     this.listOutputDevices = WindowsAudioOutputDeviceService.listDevices,
     this.selectedOutputDeviceId =
         WindowsAudioOutputDeviceService.selectedDeviceId,
@@ -63,6 +70,15 @@ class PlaybackCenterSheet extends StatefulWidget {
   /// Windows 输出设备区：null = 按运行时平台判定（[isWindowsDesktop]）；
   /// 单测显式传 true/false 钉形态。三个设备调用与上面同口径可注入。
   final bool? showWindowsOutputDevices;
+
+  /// 「USB 独占」行可见性：null = 按运行时能力判定（[supportsUsbExclusive]）；
+  /// 单测显式传 true/false 钉形态（与 [showWindowsOutputDevices] 同口径）。
+  final bool? showUsbExclusive;
+
+  /// 「USB 独占」托盘行覆写：null = 输出页自建 [UsbExclusiveTrayRow]（真机路径）；
+  /// 单测注入带 fake 状态/回调的实例，绕开 MethodChannel。
+  final UsbExclusiveTrayRow? usbExclusiveRow;
+
   final Future<List<WindowsAudioOutputDevice>> Function() listOutputDevices;
   final Future<String?> Function() selectedOutputDeviceId;
   final Future<void> Function(String?) selectOutputDevice;
@@ -186,6 +202,8 @@ class _PlaybackCenterSheetState extends State<PlaybackCenterSheet> {
                       onMoreDevices: _openSystemSwitcher,
                       windowsDevices:
                           widget.showWindowsOutputDevices ?? isWindowsDesktop,
+                      showUsbExclusive: widget.showUsbExclusive,
+                      usbExclusiveRow: widget.usbExclusiveRow,
                       listOutputDevices: widget.listOutputDevices,
                       selectedOutputDeviceId: widget.selectedOutputDeviceId,
                       selectOutputDevice: widget.selectOutputDevice,
@@ -226,6 +244,8 @@ class PlaybackOutputTab extends StatelessWidget {
     required this.switcherSupported,
     required this.onMoreDevices,
     this.windowsDevices = false,
+    this.showUsbExclusive,
+    this.usbExclusiveRow,
     this.listOutputDevices = WindowsAudioOutputDeviceService.listDevices,
     this.selectedOutputDeviceId =
         WindowsAudioOutputDeviceService.selectedDeviceId,
@@ -238,6 +258,15 @@ class PlaybackOutputTab extends StatelessWidget {
 
   /// 是否显示 Windows 内联输出设备区（仅 Windows 构建为 true）。
   final bool windowsDevices;
+
+  /// 是否显示「USB 独占」行：null = 按运行时能力判定（[supportsUsbExclusive]，
+  /// 仅安卓手机为真），单测显式传 true/false 钉形态。
+  final bool? showUsbExclusive;
+
+  /// 托盘行实例覆写：null = 自建默认 [UsbExclusiveTrayRow]（真机路径）；
+  /// 单测注入带 fake 状态/回调的实例，绕开 MethodChannel。
+  final UsbExclusiveTrayRow? usbExclusiveRow;
+
   final Future<List<WindowsAudioOutputDevice>> Function() listOutputDevices;
   final Future<String?> Function() selectedOutputDeviceId;
   final Future<void> Function(String?) selectOutputDevice;
@@ -264,6 +293,12 @@ class PlaybackOutputTab extends StatelessWidget {
           // 这里只负责给它一块卡片底。
           child: const PlayerVolumeSlider(),
         ),
+        // USB 独占行：音量与「更多设备」之间，安卓手机专属（桌面端/TV 无原生
+        // 插件，露出来就是点不动的死 UI）。
+        if (showUsbExclusive ?? supportsUsbExclusive) ...[
+          const SizedBox(height: AppSpacing.sm),
+          usbExclusiveRow ?? const UsbExclusiveTrayRow(),
+        ],
         if (windowsDevices) ...[
           const SizedBox(height: AppSpacing.sm),
           WindowsOutputDeviceSection(
@@ -322,6 +357,184 @@ class PlaybackOutputTab extends StatelessWidget {
           ),
         ],
       ],
+    );
+  }
+}
+
+/// 「USB 独占」托盘行：原 ⋯ 菜单「歌曲信息」入口在安卓上的新家。
+///
+/// 行体点击进 [SongInfoPage]（音频格式 + 完整 USB 独占设置）；行尾外置开关
+/// **直接联动**外层「USB 独占输出」总开关 —— 数据源与设置页 / 歌曲信息页的
+/// [UsbExclusiveSection] 同为 [OutputModeCoordinator]，三处状态必然一致。
+/// 切换语义必须与 `usb_exclusive_section.dart` 的 `_toggle` 保持同构：走协调器
+/// （native 状态、效果链旁路、unity 音量都挂在它上面），失败时消费回退提示。
+///
+/// 连接态来自 `UsbAudioService.statusStream`（插拔由原生推事件，不挂轮询
+/// Timer）；未连接时开关置灰、副标题说明原因，不留点不动的假开关。
+class UsbExclusiveTrayRow extends StatefulWidget {
+  const UsbExclusiveTrayRow({
+    super.key,
+    this.initialStatus,
+    this.coordinator,
+    this.onToggle,
+    this.onOpenDetails,
+  });
+
+  /// 初始 USB 状态（单测注入；null = 读服务端 lastStatus）。
+  final Map<String, dynamic>? initialStatus;
+
+  /// 协调器（单测注入 fake；null = [OutputModeCoordinator.instance] 单例 ——
+  /// 单例是 static final 非 const，不能做构造参数默认值）。
+  final OutputModeCoordinator? coordinator;
+
+  /// 开关切换（单测捕获；null = 走真实协调器路径）。
+  final Future<void> Function(bool value)? onToggle;
+
+  /// 点行体进二级页（单测捕获；null = 真实 push [SongInfoPage]）。
+  final VoidCallback? onOpenDetails;
+
+  @override
+  State<UsbExclusiveTrayRow> createState() => _UsbExclusiveTrayRowState();
+}
+
+class _UsbExclusiveTrayRowState extends State<UsbExclusiveTrayRow> {
+  Map<String, dynamic> _status = const {};
+  StreamSubscription<Map<String, dynamic>>? _statusSub;
+  bool _loading = false;
+
+  /// 协调器：widget 注入优先，缺省用单例（static final 非 const，不能当默认参数）。
+  OutputModeCoordinator get _coordinator =>
+      widget.coordinator ?? OutputModeCoordinator.instance;
+
+  @override
+  void initState() {
+    super.initState();
+    _status = widget.initialStatus ?? UsbAudioService.instance.lastStatus;
+    _statusSub = UsbAudioService.instance.statusStream.listen((s) {
+      if (mounted) setState(() => _status = s);
+    });
+    // 兜底：行可见时主动查一次（覆盖原生事件未推送的边界场景，与歌曲信息页同款）。
+    UsbAudioService.instance.refresh();
+  }
+
+  @override
+  void dispose() {
+    _statusSub?.cancel();
+    super.dispose();
+  }
+
+  /// 开关：与 `usb_exclusive_section.dart` 的 `_toggle` 同语义（走协调器）。
+  Future<void> _toggle(bool value) async {
+    final Future<void> Function(bool)? injected = widget.onToggle;
+    if (injected != null) {
+      setState(() => _loading = true);
+      await injected(value);
+      if (mounted) setState(() => _loading = false);
+      return;
+    }
+    setState(() => _loading = true);
+    try {
+      await _coordinator.setEnabled(value);
+      // 开启失败时协调器保持关闭并记下原因，在这里消费掉，免得再被
+      // PlayerProvider 的监听器弹一次同样的 toast（与 section 口径一致）。
+      if (value && !_coordinator.enabled) {
+        if (mounted) {
+          showToast(
+            _coordinator.consumeFallbackNotice() ??
+                'USB 独占不可用，已恢复普通输出',
+            long: true,
+          );
+        } else {
+          _coordinator.consumeFallbackNotice();
+        }
+      }
+      final s = await UsbAudioService.instance.getStatus();
+      if (mounted) setState(() => _status = s);
+    } catch (e) {
+      if (mounted) showToast('USB 独占操作失败：$e', long: true);
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  void _openDetails() {
+    final VoidCallback? injected = widget.onOpenDetails;
+    if (injected != null) {
+      injected();
+      return;
+    }
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const SongInfoPage()),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme cs = Theme.of(context).colorScheme;
+    final TextTheme tt = Theme.of(context).textTheme;
+    final bool connected = _status['deviceConnected'] == true;
+    final String subtitle = connected
+        ? (_status['deviceName'] as String? ?? '未知设备')
+        : '未检测到 USB 音频设备';
+
+    // 开关值在 builder 内读协调器（与 section 外层开关同口径，不能读 native
+    // `enabled`：内层选中 Direct PCM 时直写并未开启，但外层仍应为 ON）；
+    // 协调器 notifyListeners 时整行重建，与设置页/歌曲信息页三处联动。
+    return ListenableBuilder(
+      listenable: _coordinator,
+      builder: (context, _) {
+        final bool enabled = _coordinator.enabled;
+        return Material(
+          color: cs.surfaceContainerHighest.withValues(alpha: 0.5),
+          borderRadius: BorderRadius.circular(AppRadius.md),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(AppRadius.md),
+            onTap: _openDetails,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.usb,
+                    size: 20,
+                    color: cs.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: AppSpacing.md),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'USB 独占',
+                          style: tt.titleSmall?.copyWith(
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          subtitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: tt.bodySmall?.copyWith(
+                            color: cs.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Switch(
+                    value: enabled,
+                    // 未连接（或操作中）置灰；点开关区域不进二级页。
+                    onChanged: (!connected || _loading)
+                        ? null
+                        : (v) => _toggle(v),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }

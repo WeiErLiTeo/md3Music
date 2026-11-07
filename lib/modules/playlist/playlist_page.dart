@@ -88,6 +88,8 @@ class _PlaylistPageState extends State<PlaylistPage> {
   bool _isLoading = true;
   List<Song> _songs = [];
   String? _error;
+  /// 分页中途失败导致列表不完整（部分数据已展示，提示可重试）。
+  bool _songsIncomplete = false;
   // 普通歌单（发现/热门/排行榜）的红心收藏状态
   bool _isCollected = false;
   String? _collectedListId;
@@ -1166,6 +1168,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
       if (!mounted) return;
       final all = result.songs;
       setState(() {
+        _songsIncomplete = !result.isComplete;
         // 网络拿到数据时正常覆盖；网络空但本地已有 cache 时保留 cache，
         // 避免断网重进歌单时被空响应覆盖掉本地缓存的歌曲
         if (all.isNotEmpty || _songs.isEmpty) {
@@ -1270,6 +1273,9 @@ class _PlaylistPageState extends State<PlaylistPage> {
                 // 歌单的元数据/封面/描述仍可见）
                 if (_error != null)
                   _buildErrorBanner(context, colorScheme, textTheme),
+                // 分页中途失败、列表不完整：次级提示条（区别于整页加载失败）
+                if (_error == null && _songsIncomplete)
+                  _buildIncompleteBanner(colorScheme, textTheme),
                 if (_isMultiSelectMode)
                   _buildMultiSelectBar(colorScheme, textTheme),
                 if (_orderSaving) const LinearProgressIndicator(),
@@ -1695,8 +1701,11 @@ class _PlaylistPageState extends State<PlaylistPage> {
             onPressed: _scrollToPlayingSong,
             tooltip: '定位正在播放',
           ),
-        // 专辑详情（isAlbum）不展示相似歌单
-        if (_songs.isNotEmpty && !widget.isAlbum && _trackOrder == null)
+        // 专辑详情（isAlbum）与用户自建歌单（isUserCreated）不展示相似歌单
+        if (_songs.isNotEmpty &&
+            !widget.isAlbum &&
+            !widget.isUserCreated &&
+            _trackOrder == null)
           IconButton(
             icon: const Icon(Icons.auto_awesome),
             onPressed: () => _showSimilarPlaylists(context),
@@ -2049,6 +2058,44 @@ class _PlaylistPageState extends State<PlaylistPage> {
                 foregroundColor: colorScheme.onErrorContainer,
               ),
               child: const Text('重试'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 列表不完整提示条：分页中途失败，当前展示的是部分歌曲，
+  /// 排序结果也只覆盖已载部分；提供重新加载入口。
+  Widget _buildIncompleteBanner(
+    ColorScheme colorScheme,
+    TextTheme textTheme,
+  ) {
+    return Material(
+      color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.9),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg, vertical: 8),
+        child: Row(
+          children: [
+            Icon(
+              Icons.warning_amber_outlined,
+              size: 16,
+              color: colorScheme.onSurfaceVariant,
+            ),
+            const Gap(AppSpacing.sm),
+            Expanded(
+              child: Text(
+                '歌单未加载完整，当前排序仅覆盖已载歌曲',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: textTheme.bodySmall?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+            TextButton(
+              onPressed: _fetchSongs,
+              child: const Text('重新加载'),
             ),
           ],
         ),

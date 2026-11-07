@@ -36,7 +36,6 @@ import '../album/new_album_browse_page.dart';
 import '../../widgets/compact_album_grid.dart';
 import '../../widgets/playlist_cover_hero.dart';
 import '../../core/utils/app_toast.dart';
-import '../../core/utils/song_detail_nav.dart';
 import 'discover_sections.dart';
 
 /// 顶栏图标按钮（搜索 / 识曲）的尺寸：36 而不是 MD3 默认的 48，让两个图标之间
@@ -808,9 +807,8 @@ class _DiscoverPageState extends State<DiscoverPage>
                               trailingActions: SongTrailingActions.favoriteOnly,
                               // 走统一的 _play，卡片上点歌同样要装填补货器
                               onTap: () => _play(i),
-                              // 副标题「歌手 / 专辑」分段点击进详情页（点文字不再重播该曲）
-                              onArtistTap: () => openSongArtist(context, top[i]),
-                              onAlbumTap: () => openSongAlbum(context, top[i]),
+                              // 刻意不接 onArtistTap / onAlbumTap：刷歌定位是"划走就换"，
+                              // 点歌手/专辑跳出发现页会打断刷的节奏，副标题保持纯文本。
                             ),
                         ],
                       ),
@@ -1318,9 +1316,8 @@ class _HomeDiscoverDetailPageState extends State<_HomeDiscoverDetailPage> {
                                   trailingActions:
                                       SongTrailingActions.favoriteAndMore,
                                   onTap: () => _play(index),
-                                  // 副标题「歌手 / 专辑」分段点击进详情页
-                                  onArtistTap: () => openSongArtist(context, song),
-                                  onAlbumTap: () => openSongAlbum(context, song),
+                                  // 与发现页卡片一致：刷歌区块不接歌手/专辑跳转，
+                                  // 副标题保持纯文本，避免点击跳出刷歌流程。
                                 );
                               },
                             ),

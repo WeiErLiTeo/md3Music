@@ -57,6 +57,8 @@ void main() {
     List<WindowsAudioOutputDevice> devices = const [],
     String? selectedId,
     bool selectThrows = false,
+    bool? showUsbExclusive,
+    UsbExclusiveTrayRow? usbRow,
   }) async {
     SharedPreferences.setMockInitialValues({});
     toasts = <String>[];
@@ -97,12 +99,14 @@ void main() {
                 return switcherShown;
               },
               showWindowsOutputDevices: windowsDevices,
+              showUsbExclusive: showUsbExclusive,
               listOutputDevices: () async => devices,
               selectedOutputDeviceId: () async => selectedId,
               selectOutputDevice: (id) async {
                 if (selectThrows) throw Exception('native down');
                 selectedId = id;
               },
+              usbExclusiveRow: usbRow,
             ),
           ),
         ),
@@ -355,5 +359,80 @@ void main() {
       find.descendant(of: spkRow, matching: find.byIcon(Icons.check)),
       findsOneWidget,
     );
+  });
+
+  // ---- 「USB 独占」托盘行（原 ⋯ 菜单「歌曲信息」入口在安卓上的新家） ----
+
+  testWidgets('安卓形态：USB 独占行在音量与「更多设备」之间', (tester) async {
+    await pump(tester, showUsbExclusive: true);
+    expect(find.text('USB 独占'), findsOneWidget);
+    // 位置契约：音量之下、「更多设备」之上
+    final double usbY = tester.getTopLeft(find.text('USB 独占')).dy;
+    final double volumeY = tester.getTopLeft(find.text('音量')).dy;
+    final double moreY = tester.getTopLeft(find.text('更多设备')).dy;
+    expect(usbY, greaterThan(volumeY));
+    expect(usbY, lessThan(moreY));
+    // 未连接 USB 设备：副标题说明原因，开关置灰
+    expect(find.text('未检测到 USB 音频设备'), findsOneWidget);
+    final Switch usbSwitch = tester.widget<Switch>(
+      find.descendant(
+        of: find.ancestor(
+          of: find.text('USB 独占'),
+          matching: find.byType(UsbExclusiveTrayRow),
+        ),
+        matching: find.byType(Switch),
+      ),
+    );
+    expect(usbSwitch.onChanged, isNull, reason: '未连接时开关必须置灰');
+  });
+
+  testWidgets('USB 独占行：连接态开关可用且点开关走注入回调，点行体进二级页', (tester) async {
+    final List<bool> toggles = [];
+    int detailOpens = 0;
+    await pump(
+      tester,
+      showUsbExclusive: true,
+      usbRow: UsbExclusiveTrayRow(
+        initialStatus: const {
+          'deviceConnected': true,
+          'deviceName': 'Test DAC',
+          'enabled': false,
+        },
+        onToggle: (v) async => toggles.add(v),
+        onOpenDetails: () => detailOpens += 1,
+      ),
+    );
+    expect(find.text('Test DAC'), findsOneWidget, reason: '连接态副标题显示设备名');
+    final Switch usbSwitch = tester.widget<Switch>(
+      find.descendant(
+        of: find.ancestor(
+          of: find.text('USB 独占'),
+          matching: find.byType(UsbExclusiveTrayRow),
+        ),
+        matching: find.byType(Switch),
+      ),
+    );
+    expect(usbSwitch.value, isFalse);
+    expect(usbSwitch.onChanged, isNotNull, reason: '连接后开关必须可用');
+
+    // 点开关：走 onToggle，不开二级页
+    await tester.tap(find.byType(Switch));
+    await tester.pump();
+    expect(toggles, [true]);
+    expect(detailOpens, 0);
+
+    // 点行体（标题文字）：进二级页，开关不翻转
+    await tester.tap(find.text('USB 独占'));
+    await tester.pump();
+    expect(detailOpens, 1);
+    expect(toggles, [true], reason: '点行体不应触发开关');
+  });
+
+  testWidgets('showUsbExclusive=false 钉 Windows 形态：不出现 USB 独占行', (tester) async {
+    await pump(tester, showUsbExclusive: false, usbRow: null);
+    // 音量条只会在 USB 独占源下显示「USB 独占音量」chip，含「USB 独占」子串；
+    // 精确匹配行标题「USB 独占」必须一个都没有。
+    expect(find.text('USB 独占'), findsNothing);
+    expect(find.byType(UsbExclusiveTrayRow), findsNothing);
   });
 }

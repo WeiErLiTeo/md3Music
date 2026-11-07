@@ -2237,8 +2237,9 @@ class SettingsRepository {
   static const String _keyAutoMatchOnlineInfo = 'settings_auto_match_online';
 
   /// 「自动匹配在线信息」开关，默认开启。
-  /// 开启时扫描/启动后自动为本地歌曲搜索匹配在线歌曲（高置信度才确认），
-  /// 补充封面兜底、歌词精确检索与评论区；关闭后仍可手动逐首匹配。
+  /// 开启时扫描/启动后自动为本地歌曲、云盘列表加载后为云盘歌曲搜索匹配
+  /// 在线歌曲（高置信度才确认），补充封面兜底、歌词精确检索与评论区；
+  /// 关闭后仍可手动逐首匹配。
   Future<bool> getAutoMatchOnlineInfo() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getBool(_keyAutoMatchOnlineInfo) ?? true;
