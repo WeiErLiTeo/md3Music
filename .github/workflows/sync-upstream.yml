@@ -4,10 +4,12 @@ name: Sync Upstream & Build YT3 Release
 # 1. sync-upstream（每天定时 + 手动触发）：
 #    - 检测最上游仓库 zzyoxml/md3Music (rust-local-force) 是否有更新
 #    - 将 yt3 的定制改动自动三方合并到上游最新代码上（用 .md3/base/ 保存基准文件，防止上游 force-push 丢失基准提交）
-#    - 若无冲突则直接推送到本仓库 yt3 分支；仅当上游版本号更新（本仓库尚未发布对应版本的 Release）时才触发 build-yt3-release 打包发版
+#    - README.md 保持 yt3 分支版本不同步上游；CHANGELOG.md 跟随上游同步用于生成 Release 更新日志
+#    - 若无冲突则直接推送到本仓库 yt3 分支；仅当上游版本号更新（本仓库尚未发布对应版本的 Release）时才触发 Release 打包发版
 #
-# 2. build-yt3-release（当检测到新版本尚未发版，或手动选择 build_release_now 时触发）：
-#    - 版本号与 Release 标签名（vX.Y.Z）跟随上游，自动发布到本仓库的 GitHub Releases 并保留所有历史版本
+# 2. build-yt3-release & build-yt3-windows（当检测到新版本尚未发版，或手动选择 build_release_now 时触发）：
+#    - 编译上游同款 5 个安装包（标准版 64 位、随身听兼容版 64 位、TV 版 64/32 位、Windows 便携版），文件名带 -yt 标识
+#    - Release 说明包含安装包列表、本分支更新内容、以及引用自最上游 zzyoxml 的版本更新内容
 on:
   schedule:
     - cron: '30 1 * * *'
@@ -99,9 +101,8 @@ jobs:
           echo "检测到上游新提交：${BASE_SHA:0:8} -> ${UPSTREAM_SHORT} (${UPSTREAM_VER})"
           SYNC_BRANCH="sync/upstream-${UPSTREAM_SHORT}"
 
-          # 3. 对最小挂载文件做三方合并
+          # 3. 对最小挂载代码文件做三方合并（README.md 直接保留 yt3 版本，不从上游同步）
           HOOK_FILES=(
-            "README.md"
             "lib/providers/theme_provider.dart"
             "lib/modules/player/full_player_route.dart"
             "lib/modules/player/player_drag_overlay.dart"
@@ -114,7 +115,7 @@ jobs:
           # 以 origin/yt3 为父提交创建同步工作分支
           git checkout -B "${SYNC_BRANCH}" origin/yt3
 
-          # 先把整个工作区替换成 upstream/rust-local-force 的最新快照
+          # 先把整个工作区替换成 upstream/rust-local-force 的最新快照（含最新 CHANGELOG.md 等）
           git rm -rf . > /dev/null
           git checkout upstream/rust-local-force -- .
 
@@ -122,8 +123,9 @@ jobs:
           git rm -rf .github/workflows > /dev/null 2>&1 || true
           git checkout origin/yt3 -- .github/workflows
 
-          # 恢复 YT 纯新增文件并更新上游基准 SHA 标记
+          # 恢复 yt3 专属的 README.md 与 YT 播放页文件，并更新上游基准 SHA 标记
           git checkout origin/yt3 -- \
+            README.md \
             lib/modules/player/full_player_yt.dart \
             lib/modules/player/yt/
           mkdir -p .md3/base
@@ -197,7 +199,7 @@ jobs:
           fi
 
   build-yt3-release:
-    name: Build & Publish YT3 64-bit Release APK
+    name: Build & Publish YT3 Android APKs
     needs: [sync-upstream]
     if: >-
       always() && (
@@ -206,7 +208,11 @@ jobs:
         (github.event_name == 'workflow_dispatch' && inputs.action == 'build_release_now')
       )
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+      version_code: ${{ steps.bump.outputs.version_code }}
+      release_tag: ${{ steps.bump.outputs.release_tag }}
     steps:
       - name: Checkout yt3
         uses: actions/checkout@v4
@@ -288,70 +294,105 @@ jobs:
 
           ls -lh android/app/release.keystore
 
-      - name: Flutter pub get & Build 64-bit Release APK (R8 + ShrinkResources)
-        run: |
-          set -euo pipefail
-          flutter pub get
-          # 只编译 64 位 (android-arm64) 标准版 Release 包（build.gradle.kts 已开启 isMinifyEnabled=true 与 isShrinkResources=true）
-          flutter build apk --release --flavor lite --split-per-abi \
-            --target-platform android-arm64 \
-            --android-project-arg=md3ApplicationId=com.md3music.md3music
-
-      - name: Rename & Verify 64-bit Release APK signature
-        id: apk
+      - name: Build Android Release APKs (Standard + Apple Music + TV)
         run: |
           set -euo pipefail
           apk_dir="build/app/outputs/flutter-apk"
           ver="${{ steps.bump.outputs.version }}"
-          src="${apk_dir}/app-arm64-v8a-lite-release.apk"
-          dst="${apk_dir}/MD3Music-${ver}-standard-arm64-v8a.apk"
-          mv "$src" "$dst"
-
-          # 校验 ABI 仅含 arm64-v8a 且签名 SHA-256 与上游正式版一致
+          ver_code="${{ steps.bump.outputs.version_code }}"
           aapt2="${ANDROID_HOME}/build-tools/36.0.0/aapt2"
           apksigner="${ANDROID_HOME}/build-tools/36.0.0/apksigner"
-          test "$("$aapt2" dump badging "$dst" | sed -n "s/^native-code: //p")" = "'arm64-v8a'"
 
-          sign_fp="$("$apksigner" verify --print-certs "$dst" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | tr -d ' :' | tr 'A-F' 'a-f')"
-          echo "APK SHA-256: ${sign_fp}"
-          test "$sign_fp" = "84ba3586aea04c54bb329cfe42eff8a42751d4135667cf633597c268e95a1b33"
+          flutter pub get
 
-          echo "apk_path=${dst}" >> "$GITHUB_OUTPUT"
-          echo "apk_name=$(basename "$dst")" >> "$GITHUB_OUTPUT"
+          # 1. 标准版 64 位 (MD3Music-${ver}-yt-standard-arm64-v8a.apk)
+          flutter build apk --release --flavor lite --split-per-abi \
+            --target-platform android-arm64 \
+            --android-project-arg=md3EnableImpeller=false \
+            --dart-define=APP_VERSION=${ver} \
+            --build-name=${ver} \
+            --build-number=${ver_code}
+          mv "${apk_dir}/app-arm64-v8a-lite-release.apk" "${apk_dir}/MD3Music-${ver}-yt-standard-arm64-v8a.apk"
 
-      - name: Upload Release APK Artifact
+          # 2. 随身听兼容版 64 位 (MD3Music-${ver}-yt-apple-music-arm64-v8a.apk)
+          flutter build apk --release --flavor lite --split-per-abi \
+            --target-platform android-arm64 \
+            --android-project-arg=md3ApplicationId=com.apple.android.music \
+            --android-project-arg=md3EnableImpeller=true \
+            --dart-define=APP_VERSION=${ver} \
+            --build-name=${ver} \
+            --build-number=${ver_code}
+          mv "${apk_dir}/app-arm64-v8a-lite-release.apk" "${apk_dir}/MD3Music-${ver}-yt-apple-music-arm64-v8a.apk"
+
+          # 3. TV 版 64 位 & 32 位 (MD3Music-${ver}-yt-tv-arm64-v8a.apk / armeabi-v7a.apk)
+          flutter build apk --release --flavor tv --split-per-abi \
+            --target-platform android-arm64 \
+            --android-project-arg=md3EnableImpeller=false \
+            --dart-define=MD3_TV=true \
+            --dart-define=APP_VERSION=${ver} \
+            --build-name=${ver} \
+            --build-number=${ver_code}
+          mv "${apk_dir}/app-arm64-v8a-tv-release.apk" "${apk_dir}/MD3Music-${ver}-yt-tv-arm64-v8a.apk"
+
+          flutter build apk --release --flavor tv --split-per-abi \
+            --target-platform android-arm \
+            --android-project-arg=md3EnableImpeller=false \
+            --dart-define=MD3_TV=true \
+            --dart-define=APP_VERSION=${ver} \
+            --build-name=${ver} \
+            --build-number=${ver_code}
+          mv "${apk_dir}/app-armeabi-v7a-tv-release.apk" "${apk_dir}/MD3Music-${ver}-yt-tv-armeabi-v7a.apk"
+
+          # 校验签名 SHA-256 与上游正式版一致
+          for f in "${apk_dir}"/MD3Music-${ver}-yt-*.apk; do
+            sign_fp="$("$apksigner" verify --print-certs "$f" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | tr -d ' :' | tr 'A-F' 'a-f')"
+            echo "$(basename "$f") SHA-256: ${sign_fp}"
+            test "$sign_fp" = "84ba3586aea04c54bb329cfe42eff8a42751d4135667cf633597c268e95a1b33"
+          done
+
+          ls -lh "${apk_dir}"/MD3Music-${ver}-yt-*.apk
+
+      - name: Upload Release APKs Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.apk.outputs.apk_name }}
-          path: ${{ steps.apk.outputs.apk_path }}
+          name: MD3Music-${{ steps.bump.outputs.version }}-yt-android-apks
+          path: build/app/outputs/flutter-apk/MD3Music-${{ steps.bump.outputs.version }}-yt-*.apk
           if-no-files-found: error
           retention-days: 30
 
-      - name: Publish to GitHub Releases
+      - name: Publish Android APKs & Release Notes to GitHub Releases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           TAG="${{ steps.bump.outputs.release_tag }}"
           VER="${{ steps.bump.outputs.version }}"
-          APK="${{ steps.apk.outputs.apk_path }}"
+          apk_dir="build/app/outputs/flutter-apk"
 
-          if gh release view "$TAG" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.action }}" == "build_release_now" ]]; then
-              echo "手动指定 build_release_now，更新已有 Release ${TAG}..."
-              gh release upload "$TAG" "$APK" --repo "${GITHUB_REPOSITORY}" --clobber
-              exit 0
-            fi
-            echo "Release ${TAG} 已存在，保留现有版本不覆盖。"
-            exit 0
+          # 提取最上游 (zzyoxml/md3Music) 当前版本的更新内容
+          UPSTREAM_NOTES="$(awk -v ver="v${VER}" '
+            $0 ~ "^## " ver "([[:space:]]|$)" { flag=1; next }
+            flag && /^## v[0-9]/ { exit }
+            flag { print }
+          ' CHANGELOG.md | sed '/./,$!d')"
+
+          if [[ -z "${UPSTREAM_NOTES// /}" ]]; then
+            UPSTREAM_NOTES="$(gh release view "$TAG" --repo zzyoxml/md3Music --json body -q .body 2>/dev/null || true)"
           fi
-
-          git tag -f "$TAG"
-          git push origin "refs/tags/${TAG}" --force
+          if [[ -z "${UPSTREAM_NOTES// /}" ]]; then
+            UPSTREAM_NOTES="- 同步自上游 zzyoxml/md3Music ${TAG}"
+          fi
 
           NOTES_FILE="$(mktemp)"
           cat > "$NOTES_FILE" <<EOF
-          ## MD3Music v${VER}
+          ## MD3Music v${VER}-yt
+
+          ### Downloads
+          - \`MD3Music-${VER}-yt-standard-arm64-v8a.apk\` — （推荐）标准版-64位：大多数现代 Android 设备
+          - \`MD3Music-${VER}-yt-apple-music-arm64-v8a.apk\` — 随身听兼容版-64位：Vivo 原子随身听兼容包（包名 \`com.apple.android.music\`，不含 3D 封面）
+          - \`MD3Music-${VER}-yt-tv-arm64-v8a.apk\` — TV版-64位：Android TV 专用包（D-pad 遥控导航，包名后缀 \`.tv\`，Skia）
+          - \`MD3Music-${VER}-yt-tv-armeabi-v7a.apk\` — TV版-32位：Android TV 专用包（D-pad 遥控导航，包名后缀 \`.tv\`，Skia）
+          - \`md3music-windows-${VER}-yt.zip\` — Windows 便携版：解压后运行 \`md3music.exe\` 即可（自带 VC++ 运行库）
 
           ### 本分支更新内容 (yt3)
           - 新增 YouTube Music 播放页样式（可在「设置 → 播放页样式」中切换）
@@ -359,10 +400,118 @@ jobs:
           - 中间区域为正方形封面与左对齐歌曲信息，下方为横向滚动的胶囊按钮栏（喜欢、评论、添加到歌单、音质、倍速、睡眠定时等）
           - 底部固定「接下来播放」「歌词」「评论」三个抽屉入口，支持点击展开与上下滑动收起
           - 选中 YouTube Music 样式时，设置页中仅对 MD3 / Apple Music 生效的「顶栏与横屏布局」「音乐频谱」选项自动变灰禁用
+
+          ### 上游版本更新内容 (原作者: [zzyoxml](https://github.com/zzyoxml/md3Music))
+          ${UPSTREAM_NOTES}
           EOF
 
-          gh release create "$TAG" "$APK" \
+          if gh release view "$TAG" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.action }}" == "build_release_now" ]]; then
+              echo "手动指定 build_release_now，更新已有 Release ${TAG}..."
+              gh release edit "$TAG" --repo "${GITHUB_REPOSITORY}" --title "MD3Music v${VER}-yt" --notes-file "$NOTES_FILE"
+              gh release upload "$TAG" "${apk_dir}"/MD3Music-${VER}-yt-*.apk --repo "${GITHUB_REPOSITORY}" --clobber
+              rm -f "$NOTES_FILE"
+              exit 0
+            fi
+            echo "Release ${TAG} 已存在，保留现有版本不覆盖。"
+            rm -f "$NOTES_FILE"
+            exit 0
+          fi
+
+          git tag -f "$TAG"
+          git push origin "refs/tags/${TAG}" --force
+
+          gh release create "$TAG" "${apk_dir}"/MD3Music-${VER}-yt-*.apk \
             --repo "${GITHUB_REPOSITORY}" \
-            --title "MD3Music v${VER}" \
+            --title "MD3Music v${VER}-yt" \
             --notes-file "$NOTES_FILE"
           rm -f "$NOTES_FILE"
+
+  build-yt3-windows:
+    name: Build & Publish YT3 Windows Portable Zip
+    needs: [build-yt3-release]
+    if: ${{ needs.build-yt3-release.result == 'success' && needs.build-yt3-release.outputs.version != '' }}
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout yt3
+        uses: actions/checkout@v4
+        with:
+          ref: yt3
+          fetch-depth: 0
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            kugou_api_server/rust/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build Rust Local Server (Windows DLL)
+        working-directory: kugou_api_server/rust
+        run: cargo build --release
+
+      - name: Build Windows Release & Package Zip
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ver = "${{ needs.build-yt3-release.outputs.version }}"
+          $verCode = "${{ needs.build-yt3-release.outputs.version_code }}"
+
+          flutter config --enable-windows-desktop
+          flutter pub get
+          flutter build windows --release --dart-define=APP_VERSION=$ver --build-name=$ver --build-number=$verCode
+
+          $releaseDir = "build/windows/x64/runner/Release"
+          $dllSource = "kugou_api_server/rust/target/release/kugou_server.dll"
+          if (!(Test-Path -LiteralPath $dllSource)) {
+            throw "Missing Rust DLL: $dllSource"
+          }
+          Copy-Item -LiteralPath $dllSource -Destination $releaseDir -Force
+
+          # Bundle MSVC runtime DLLs so portable zip works without extra redistributable
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsInstall = if (Test-Path -LiteralPath $vswhere) {
+            (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Redist.14.Latest -property installationPath | Select-Object -First 1).Trim()
+          } else { $null }
+          $crtDir = $null
+          if ($vsInstall) {
+            $redistRoot = Join-Path $vsInstall "VC\Redist\MSVC"
+            if (Test-Path -LiteralPath $redistRoot) {
+              $crtDir = Get-ChildItem -LiteralPath $redistRoot -Directory | Sort-Object Name -Descending | ForEach-Object {
+                Join-Path $_.FullName "x64\Microsoft.VC143.CRT"
+              } | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+            }
+          }
+          if (-not $crtDir) { $crtDir = "$env:SystemRoot\System32" }
+          foreach ($dll in @('msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')) {
+            $src = Join-Path $crtDir $dll
+            if (Test-Path -LiteralPath $src) {
+              Copy-Item -LiteralPath $src -Destination $releaseDir -Force
+            }
+          }
+
+          ./scripts/tasks/windows.ps1 -PackageOnly -NoPause -OutDir . -PackageVersion $ver
+          Move-Item -LiteralPath "md3music-windows-$ver.zip" -Destination "md3music-windows-$ver-yt.zip" -Force
+
+      - name: Upload Windows Zip to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $tag = "${{ needs.build-yt3-release.outputs.release_tag }}"
+          $ver = "${{ needs.build-yt3-release.outputs.version }}"
+          gh release upload $tag "md3music-windows-$ver-yt.zip" --repo "${env:GITHUB_REPOSITORY}" --clobber
