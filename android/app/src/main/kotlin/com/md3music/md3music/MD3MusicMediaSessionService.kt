@@ -27,7 +27,18 @@ import com.ryanheise.just_audio.AudioPlayer
  */
 @OptIn(UnstableApi::class)
 @SuppressLint("UnsafeOptInUsageError")
-class MD3MusicMediaSessionService : MediaSessionService() {
+class MD3MusicMediaSessionService : MediaSessionService(), AudioPlayer.ActiveMediaSessionHost {
+
+    private var vivoBootstrapSession: VivoBootstrapSession? = null
+
+    override fun onActiveMediaSessionChanged(session: MediaSession?) {
+        vivoBootstrapSession?.follow(session)
+        // 冷绑定 token 留给已经连接的原子组件，但不再参与宿主的通知竞争。
+        if (session != null) {
+            vivoBootstrapSession?.session?.let { if (isSessionAdded(it)) removeSession(it) }
+        }
+    }
+
 
     /** 连车唤醒：外部 bind 且无活跃会话时自动拉起+续播（咪咕式），默认开 */
     private var autoWakeEnabled = true
@@ -201,8 +212,13 @@ class MD3MusicMediaSessionService : MediaSessionService() {
         // 包名后，可把唤醒判据收紧成车机端包名白名单（bind 早于投屏的时序
         // 风险也随之消除）。每连接方一行，量级可忽略。
         Log.i("CarAutoResume", "onGetSession controller=${info.packageName}")
-        // 返回 fork 当前活跃的媒体3会话；未初始化时拒绝连接
-        return AudioPlayer.getActiveMediaSession()
+        AudioPlayer.getActiveMediaSession()?.let { return it }
+        // vivo 首次 bind 可能早于 Dart 创建/激活播放器；返回 null 会让原子组件
+        // 永久握不到 token。仅 vivo/iQOO 补待机会话，不在 bind 时启动引擎或播放。
+        if (!AudioPlayer.isShadowPlaybackMirrorEnabled()) return null
+        return (vivoBootstrapSession ?: VivoBootstrapSession(applicationContext).also {
+            vivoBootstrapSession = it
+        }).session
     }
 
     /**
@@ -446,6 +462,8 @@ class MD3MusicMediaSessionService : MediaSessionService() {
 
     override fun onDestroy() {
         AudioPlayer.setMediaSessionServiceHost(null)
+        vivoBootstrapSession?.release()
+        vivoBootstrapSession = null
         // v58：playFromMediaIdHook **不按 identity 清理**——钩子内部只捕获
         // applicationContext（进程级），滞留无泄漏语义；且 island 及系统级 stub
         // 在服务销毁后仍会经 stub 走点播链，清掉即"hook null"漏命令。服务重建

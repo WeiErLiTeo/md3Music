@@ -27,6 +27,7 @@ class LibraryProvider extends ChangeNotifier {
   List<Song> _songs = [];
   List<Song> _indexedSongs = [];
   bool _filterShortAudio = false;
+  bool _scanOnlySelectedFolders = false;
   List<Album> _albums = [];
   List<Artist> _artists = [];
   List<MusicFolder> _folders = [];
@@ -53,16 +54,26 @@ class LibraryProvider extends ChangeNotifier {
   String get searchQuery => _searchQuery;
   bool get hasMusic => _songs.isNotEmpty;
   bool get filterShortAudio => _filterShortAudio;
+  bool get scanOnlySelectedFolders => _scanOnlySelectedFolders;
 
   void _rebuildCategories() {
     _songs = _repository.filterSongs(
       _indexedSongs,
       excludedFolders: _excludedFolders,
       filterShortAudio: _filterShortAudio,
+      includedFolders: _scanOnlySelectedFolders ? _scanFolders : null,
     );
     _albums = _repository.buildAlbums(_songs);
     _artists = _repository.buildArtists(_songs);
     _folders = _repository.buildFolders(_songs);
+  }
+
+  Future<void> setScanOnlySelectedFolders(bool enabled) async {
+    await _repository.setScanOnlySelectedFolders(enabled);
+    _scanOnlySelectedFolders = enabled;
+    _scanFolders = await _repository.getSavedFolders();
+    _rebuildCategories();
+    notifyListeners();
   }
 
   Future<void> setFilterShortAudio(bool enabled) async {
@@ -138,10 +149,12 @@ class LibraryProvider extends ChangeNotifier {
     final folders = await _repository.getSavedFolders();
     final excluded = await _repository.getExcludedFolders();
     final filterShortAudio = await _repository.getFilterShortAudio();
+    final scanOnlySelectedFolders = await _repository.getScanOnlySelectedFolders();
     if (Platform.isWindows && generation != _settingsLoadGeneration) return;
     _scanFolders = folders;
     _excludedFolders = excluded;
     _filterShortAudio = filterShortAudio;
+    _scanOnlySelectedFolders = scanOnlySelectedFolders;
     _rebuildCategories();
     notifyListeners();
   }
@@ -168,11 +181,13 @@ class LibraryProvider extends ChangeNotifier {
     final folders = await _repository.getSavedFolders();
     final excluded = await _repository.getExcludedFolders();
     final filterShortAudio = await _repository.getFilterShortAudio();
+    final scanOnlySelectedFolders = await _repository.getScanOnlySelectedFolders();
     if (Platform.isWindows && generation != _settingsLoadGeneration) return;
     _indexedSongs = cached;
     _scanFolders = folders;
     _excludedFolders = excluded;
     _filterShortAudio = filterShortAudio;
+    _scanOnlySelectedFolders = scanOnlySelectedFolders;
     _rebuildCategories();
     notifyListeners();
     _log('[LibraryProvider] 已恢复 ${cached.length} 首缓存歌曲');
@@ -198,9 +213,16 @@ class LibraryProvider extends ChangeNotifier {
       _scanFolders = await _repository.getSavedFolders();
       _excludedFolders = await _repository.getExcludedFolders();
       _filterShortAudio = await _repository.getFilterShortAudio();
+      _scanOnlySelectedFolders = await _repository.getScanOnlySelectedFolders();
+      if (_scanOnlySelectedFolders && _scanFolders.isEmpty) {
+        _error = '请先添加要扫描的文件夹';
+        return;
+      }
 
       // 请求系统媒体库权限
-      final hasPermission = await requestStoragePermission();
+      final onlySaf = _scanOnlySelectedFolders &&
+          _scanFolders.every(FolderPickerService.isTreeUri);
+      final hasPermission = onlySaf || await requestStoragePermission();
       if (!hasPermission && !_scanFolders.any(FolderPickerService.isTreeUri)) {
         _error = '需要存储权限才能扫描本地音乐';
         return;
@@ -210,6 +232,7 @@ class LibraryProvider extends ChangeNotifier {
       final songs = await _repository.scanSongs(
         customFolders: _scanFolders,
         excludedFolders: _excludedFolders,
+        scanOnlySelectedFolders: _scanOnlySelectedFolders,
       );
 
       // 清除封面缓存（重新扫描后旧缓存失效）
@@ -250,6 +273,7 @@ class LibraryProvider extends ChangeNotifier {
     await _repository.addFolder(path);
     _scanFolders = await _repository.getSavedFolders();
     _excludedFolders = await _repository.getExcludedFolders();
+    _rebuildCategories();
     notifyListeners();
     return true;
   }
@@ -258,6 +282,7 @@ class LibraryProvider extends ChangeNotifier {
   Future<void> removeScanFolder(String path) async {
     await _repository.removeFolder(path);
     _scanFolders = await _repository.getSavedFolders();
+    _rebuildCategories();
     notifyListeners();
   }
 

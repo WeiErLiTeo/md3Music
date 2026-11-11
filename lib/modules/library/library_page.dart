@@ -524,10 +524,23 @@ class _LibraryPageState extends State<LibraryPage>
                     ListTile(
                       leading: const Icon(Icons.refresh),
                       title: const Text('扫描音乐'),
-                      subtitle: const Text('扫描默认目录和已添加的文件夹'),
+                      subtitle: Text(library.scanOnlySelectedFolders
+                          ? '只扫描已添加的文件夹及其子目录'
+                          : '扫描默认目录和已添加的文件夹'),
                       onTap: rescan,
                     ),
                     focusNode: _tvScanMenuFirstNode,
+                  ),
+                  _tvSheetRow(
+                    () => library.setScanOnlySelectedFolders(
+                        !library.scanOnlySelectedFolders),
+                    debugLabel: 'scan_menu_only_selected',
+                    SwitchListTile(
+                      title: const Text('只扫描指定文件夹'),
+                      subtitle: const Text('跳过系统媒体库和默认目录，仅扫描已添加的文件夹'),
+                      value: library.scanOnlySelectedFolders,
+                      onChanged: library.setScanOnlySelectedFolders,
+                    ),
                   ),
                   // 打开扫描文件夹管理面板（列出已添加项 + 移除）。
                   // 此前直接调文件夹选择器，加完就看不到有哪些、也没法移除，
@@ -539,7 +552,7 @@ class _LibraryPageState extends State<LibraryPage>
                       leading: const Icon(Icons.create_new_folder_outlined),
                       title: const Text('添加扫描文件夹'),
                       subtitle: Text(
-                          '选择额外的文件夹进行扫描'
+                          '管理要扫描的文件夹'
                           '${provider.scanFolders.isEmpty ? '' : '（已添加 ${provider.scanFolders.length} 个）'}'),
                       onTap: manageScanFolders,
                     ),
@@ -652,7 +665,9 @@ class _LibraryPageState extends State<LibraryPage>
                     ),
                     const Gap(AppSpacing.xs),
                     Text(
-                      '已添加的文件夹会与默认目录一起扫描，重启后依然生效',
+                      provider.scanOnlySelectedFolders
+                          ? '仅扫描下方文件夹及其子目录，重启后依然生效'
+                          : '已添加的文件夹会与默认目录一起扫描，重启后依然生效',
                       style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
                         color: Theme.of(ctx).colorScheme.onSurfaceVariant,
                       ),
