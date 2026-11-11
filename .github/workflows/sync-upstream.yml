@@ -3,15 +3,11 @@ name: Sync Upstream & Build YT3 Release
 # 功能说明：
 # 1. sync-upstream（每天定时 + 手动触发）：
 #    - 检测最上游仓库 zzyoxml/md3Music (rust-local-force) 是否有更新
-#    - 自动将本仓库的 rust-local-force 分支同步到与上游一致
-#    - 将 yt3 的定制改动（YT 播放器等）自动三方合并到上游最新代码上（保持 .github/workflows 不被上游覆盖）
-#    - 若无冲突则直接推送到本仓库 yt3 分支；仅当上游版本号更新（本仓库尚未发布对应版本的 Release）时才触发 build-yt3-release 打包发版，平时日常代码同步绝不覆盖已有 Release
+#    - 将 yt3 的定制改动自动三方合并到上游最新代码上（用 .md3/base/ 保存基准文件，防止上游 force-push 丢失基准提交）
+#    - 若无冲突则直接推送到本仓库 yt3 分支；仅当上游版本号更新（本仓库尚未发布对应版本的 Release）时才触发 build-yt3-release 打包发版
 #
 # 2. build-yt3-release（当检测到新版本尚未发版，或手动选择 build_release_now 时触发）：
-#    - 版本号完全跟随上游 pubspec.yaml，不额外递增
-#    - 使用与上游一致的 release.keystore（SHA-256: 84ba3586...）编译 64 位 (arm64-v8a) Release 正式版 APK
-#    - 开启 R8 代码混淆 (isMinifyEnabled = true) 与资源瘦身 (isShrinkResources = true)，去除 Debug 版本
-#    - 自动发布到本仓库的 GitHub Releases 并保留所有历史版本
+#    - 版本号与 Release 标签名（vX.Y.Z）跟随上游，自动发布到本仓库的 GitHub Releases 并保留所有历史版本
 on:
   schedule:
     - cron: '30 1 * * *'
@@ -75,7 +71,7 @@ jobs:
           if [[ "$VER_CODE" == "$UPSTREAM_VER" || -z "$VER_CODE" ]]; then
             VER_CODE=1
           fi
-          RELEASE_TAG="v${VER_NAME}-yt.${VER_CODE}"
+          RELEASE_TAG="v${VER_NAME}"
 
           echo "上游最新提交: ${UPSTREAM_SHA} (版本: ${UPSTREAM_VER}, Release Tag: ${RELEASE_TAG})"
 
@@ -87,9 +83,6 @@ jobs:
           BASE_SHA=""
           if [[ -f ".md3/upstream-base-sha" ]]; then
             BASE_SHA="$(tr -d '[:space:]' < .md3/upstream-base-sha)"
-          fi
-          if [[ -z "$BASE_SHA" ]] || ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
-            BASE_SHA="$(git rev-parse origin/rust-local-force)"
           fi
 
           if [[ "$BASE_SHA" == "$UPSTREAM_SHA" ]]; then
@@ -106,8 +99,9 @@ jobs:
           echo "检测到上游新提交：${BASE_SHA:0:8} -> ${UPSTREAM_SHORT} (${UPSTREAM_VER})"
           SYNC_BRANCH="sync/upstream-${UPSTREAM_SHORT}"
 
-          # 3. 对最小挂载文件做三方合并 (current=yt3, base=BASE_SHA, other=UPSTREAM_SHA)
+          # 3. 对最小挂载文件做三方合并
           HOOK_FILES=(
+            "README.md"
             "lib/providers/theme_provider.dart"
             "lib/modules/player/full_player_route.dart"
             "lib/modules/player/player_drag_overlay.dart"
@@ -120,7 +114,7 @@ jobs:
           # 以 origin/yt3 为父提交创建同步工作分支
           git checkout -B "${SYNC_BRANCH}" origin/yt3
 
-          # 先把整个工作区替换成 upstream/rust-local-force 的最新快照（包含上游最新工作流和 build.gradle.kts）
+          # 先把整个工作区替换成 upstream/rust-local-force 的最新快照
           git rm -rf . > /dev/null
           git checkout upstream/rust-local-force -- .
 
@@ -132,37 +126,51 @@ jobs:
           git checkout origin/yt3 -- \
             lib/modules/player/full_player_yt.dart \
             lib/modules/player/yt/
-          mkdir -p .md3
+          mkdir -p .md3/base
           printf '%s\n' "${UPSTREAM_SHA}" > .md3/upstream-base-sha
 
-          # 对 7 个最小挂载文件做三方合并 (current=yt3, base=上次上游基准 BASE_SHA, other=最新上游 UPSTREAM_SHA)
+          # 对挂载文件做三方合并 (current=yt3, base=.md3/base/ 快照, other=最新上游 UPSTREAM_SHA)
           CONFLICT_FILES=()
           for hf in "${HOOK_FILES[@]}"; do
             TMP_YT="$(mktemp)"
             TMP_BASE="$(mktemp)"
             TMP_UP="$(mktemp)"
             git show "origin/yt3:${hf}" > "$TMP_YT"
-            git show "${BASE_SHA}:${hf}" > "$TMP_BASE"
             git show "upstream/rust-local-force:${hf}" > "$TMP_UP"
 
-            if git merge-file -L "yt3" -L "base" -L "upstream" "$TMP_YT" "$TMP_BASE" "$TMP_UP"; then
-              cp "$TMP_YT" "$hf"
+            if git cat-file -e "origin/yt3:.md3/base/${hf}" 2>/dev/null; then
+              git show "origin/yt3:.md3/base/${hf}" > "$TMP_BASE"
+              if git merge-file -L "yt3" -L "base" -L "upstream" "$TMP_YT" "$TMP_BASE" "$TMP_UP"; then
+                cp "$TMP_YT" "$hf"
+              else
+                cp "$TMP_YT" "$hf"
+                CONFLICT_FILES+=("$hf")
+              fi
+            elif [[ -n "$BASE_SHA" ]] && git cat-file -e "${BASE_SHA}:${hf}" 2>/dev/null; then
+              git show "${BASE_SHA}:${hf}" > "$TMP_BASE"
+              if git merge-file -L "yt3" -L "base" -L "upstream" "$TMP_YT" "$TMP_BASE" "$TMP_UP"; then
+                cp "$TMP_YT" "$hf"
+              else
+                cp "$TMP_YT" "$hf"
+                CONFLICT_FILES+=("$hf")
+              fi
             else
+              # 若上游 force-push 抹掉了旧 BASE_SHA 且尚未生成 .md3/base 快照，用最近公共基准 + union 合并
+              FALLBACK_BASE="$(git rev-parse origin/rust-local-force)"
+              git show "${FALLBACK_BASE}:${hf}" > "$TMP_BASE"
+              git merge-file --union -L "yt3" -L "base" -L "upstream" "$TMP_YT" "$TMP_BASE" "$TMP_UP"
               cp "$TMP_YT" "$hf"
-              CONFLICT_FILES+=("$hf")
             fi
+
+            # 将本次上游原版文件存入 .md3/base/，供下次合并作精确基准（不受上游 force-push 影响）
+            mkdir -p ".md3/base/$(dirname "$hf")"
+            cp "$TMP_UP" ".md3/base/${hf}"
+
             rm -f "$TMP_YT" "$TMP_BASE" "$TMP_UP"
           done
 
           if (( ${#CONFLICT_FILES[@]} > 0 )); then
             echo "::error::以下文件在三方合并时发生冲突: ${CONFLICT_FILES[*]}"
-            TITLE="⚠️ 上游同步冲突提醒 (${UPSTREAM_VER} @ ${UPSTREAM_SHORT})"
-            BODY="检测到上游仓库 \`zzyoxml/md3Music\` 更新至 \`${UPSTREAM_VER}\` (\`${UPSTREAM_SHA}\`)，但在自动合并到 \`yt3\` 时以下文件存在冲突：\n\n"
-            for cf in "${CONFLICT_FILES[@]}"; do
-              BODY+="- \`${cf}\`\n"
-            done
-            BODY+="\n请手动检查并处理。"
-            gh issue create --repo "${GITHUB_REPOSITORY}" --title "$TITLE" --body "$(printf '%b' "$BODY")" || true
             echo "should_release=false" >> "$GITHUB_OUTPUT"
             exit 1
           fi
@@ -217,9 +225,9 @@ jobs:
             VER_CODE=1
           fi
           FULL_VERSION="${VER_NAME}+${VER_CODE}"
-          RELEASE_TAG="v${VER_NAME}-yt.${VER_CODE}"
+          RELEASE_TAG="v${VER_NAME}"
 
-          echo "当前上游同步版本: ${FULL_VERSION} (Tag: ${RELEASE_TAG})"
+          echo "当前版本: ${VER_NAME} (Tag: ${RELEASE_TAG})"
           echo "version=${VER_NAME}" >> "$GITHUB_OUTPUT"
           echo "version_code=${VER_CODE}" >> "$GITHUB_OUTPUT"
           echo "full_version=${FULL_VERSION}" >> "$GITHUB_OUTPUT"
@@ -296,7 +304,7 @@ jobs:
           apk_dir="build/app/outputs/flutter-apk"
           ver="${{ steps.bump.outputs.version }}"
           src="${apk_dir}/app-arm64-v8a-lite-release.apk"
-          dst="${apk_dir}/MD3音乐-${ver}-YT版-64位-release.apk"
+          dst="${apk_dir}/MD3Music-${ver}-standard-arm64-v8a.apk"
           mv "$src" "$dst"
 
           # 校验 ABI 仅含 arm64-v8a 且签名 SHA-256 与上游正式版一致
@@ -325,7 +333,7 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${{ steps.bump.outputs.release_tag }}"
-          VER="${{ steps.bump.outputs.full_version }}"
+          VER="${{ steps.bump.outputs.version }}"
           APK="${{ steps.apk.outputs.apk_path }}"
 
           if gh release view "$TAG" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
@@ -341,11 +349,20 @@ jobs:
           git tag -f "$TAG"
           git push origin "refs/tags/${TAG}" --force
 
+          NOTES_FILE="$(mktemp)"
+          cat > "$NOTES_FILE" <<EOF
+          ## MD3Music v${VER}
+
+          ### 本分支更新内容 (yt3)
+          - 新增 YouTube Music 播放页样式（可在「设置 → 播放页样式」中切换）
+          - 播放页顶栏支持「音频 / 视频」切换，有 MV 的歌曲可直接在播放页内播放视频，视频模式下背景跟随视频画面模糊
+          - 中间区域为正方形封面与左对齐歌曲信息，下方为横向滚动的胶囊按钮栏（喜欢、评论、添加到歌单、音质、倍速、睡眠定时等）
+          - 底部固定「接下来播放」「歌词」「评论」三个抽屉入口，支持点击展开与上下滑动收起
+          - 选中 YouTube Music 样式时，设置页中仅对 MD3 / Apple Music 生效的「顶栏与横屏布局」「音乐频谱」选项自动变灰禁用
+          EOF
+
           gh release create "$TAG" "$APK" \
             --repo "${GITHUB_REPOSITORY}" \
-            --title "MD3音乐 v${VER} (YouTube Music 样式 · 64位正式版)" \
-            --notes "### 构建信息
-          - **版本号**: \`${VER}\`
-          - **架构**: 仅 64 位 (\`arm64-v8a\`)
-          - **构建模式**: Release 正式版（已开启 R8 代码混淆 \`isMinifyEnabled = true\` 与资源瘦身 \`isShrinkResources = true\`）
-          - **签名指纹 (SHA-256)**: \`84:BA:35:86:AE:A0:4C:54:BB:32:9C:FE:42:EF:F8:A4:27:51:D4:13:56:67:CF:63:35:97:C2:68:E9:5A:1B:33\`（与上游正式版一致，可直接覆盖安装）"
+            --title "MD3Music v${VER}" \
+            --notes-file "$NOTES_FILE"
+          rm -f "$NOTES_FILE"
