@@ -271,6 +271,8 @@ class MainActivity : FlutterActivity() {
         val createStartedAt = SystemClock.elapsedRealtime()
         Log.i("StartupTiming", "phase=activity_on_create_enter elapsed_realtime_ms=$createStartedAt")
         super.onCreate(savedInstanceState)
+        // 所有安卓手机统一：系统移除最近任务时由独立服务停播并销毁进程。
+        SwipeExitPolicy.startTaskRemovalService(applicationContext)
         Log.i(
             "StartupTiming",
             "phase=activity_on_create_super_complete elapsed_ms=${SystemClock.elapsedRealtime() - createStartedAt}",

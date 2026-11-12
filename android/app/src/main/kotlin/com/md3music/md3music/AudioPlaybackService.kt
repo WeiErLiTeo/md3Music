@@ -1213,8 +1213,20 @@ class AudioPlaybackService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    /** 「划掉后台自动退出」：支持该回调的 ROM 立即销毁，其余由任务移除监听服务兜底。 */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        if (SwipeExitPolicy.shouldSwipeExit(applicationContext)) {
+            RingLog.i("SwipeExit", "AudioPlaybackService.onTaskRemoved entered")
+            SwipeExitPolicy.executeExit(applicationContext)
+            return
+        }
+        super.onTaskRemoved(rootIntent)
+    }
+
     override fun onCreate() {
         super.onCreate()
+        // 「划掉后台自动退出」：独立 stopWithTask 服务监听系统任务移除。
+        SwipeExitPolicy.startTaskRemovalService(applicationContext)
         createNotificationChannel()
         notificationManager = getSystemService(NotificationManager::class.java)
         registerReceiver()

@@ -26,6 +26,7 @@ import '../../core/layout/page_layout.dart';
 import '../../core/layout/ui_density.dart';
 import '../../core/remote/remote_slider.dart';
 import '../../core/services/audio_service_io.dart';
+import '../../core/services/audio_offload_service.dart';
 import '../../core/services/volume_normalization_service.dart';
 import '../../core/services/background_image_loader.dart';
 import '../../core/services/car_with_service.dart';
@@ -303,6 +304,9 @@ class _SettingsPageState extends State<SettingsPage>
   bool _mvAudioFallbackEnabled = false;
   // 记忆播放状态开关（默认开启）：冷启动恢复上次播放的歌曲与进度
   bool _restoreMemoryEnabled = true;
+  // 划掉后台自动退出开关（默认开启）：仅 Android 非 TV 显示；
+  // 所有手机划掉后台 = 停播并退出进程（不依赖 ROM 杀进程时机）
+  bool _swipeExitOnTaskRemoved = true;
   int _idleKeepaliveStopMinutes = 10;
   // 启动时自动播放（默认关闭）。后两项仅在它打开时才有意义，故一并收在这里。
   // 音源下拉直接用 StartupAutoPlaySource.values，保证与启动流程的解析口径
@@ -946,6 +950,8 @@ class _SettingsPageState extends State<SettingsPage>
         .getMvAudioFallbackEnabled();
     final restoreMemoryEnabled = await _settingsRepository
         .getRestoreMemoryEnabled();
+    final swipeExitOnTaskRemoved = await _settingsRepository
+        .getSwipeExitOnTaskRemoved();
     final idleKeepaliveStopMinutes = await _settingsRepository
         .getIdleKeepaliveStopMinutes();
     final startupAutoPlayEnabled = await _settingsRepository
@@ -1090,6 +1096,7 @@ class _SettingsPageState extends State<SettingsPage>
       _showQualityDowngradeToast = showQualityDowngradeToast;
       _mvAudioFallbackEnabled = mvAudioFallbackEnabled;
       _restoreMemoryEnabled = restoreMemoryEnabled;
+      _swipeExitOnTaskRemoved = swipeExitOnTaskRemoved;
       _idleKeepaliveStopMinutes = idleKeepaliveStopMinutes;
       _startupAutoPlayEnabled = startupAutoPlayEnabled;
       _startupAutoPlaySource = startupAutoPlaySource;
@@ -5473,6 +5480,25 @@ class _SettingsPageState extends State<SettingsPage>
             context.read<PlayerProvider>().setRestoreMemoryEnabled(value);
           },
         ),
+        // 划掉后台自动退出：仅 Android 手机（非 TV）显示，默认开启。
+        // 开启时所有手机从最近任务划掉 = 停止播放并退出进程（由原生
+        // stopWithTask 任务移除监听与 onTaskRemoved 双路径执行，不依赖 ROM
+        // 的杀进程时机）。关闭后走现状逻辑（划掉不停播）。
+        // search: 划掉 后台 清后台 上滑 退出 进程 三星 小米 OneUI MIUI 原生 停止播放 关闭应用
+        if (!kTvBuild && Platform.isAndroid)
+          SwitchListTile(
+            title: const Text('划掉后台自动退出'),
+            subtitle: const Text(
+              '立即停止播放并退出进程；开启时硬件解码自动让路',
+            ),
+            value: _swipeExitOnTaskRemoved,
+            onChanged: (value) async {
+              AppHaptics.lightImpact(HapticCategory.control);
+              setState(() => _swipeExitOnTaskRemoved = value);
+              await _settingsRepository.setSwipeExitOnTaskRemoved(value);
+              await AudioOffloadService.instance.setSwipeExitEnabled(value);
+            },
+          ),
         // search: 暂停 保活 后台 耗电 省电 停止通知 恢复播放
         // 下拉框不能放 trailing：TvDropdownMenu 是字段式控件，会给自身撑出
         // 接近整行的宽度，把 ListTile 的 title 挤到只剩一两字宽（真机表现为

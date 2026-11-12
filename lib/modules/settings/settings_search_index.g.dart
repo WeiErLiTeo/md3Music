@@ -131,6 +131,7 @@ const List<({String label, String category, String subpage, String aliases})>
   (label: '参考响度', category: '播放', subpage: '音效与音量', aliases: ''),
   (label: '音效与音量', category: '播放', subpage: '音效与音量', aliases: ''),
   (label: '记忆播放状态', category: '播放', subpage: '播放行为', aliases: '记忆 播放状态 恢复 上次播放 播放进度 断点 续播 冷启动'),
+  (label: '划掉后台自动退出', category: '播放', subpage: '播放行为', aliases: '划掉 后台 清后台 上滑 退出 进程 三星 小米 OneUI MIUI 原生 停止播放 关闭应用'),
   (label: '暂停后自动停止保活', category: '播放', subpage: '播放行为', aliases: '暂停 保活 后台 耗电 省电 停止通知 恢复播放'),
   (label: '启动时自动播放', category: '播放', subpage: '播放行为', aliases: '自动播放 启动 开机 冷启动 一进来 就播'),
   (label: '播放内容', category: '播放', subpage: '播放行为', aliases: '播放内容 音源 每日推荐 私人FM 红心 探索 小众 刷歌推荐 继续上次 续播 电台'),

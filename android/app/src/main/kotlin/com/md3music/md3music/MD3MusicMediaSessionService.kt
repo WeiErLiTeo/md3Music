@@ -48,6 +48,8 @@ class MD3MusicMediaSessionService : MediaSessionService(), AudioPlayer.ActiveMed
     private var lastCarWakeAt = -15_000L
 
     override fun onCreate() {
+        // 「划掉后台自动退出」：独立 stopWithTask 服务监听系统任务移除。
+        SwipeExitPolicy.startTaskRemovalService(applicationContext)
         // 所有机型都安装本 App 的媒体通知 Provider：底层仍是 media3 默认实现，额外做两件事
         // —— 统一设单色小图标（所有机型保留）；仅 Flyme 系把歌词写进媒体通知的 tickerText。
         // 必须在 onCreate() 返回前设置（fork 源码 MediaSessionService:594 的约束）。
@@ -521,6 +523,13 @@ class MD3MusicMediaSessionService : MediaSessionService(), AudioPlayer.ActiveMed
                 applicationContext,
                 AudioPlaybackService.ACTION_PAUSE
             )
+        }
+        // 「划掉后台自动退出」（所有手机）：onTaskRemoved 及时投递时立即销毁；
+        // 未投递或延迟时由独立 stopWithTask 服务的 onDestroy 兜底。
+        if (SwipeExitPolicy.shouldSwipeExit(applicationContext)) {
+            RingLog.i("SwipeExit", "onTaskRemoved entered")
+            SwipeExitPolicy.executeExit(applicationContext)
+            return
         }
         super.onTaskRemoved(rootIntent)
     }

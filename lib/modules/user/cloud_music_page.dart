@@ -9,6 +9,7 @@ import 'package:provider/provider.dart';
 
 import '../../core/build_flags.dart';
 import '../../core/layout/page_layout.dart';
+import '../../core/remote/tv_sheet_focus.dart';
 import '../../core/services/folder_picker_service.dart';
 import '../../core/theme/app_dimens.dart';
 import '../../core/utils/app_text_context_menu.dart';
@@ -57,6 +58,11 @@ class _CloudMusicPageState extends State<CloudMusicPage> {
   int _lastUploadGeneration = -1;
   late final CloudUploadProvider _uploadProvider;
 
+  /// tv: 上传菜单弹层首项（从音乐库选择）的焦点节点。弹层此前漏接首焦点，
+  /// TV 上打开后遥控无任何落点。
+  final FocusNode _tvUploadMenuFirstNode =
+      FocusNode(debugLabel: 'upload_menu_pick_songs');
+
   @override
   void initState() {
     super.initState();
@@ -71,6 +77,7 @@ class _CloudMusicPageState extends State<CloudMusicPage> {
     _uploadProvider.removeListener(_onUploadQueueChanged);
     _refreshDebounce?.cancel();
     _searchController.dispose();
+    _tvUploadMenuFirstNode.dispose();
     super.dispose();
   }
 
@@ -410,12 +417,15 @@ class _CloudMusicPageState extends State<CloudMusicPage> {
       showDragHandle: true,
       builder: (sheetContext) {
         return SafeArea(
+          child: TvSheetFocus(
+          targetNode: _tvUploadMenuFirstNode,
           child: Consumer<CloudUploadProvider>(
             builder: (context, up, _) {
               return Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   ListTile(
+                    focusNode: _tvUploadMenuFirstNode,
                     leading: const Icon(Icons.library_music_outlined),
                     title: const Text('从音乐库选择'),
                     subtitle: const Text('上传已扫描的本地歌曲，支持多选'),
@@ -445,6 +455,7 @@ class _CloudMusicPageState extends State<CloudMusicPage> {
                 ],
               );
             },
+          ),
           ),
         );
       },

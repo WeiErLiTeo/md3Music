@@ -9,6 +9,7 @@ import '../../core/theme/app_dimens.dart';
 import '../../core/layout/page_title_alignment.dart';
 import '../../core/layout/page_layout.dart';
 import '../../core/layout/tv_fab_focus_bridge.dart';
+import '../../core/remote/tv_sheet_focus.dart';
 import '../../core/utils/app_text_context_menu.dart';
 import '../../core/utils/app_toast.dart';
 import '../../core/utils/tab_snap_physics.dart';
@@ -45,6 +46,14 @@ class _LibraryPageState extends State<LibraryPage>
 
   /// [_tvEnsureSheetFocus] 的自锁标记，保证只请求一次焦点。
   bool _tvScanMenuFocusRequested = false;
+
+  /// tv: 扫描文件夹管理面板「添加扫描文件夹」按钮的焦点节点（首停点/主动作）。
+  /// 该面板此前漏接首焦点，TV 上打开后遥控无任何落点（2026-11-12 反馈）。
+  final FocusNode _tvScanFolderAddNode =
+      FocusNode(debugLabel: 'scan_folder_add');
+
+  /// tv: 排除文件夹管理面板「添加排除文件夹」按钮的焦点节点（同上）。
+  final FocusNode _tvExcludedAddNode = FocusNode(debugLabel: 'excluded_add');
 
   @override
   void initState() {
@@ -112,6 +121,8 @@ class _LibraryPageState extends State<LibraryPage>
     _searchFocusNode.dispose();
     _tvFabNode.dispose();
     _tvScanMenuFirstNode.dispose();
+    _tvScanFolderAddNode.dispose();
+    _tvExcludedAddNode.dispose();
     super.dispose();
   }
 
@@ -636,7 +647,12 @@ class _LibraryPageState extends State<LibraryPage>
               }
             }
 
-            return SafeArea(
+            // tv: 首焦点交给「添加扫描文件夹」（主动作）。此前面板漏接
+            // 首焦点，TV 上打开后遥控无任何落点；与 [_showScanMenu] 同一
+            // 修法，改用公共组件 [TvSheetFocus]。
+            return TvSheetFocus(
+              targetNode: _tvScanFolderAddNode,
+              child: SafeArea(
               child: Padding(
                 padding: const EdgeInsets.all(AppSpacing.lg),
                 child: Column(
@@ -723,16 +739,18 @@ class _LibraryPageState extends State<LibraryPage>
                       width: double.infinity,
                       child: _tvSheetRow(
                         addFolder,
-                        debugLabel: 'scan_folder_add',
                         FilledButton.tonalIcon(
                           icon: const Icon(Icons.create_new_folder_outlined),
                           label: const Text('添加扫描文件夹'),
                           onPressed: addFolder,
                         ),
+                        debugLabel: 'scan_folder_add',
+                        focusNode: _tvScanFolderAddNode,
                       ),
                     ),
                   ],
                 ),
+              ),
               ),
             );
           },
@@ -763,7 +781,10 @@ class _LibraryPageState extends State<LibraryPage>
               }
             }
 
-            return SafeArea(
+            // tv: 首焦点交给「添加排除文件夹」（主动作），同扫描文件夹面板。
+            return TvSheetFocus(
+              targetNode: _tvExcludedAddNode,
+              child: SafeArea(
               child: Padding(
                 padding: const EdgeInsets.all(AppSpacing.lg),
                 child: Column(
@@ -861,6 +882,7 @@ class _LibraryPageState extends State<LibraryPage>
                     const Gap(AppSpacing.sm),
                   ],
                 ),
+              ),
               ),
             );
           },

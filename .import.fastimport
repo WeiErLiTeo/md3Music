@@ -29914,3 +29914,173 @@ committer vcexml <3356141621@qq.com> 1794370449 +0800
 data 2
 2
 from :2855
+commit refs/heads/rust-local-force
+mark :2857
+author vcexml <3356141621@qq.com> 1794387792 +0800
+committer vcexml <3356141621@qq.com> 1794387792 +0800
+data 543
+fix(windows): 修复快捷方式更新与任务栏窗口图标
+
+参考公开 Issue md3Music/issues/226：以可写模式加载已有快捷方式，校验并修复目标、图标路径和 AUMID；显式设置窗口大小图标，仅通知对应快捷方式更新，不清理系统缓存或修改用户固定列表。
+
+验证：隔离 APPDATA 的 7 项 Win32/COM 回归通过；main.cpp、win32_window.cpp 原生编译通过；基线与回滚副本复现旧快捷方式更新失败，修改版通过。尚未重新打包或验证客户桌面。
+from :2856
+commit refs/heads/rust-local-force
+mark :2858
+author github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1794395126 +0000
+committer github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1794395126 +0000
+data 32
+chore: update GitHub star trend
+from :2857
+commit refs/heads/rust-local-force
+mark :2859
+author vcexml <3356141621@qq.com> 1794447282 +0800
+committer vcexml <3356141621@qq.com> 1794447282 +0800
+data 531
+fix(tv): 修复扫描文件夹/排除文件夹/上传菜单弹层遥控无法选中的问题
+
+m3e 弹层里 autofocus 不可靠（延迟挂载路由首项拿不到焦点），上述弹层
+漏接首焦点，TV 上打开后遥控无任何落点。把 library_page 私有的
+_tvEnsureSheetFocus 逻辑抽成公共组件 TvSheetFocus（挂载后把首焦点
+交给主动作节点，子树内已持焦则不抢，非 TV 构建零变化），三个弹层
+统一改用该组件接线；tv-development.md 组件表同步登记新组件。
+from :2858
+commit refs/heads/rust-local-force
+mark :2860
+author vcexml <3356141621@qq.com> 1794450292 +0800
+committer vcexml <3356141621@qq.com> 1794450292 +0800
+data 530
+feat(android): 三星等非国内ROM划掉后台自动退出
+
+国内ROM划掉最近任务时系统直接杀进程（Rust后台随之销毁），三星OneUI等
+类原生系统不杀进程，导致"划掉后台还在响"。新增 SwipeExitPolicy 按厂商
+黑名单门控：非国内ROM手机在 onTaskRemoved 停播、停前台服务并杀进程，
+等效国内表现；国内ROM/TV行为零变化。设置→播放→播放行为新增
+「划掉后台自动退出」开关（默认开，关闭后所有系统走现状逻辑）。
+from :2859
+commit refs/heads/rust-local-force
+mark :2861
+author vcexml <3356141621@qq.com> 1794450299 +0800
+committer vcexml <3356141621@qq.com> 1794450299 +0800
+data 228
+docs(plans): APK体积优化计划——CI/CD发版专项
+
+按收益÷风险排序的 APK 下载体积优化清单：原生库压缩打包、Dart 混淆、
+Rust strip 等，含实测基线、改动点、验证与回退方案。
+from :2860
+commit refs/heads/rust-local-force
+mark :2862
+author vcexml <3356141621@qq.com> 1794450694 +0800
+committer vcexml <3356141621@qq.com> 1794450694 +0800
+data 485
+perf(android): .so 恢复压缩打包，发版 APK 下载体积约减半
+
+useLegacyPackaging 改回 true：v6.3.0 发版包实测 34.9MB 的 .so 全部
+Stored 未压缩、占 APK 89%；压缩后 libapp 21.4→8.0MB、libflutter
+11.2→5.2MB，本地同口径构建实测 51.9→20.8MB（公开发布口径预估
+39→约 19-21MB）。代价：安装时解压 .so，安装占用 +12~16MB（下载
+体积优先的取舍，详见 docs/plans/2026-11-12-apk-size-optimization-plan.md）。
+from :2861
+commit refs/heads/rust-local-force
+mark :2863
+author vcexml <3356141621@qq.com> 1794450846 +0800
+committer vcexml <3356141621@qq.com> 1794450846 +0800
+data 640
+build(ci): 发版构建开启 --obfuscate --split-debug-info，符号随产物归档
+
+libapp.so 混淆后 Dart 标识符不再明文（-1.5~2.5MB）。main.yml/ci.yml
+四个 Android 构建统一加参数并按构建名分目录产出符号表；
+debug-build.yml 仅 release 档开启。
+- TV 正/反向符号校验从 grep libapp.so 改为 grep .symbols 符号表
+  （混淆后明文检索恒空，校验会失效）
+- 符号表 + R8 mapping.txt 随 Release 归档 symbols.zip（崩溃栈还原
+  唯一依据），CI/debug-build 另传 30 天 artifact
+- build-and-test.md 新增 3.8 混淆口径与 flutter symbolize/retrace 还原说明
+from :2862
+commit refs/heads/rust-local-force
+mark :2864
+author vcexml <3356141621@qq.com> 1794450864 +0800
+committer vcexml <3356141621@qq.com> 1794450864 +0800
+data 420
+perf(res): 图标/小部件预览 PNG 转 WebP，-1.25MB
+
+8 张大图按显示尺寸处理：启动图标 512px（最大显示 432px@xxxhdpi）
+q95 有损（视觉无损，与 Android Studio 图标转换同口径），主题图标
+monochrome/foreground 保无损保 alpha 边缘，小部件预览 q85。
+合计 1546KB → 265KB。资源引用不带扩展名，无需改引用；
+仅同步 anydpi-v26 XML 里的注释。
+from :2863
+commit refs/heads/rust-local-force
+mark :2865
+author vcexml <3356141621@qq.com> 1794451114 +0800
+committer vcexml <3356141621@qq.com> 1794451114 +0800
+data 366
+perf(rust): cdylib 剥离调试段，入库 .so 约 -0.5MB/ABI
+
+Cargo.toml release profile 加 strip="debuginfo"（只去调试段，动态
+导出符号保留，llvm-nm -D 已验证 start_server/Java_com_* 完整）+
+codegen-units=1。重编 3 ABI 覆盖 jniLibs：arm64 5.08→4.42MB、
+v7a 3.58→3.10MB、x86_64 5.47→4.84MB（x86 按既有口径不重编）。
+from :2864
+commit refs/heads/rust-local-force
+mark :2866
+author vcexml <3356141621@qq.com> 1794452577 +0800
+committer vcexml <3356141621@qq.com> 1794452577 +0800
+data 354
+perf(assets): app_icon 转 128px WebP，安卓包再省 0.27MB
+
+app_icon.png（1254px/297KB）只有 Windows 窗口框架在用，却作为
+flutter asset 打进所有平台安装包。转 128px 无损 WebP（23KB，显示
+尺寸仅 16dp）并同步 3 处测试引用；local_music_controls_test 的
+存量失败与本次无关（stash 对照复现）。
+from :2865
+commit refs/heads/rust-local-force
+mark :2867
+author vcexml <3356141621@qq.com> 1794452597 +0800
+committer vcexml <3356141621@qq.com> 1794452597 +0800
+data 322
+docs(plans): 回填 APK 体积优化实测：公开发布口径 -52~55%
+
+本地导出公开树并按 CI 同款参数构建 4 变体：standard/arm64
+39.21→17.79MB、apple-music 39.21→17.79MB、tv arm64 38.69→17.58MB、
+tv v7a 35.72→16.98MB；私有包 51.87→19.5MB。真机冒烟与正式
+tag 实测待回填。
+from :2866
+commit refs/heads/rust-local-force
+mark :2868
+author vcexml <3356141621@qq.com> 1794453180 +0800
+committer vcexml <3356141621@qq.com> 1794453180 +0800
+data 48
+docs: 新增 APK 体积优化完整复盘文档
+from :2867
+commit refs/heads/rust-local-force
+mark :2869
+author vcexml <3356141621@qq.com> 1794453532 +0800
+committer vcexml <3356141621@qq.com> 1794453532 +0800
+data 677
+fix(swipe-exit): 划掉即停扩展到所有手机，修复小米延迟十几秒才停
+
+黑名单门控的前提「国内 ROM 划掉即秒杀进程」被小米真机推翻：MIUI 在
+媒体前台服务存活期间会延迟十几秒才回收进程（用户实测划掉后继续响）。
+移除厂商黑名单，所有 Android 手机统一在 onTaskRemoved 立即停播 +
+停服务 + 杀进程，不再依赖 ROM 杀进程时机；ROM 若划掉即秒杀则回调
+不会送达，行为与旧版一致。TV 排除与设置开关（默认开）不变，
+设置项副标题改为「从最近任务划掉应用时立即停止播放并退出进程」，
+搜索词补充 小米/MIUI。
+from :2868
+commit refs/heads/rust-local-force
+mark :2870
+author vcexml <3356141621@qq.com> 1794454391 +0800
+committer vcexml <3356141621@qq.com> 1794454391 +0800
+data 701
+fix(swipe-exit): 增加任务移除轮询看门狗，修复 MIUI 不投递回调的延迟
+
+小米真机实测：onTaskRemoved 不按时投递（或延迟到系统回收时），
+仅靠回调在 MIUI 上划掉后仍响十几秒。改为双触发：
+- onTaskRemoved（三星等及时投递的 ROM）：一到即销毁；
+- 任务存在性轮询看门狗（兜底）：服务存活期间每 500ms 查
+  ActivityManager.appTasks（仅本应用任务，按 Home/切走时仍在，
+  划掉后变空），连续两次为空立即停播+杀进程，≤1s 内生效。
+统一销毁入口 SwipeExitPolicy.executeExit，两个播放服务的
+onCreate 启动看门狗（幂等）、onTaskRemoved 共用入口。
+from :2869
