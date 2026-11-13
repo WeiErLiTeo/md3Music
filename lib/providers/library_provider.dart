@@ -266,11 +266,13 @@ class LibraryProvider extends ChangeNotifier {
   }
 
   /// 通过文件夹选择器添加扫描目录。
-  Future<bool> addScanFolder() async {
-    final path = await FolderPickerService.pickFolder();
-    if (path == null) return false;
+  ///
+  /// [path] 由调用方预先取得（TV 内置目录选择器等）；为空时走系统选择器。
+  Future<bool> addScanFolder({String? path}) async {
+    final resolved = path ?? await FolderPickerService.pickFolder();
+    if (resolved == null) return false;
 
-    await _repository.addFolder(path);
+    await _repository.addFolder(resolved);
     _scanFolders = await _repository.getSavedFolders();
     _excludedFolders = await _repository.getExcludedFolders();
     _rebuildCategories();
@@ -287,11 +289,13 @@ class LibraryProvider extends ChangeNotifier {
   }
 
   /// 通过文件夹选择器添加排除目录。
-  Future<bool> addExcludedFolder() async {
-    final path = await FolderPickerService.pickFolder();
-    if (path == null) return false;
+  ///
+  /// [path] 由调用方预先取得（TV 内置目录选择器等）；为空时走系统选择器。
+  Future<bool> addExcludedFolder({String? path}) async {
+    final resolved = path ?? await FolderPickerService.pickFolder();
+    if (resolved == null) return false;
 
-    await _repository.addExcludedFolder(path);
+    await _repository.addExcludedFolder(resolved);
     _excludedFolders = await _repository.getExcludedFolders();
     _indexedSongs = _repository.filterSongs(
       _indexedSongs,

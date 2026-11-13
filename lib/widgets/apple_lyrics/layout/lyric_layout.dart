@@ -207,6 +207,40 @@ class LyricLayout {
     return rows * trans * translationLineHeight + trans * 0.3;
   }
 
+  /// 副行与主行之间的形变间隙（0.3em 副行字号），与 [auxSubHeight] 同口径。
+  ///
+  /// 模糊层副行定位与缩放补偿都要用它，避免两处各写一遍 `transFontSize * 0.3`。
+  static double auxGap(double fontSize) => translationFontSize(fontSize) * 0.3;
+
+  /// 模糊层「主行图」的缩放中心补偿量（垂直像素，正值 = 下移）。
+  ///
+  /// **问题**：清晰层（`_LyricsPainter.paint`）对**整行**做一次 `canvas.scale`，
+  /// pivotY = `y + (主行高 + 副行高 × 进度) / 2`——副行一展开这个中心就往下走。
+  /// 而模糊层是「主行图 + 副行图」两张图各自绕**自身块中心**缩放（缓存图不可能
+  /// 每帧重烘一个新 pivot）。两个中心相差 `d`，同一内容缩放后落点相差
+  /// `d × (1 - scale)`：副行展开（进度 1、scale 0.85、副行高约 30px）时约 2px，
+  /// 观感就是「清晰字与模糊影上下错开」。
+  ///
+  /// 本函数给出 `d_main = 副行高 × 进度 / 2`；调用方把它乘 `(1 - scale)` 作为纯
+  /// 位移加到合成期的 top 上（不动烘焙内容、不加缓存键、不触发重烘）。
+  static double blurPivotShiftMain({
+    required double auxSubHeight,
+    required double auxProgress,
+  }) => auxSubHeight * auxProgress / 2;
+
+  /// 模糊层「副行图」的缩放中心补偿量（垂直像素，负值 = 上移）。
+  ///
+  /// `d_aux = -(主行高/2 + 形变间隙) + 副行高 × (1 - 进度) / 2`。
+  /// 副行满进度时退化为 `-(主行高/2 + gap)`：约 -(24~30)px，乘 `(1 - scale)`
+  /// 后是 3~5px——这是副行展开后「模糊副行明显低于清晰副行」的主因。
+  static double blurPivotShiftAux({
+    required double mainHeight,
+    required double auxSubHeight,
+    required double auxProgress,
+    required double auxGap,
+  }) =>
+      -(mainHeight / 2 + auxGap) + auxSubHeight * (1 - auxProgress) / 2;
+
   /// 测量副行文本在 [maxWidth] 内的视觉行数（无副行文本 → 0）。
   ///
   /// 行数一律由 `LyricWrapPlanner` 的换行计划给出，测量方不再自行数行；
@@ -226,6 +260,19 @@ class LyricLayout {
   ///
   /// 0.5 居中于"已播字(0.8~1.0)"和"未播字(0.2~0.4)"之间，符合"翻译半透明介于已播未播之间"的视觉要求。
   static const double translationOpacity = 0.5;
+
+  /// 离屏模糊图的烘焙 alpha（主行）。
+  ///
+  /// 不在缓存签名里——用户调「已播 / 未播歌词透明度」时由合成期
+  /// `blurOpacityScaleFor` 的比例系数生效，避免逐次拖动都重烘焙整行图。
+  static const double blurBakedAlpha = 0.5;
+
+  /// 离屏模糊图的烘焙 alpha（副行）。
+  ///
+  /// 取主行烘焙值再乘 [translationOpacity]，才能让模糊层里的主副行亮度关系
+  /// 与清晰层一致（主行一半）。此前副行图也用 0.5，模糊态下主副行一样亮，
+  /// 调透明度时层次错乱。
+  static const double blurAuxBakedAlpha = blurBakedAlpha * translationOpacity;
 
   // ============== 副行日历式翻转动效 ==============
 
@@ -399,6 +446,56 @@ class LyricLayout {
 
   /// 当前字未播暗态 alpha（满 scale 时 0.2）
   static const double currentDarkAlpha = 0.2;
+
+  /// 已播歌词透明度（满 factor 时的亮态目标 alpha）。
+  static double get playedOpacity => LyricPreferences.instance.playedOpacity;
+
+  /// 未播歌词透明度（满 factor 时的暗态目标 alpha）。
+  static double get unplayedOpacity => LyricPreferences.instance.unplayedOpacity;
+
+  /// alpha 渐隐基线：默认 0.4 × 0.5 = 0.2，逐点复刻原公式的常数项。
+  static double get alphaBase => unplayedOpacity * 0.5;
+
+  /// 亮态 alpha：默认代入后等于原 `factor * 0.8 + 0.2`。
+  static double brightAlphaFor(double factor) {
+    final double f = factor.clamp(0.0, 1.0).toDouble();
+    return alphaBase + f * (playedOpacity - alphaBase);
+  }
+
+  /// 暗态 alpha：默认代入后等于原 `factor * 0.2 + 0.2`。
+  static double darkAlphaFor(double factor) {
+    final double f = factor.clamp(0.0, 1.0).toDouble();
+    return alphaBase + f * (unplayedOpacity - alphaBase);
+  }
+
+  /// 上方已播行的清晰层 alpha（仅「上方行使用已播颜色」开启时启用）。
+  ///
+  /// 非当前行的 factor 恒为 0，按 [darkAlphaFor] 只会得到渐隐基线（默认 0.2），
+  /// 与模糊层的有效 alpha（烘焙 0.5）差距过大：关闭模糊或滚动使模糊层淡出后，
+  /// 已播色在细笔画上几乎不可见。这里取已播透明度的一半（默认 0.5），与模糊层
+  /// 视觉权重对齐，同时仍弱于当前行（满 factor 的 `playedOpacity`）。
+  static double get aboveLineAlpha => playedOpacity * 0.5;
+
+  /// 由行缩放求 factor（0~1）；`inactiveScale == activeScale` 时退化为 1.0，
+  /// 与 WordRenderer.factor 同款分母保护，避免 LineRenderer 侧产生 NaN。
+  static double factorFor(double scale) {
+    final double denom = activeScale - inactiveScale;
+    if (denom.abs() < 1e-9) return 1.0;
+    return ((scale - inactiveScale) / denom).clamp(0.0, 1.0).toDouble();
+  }
+
+  /// 高斯模糊层合成期系数：上方已播行跟随 [playedOpacity]、下方未播行跟随
+  /// [unplayedOpacity]，默认偏好下恒为 1.0（零视觉回归）。
+  ///
+  /// 只压暗不提亮：`Opacity` 上限为 1.0，故调高透明度时在模糊层不再叠加
+  /// （清晰层仍会生效）；离屏模糊图烘焙 alpha 固定 0.5 不变，避免重烘焙。
+  static double blurOpacityScaleFor({required bool isAbove}) {
+    final prefs = LyricPreferences.instance;
+    final double ratio = isAbove
+        ? prefs.playedOpacity / LyricPreferences.defaultPlayedOpacity
+        : prefs.unplayedOpacity / LyricPreferences.defaultUnplayedOpacity;
+    return ratio.clamp(0.0, 1.0).toDouble();
+  }
 
   /// ATTACK 速度：当前字变亮指数渐变系数
   static const double attackSpeed = 50.0;

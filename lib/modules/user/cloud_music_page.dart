@@ -10,7 +10,6 @@ import 'package:provider/provider.dart';
 import '../../core/build_flags.dart';
 import '../../core/layout/page_layout.dart';
 import '../../core/remote/tv_sheet_focus.dart';
-import '../../core/services/folder_picker_service.dart';
 import '../../core/theme/app_dimens.dart';
 import '../../core/utils/app_text_context_menu.dart';
 import '../../core/utils/app_toast.dart';
@@ -22,6 +21,7 @@ import '../../providers/cloud_upload_provider.dart';
 import '../../providers/library_provider.dart';
 import '../../providers/player_provider.dart';
 import '../../providers/song_match_provider.dart';
+import '../../widgets/tv_folder_picker_sheet.dart';
 import '../../services/kugou_api/cloud_song_mapper.dart';
 import '../../services/kugou_api/kugou_api_client.dart';
 import '../../widgets/md3_pull_to_refresh.dart';
@@ -487,7 +487,9 @@ class _CloudMusicPageState extends State<CloudMusicPage> {
       showToast('需要存储权限才能读取本地文件', long: true);
       return;
     }
-    final dir = await FolderPickerService.pickFolder();
+    // 先试系统 SAF 选择器，打不开（PICKER_UNAVAILABLE，TV 常见）才兜底内置
+    // 目录选择弹层；内置返回的是真实文件系统路径。
+    final dir = await pickFolderTv(context, title: '选择上传文件夹');
     if (!mounted) return;
     if (dir == null) return; // 用户取消
     // 目录选择服务只换算主存储（primary:）路径；SD 卡/OTG 等非主存储

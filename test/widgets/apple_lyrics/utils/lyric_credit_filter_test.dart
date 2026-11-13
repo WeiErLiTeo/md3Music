@@ -152,6 +152,64 @@ void main() {
     });
   });
 
+  group('在线歌词头部信息块（第一行「作者 - 歌名」）', () {
+    setUp(() => LyricPreferences.instance.setHideLyricCredits(true));
+
+    test('标准在线格式：首行作者-歌名 + 名单行整块移除', () {
+      final lines = [
+        _line('周杰伦 - 晴天', start: 0),
+        _line('作词：周杰伦', start: 10),
+        _line('作曲：周杰伦', start: 20),
+        _line('故事的小黄花', start: 100),
+      ];
+      final filtered = LyricCreditFilter.filterLines(lines);
+      expect(filtered.map((l) => l.text), ['故事的小黄花']);
+      // 保留原行对象引用（时间戳/逐字数据不动）
+      expect(identical(filtered[0], lines[3]), isTrue);
+    });
+
+    test('头部块中不在默认正则名单内的「x：xxx」键也被移除', () {
+      final lines = [
+        _line('周杰伦 - 晴天', start: 0),
+        _line('采样：XXX', start: 10),
+        _line('故事的小黄花', start: 100),
+      ];
+      expect(
+        LyricCreditFilter.filterLines(lines).map((l) => l.text),
+        ['故事的小黄花'],
+      );
+    });
+
+    test('无名单块时不误删含连字符的首行（守卫）', () {
+      final lines = [_line('重来 - 倒带', start: 0), _line('爱过的人', start: 100)];
+      expect(identical(LyricCreditFilter.filterLines(lines), lines), isTrue);
+    });
+
+    test('首行作者-歌名但下一行是正常歌词 → 不删首行（守卫）', () {
+      final lines = [
+        _line('周杰伦 - 晴天', start: 0),
+        _line('故事的小黄花', start: 100),
+      ];
+      expect(identical(LyricCreditFilter.filterLines(lines), lines), isTrue);
+    });
+
+    test('歌词中段出现「歌手 - 歌名」形态行不被误删（仅头部生效）', () {
+      final lines = [
+        _line('作词：林夕', start: 0),
+        _line('第一句', start: 100),
+        _line('副歌 - 重复一遍', start: 200),
+      ];
+      expect(
+        LyricCreditFilter.filterLines(lines).map((l) => l.text),
+        ['第一句', '副歌 - 重复一遍'],
+      );
+    });
+
+    test('行级 isFilteredLine 不含头部块规则（需列表上下文）', () {
+      expect(LyricCreditFilter.isFilteredLine('周杰伦 - 晴天'), isFalse);
+    });
+  });
+
   group('自定义正则', () {
     test('自定义 pattern 覆盖默认规则', () async {
       await LyricPreferences.instance.setHideLyricCredits(true);

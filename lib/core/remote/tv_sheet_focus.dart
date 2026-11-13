@@ -39,42 +39,87 @@ class TvSheetFocus extends StatefulWidget {
 }
 
 class _TvSheetFocusState extends State<TvSheetFocus> {
-  /// 自锁：只真正请求一次，避免反复 requestFocus 打断用户后续移动。
-  bool _requested = false;
+  /// 收工标记：焦点已落进弹层子树，或重试窗口耗尽。
+  bool _settled = false;
+
+  /// 已尝试帧数。TV 真机（2026-11-12）实测：请求帧若落在弹层转场动画中，
+  /// requestFocus 会被路由完成后的焦点重建冲掉，首焦点落回页面节点（高亮
+  /// 画在弹层外，OK 无反应）。故不能「只请求一次」，需在短窗口内逐帧重试，
+  /// 直到 primaryFocus 真正进入弹层子树；窗口耗尽即放弃，避免无限抢焦点。
+  static const int _maxTries = 45;
+  int _tries = 0;
+
+  /// 弹层路由的转场动画，build 中从 ModalRoute 缓存
+  /// （dependOnInherited 查询不允许在 post-frame 回调里做）。
+  Animation<double>? _routeAnimation;
 
   void _ensure() {
-    if (!kTvBuild || _requested) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_requested) return;
-      _requested = true;
-      final target = widget.targetNode;
-      if (!target.canRequestFocus) return;
-      if (target.context == null || !target.context!.mounted) return;
-      // 「弹层内是否已有人持焦」必须按子树归属判断，不能只看
-      // primaryFocus.hasFocus：弹层打开瞬间焦点从页面移交到弹层路由是
-      // 异步的，此刻 primaryFocus 仍是页面里的节点（如扫描 FAB）且
-      // hasFocus == true，按 hasFocus 判会把首项焦点整个吞掉。
-      final primary = FocusManager.instance.primaryFocus?.context;
-      if (primary != null) {
-        final sheet = context as Element;
-        var inside = false;
-        primary.visitAncestorElements((el) {
-          if (identical(el, sheet)) {
-            inside = true;
-            return false;
-          }
-          return true;
-        });
-        // 焦点已在弹层子树内（用户已手动移动）就不抢；仍在页面旧位置
-        // （打开瞬间的正常状态）则移交。
-        if (inside) return;
+    if (!kTvBuild || _settled) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _attempt());
+  }
+
+  void _attempt() {
+    if (_settled || !mounted) return;
+    // 等弹层转场动画完成再抢焦点：ModalRoute 在转场期间禁止子树获焦，
+    // 提前 requestFocus 会被 FocusManager 静默丢弃——低端 TV 上重试窗口
+    // 会整段耗在转场里，转场一完成 dpad root 的 restore 兜底又会把焦点
+    // 放回页面节点（实测：首焦点落在页面「扫描音乐」/顶部标签按钮上）。
+    // 动画在 build 中缓存（ModalRoute.of 只能在 build 中查询）。
+    final animation = _routeAnimation;
+    if (animation != null && animation.status != AnimationStatus.completed) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _attempt());
+      return;
+    }
+    // 「弹层内是否已有人持焦」必须按子树归属判断，不能只看
+    // primaryFocus.hasFocus：弹层打开瞬间焦点从页面移交到弹层路由是
+    // 异步的，此刻 primaryFocus 仍是页面里的节点（如扫描 FAB）且
+    // hasFocus == true，按 hasFocus 判会把首项焦点整个吞掉。
+    final primary = FocusManager.instance.primaryFocus?.context;
+    if (primary != null) {
+      final sheet = context as Element;
+      var inside = false;
+      primary.visitAncestorElements((el) {
+        if (identical(el, sheet)) {
+          inside = true;
+          return false;
+        }
+        return true;
+      });
+      // 焦点已在弹层子树内（自然落定或用户已手动移动）：收工，不再抢。
+      if (inside) {
+        _settled = true;
+        return;
       }
+    }
+    final target = widget.targetNode;
+    if (target.canRequestFocus &&
+        target.context != null &&
+        target.context!.mounted) {
       target.requestFocus();
-    });
+    }
+    _tries++;
+    if (_tries >= _maxTries) {
+      _settled = true;
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) => _attempt());
+  }
+
+  @override
+  void didUpdateWidget(TvSheetFocus oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 弹层内容切换主动作（如目录选择器进入子目录）或同一 State 被复用到新
+    // 弹层时，重新开窗口请求首焦点。
+    if (oldWidget.targetNode != widget.targetNode) {
+      _settled = false;
+      _tries = 0;
+      _ensure();
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    _routeAnimation = ModalRoute.of(context)?.animation;
     _ensure();
     return widget.child;
   }

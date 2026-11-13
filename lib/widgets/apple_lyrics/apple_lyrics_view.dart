@@ -31,6 +31,7 @@ import '../../core/utils/lyric_wrap_plan.dart';
 import 'controllers/lyric_scroll_controller.dart';
 import 'animation/spring.dart';
 import 'layout/duet_layout.dart';
+import 'layout/lyric_aux_scope.dart';
 import 'layout/lyric_layout.dart';
 import 'layout/lyric_preferences.dart';
 import 'package:md3music/widgets/apple_lyrics/models/lyric_line.dart';
@@ -199,7 +200,8 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
   double _lastRepaintBlurFade = 0;
   double _lastRepaintEntryBlur = -1;
   double _lastRepaintInterludeProgress = 0;
-  double _lastRepaintTransExpand = 0;
+  /// 上次重绘时的副行进度代次：逐行副行进度任一变化即 +1。
+  int _lastRepaintAuxGeneration = -1;
   int _lastRepaintCurrentLineIndex = -1;
 
   /// P0-1 方案 A：高斯模糊层（Positioned/Opacity/RawImage）的脏标记缓存。
@@ -214,10 +216,11 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
   double _lastBlurRebuildBlurFade = -1;
   double _lastBlurRebuildInterludeProgress = -1;
   double _lastBlurRebuildEntryBlur = -1;
-  // 副行动画进度（模糊层重建跟踪）：模糊层位置含 _transDeltaBefore 副行动画
-  // 高度，暂停切翻译开关时 posY 每帧位移低于 0.5px 门限，若不跟踪本值，
-  // 模糊层位置会滞留到误差累积越限才跳变（表现为下方行一顿一顿）。
-  double _lastBlurRebuildTransExpand = -1;
+  // 副行进度代次（模糊层重建跟踪）：模糊层位置含 [_transDeltaBefore] 的逐行
+  // 副行高度，暂停切范围 / 切翻译开关时 posY 每帧位移低于 0.5px 门限，若不
+  // 跟踪本值，模糊层位置会滞留到误差累积越限才跳变（表现为下方行一顿一顿）。
+  // 逐行进度下用代次而非单值差分：多行同时下行时逐行比较没有意义。
+  int _lastBlurRebuildAuxGeneration = -1;
 
   // ============== 控制器与效果 ==============
 
@@ -402,6 +405,28 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
   @visibleForTesting
   bool cascadeLineHeldForTest(int i) => (_delayStartTimes[i] ?? -1) >= 0;
 
+  /// 第 i 行副行当前展开进度（0 = 收起，1 = 展开）。仅测试用。
+  @visibleForTesting
+  double auxProgressForTest(int i) => _auxProgressAt(i);
+
+  /// 第 i 行副行目标进度（由「副行显示范围」决定）。仅测试用。
+  @visibleForTesting
+  double auxTargetForTest(int i) => _auxTargetAt(i);
+
+  /// 第 i 行上方副行高度累计（前缀和口径）。仅测试用：
+  /// 断言 `auxDeltaBeforeForTest(k) == Σ_{i<k} auxExtraForTest(i)` 这条
+  /// 「行 top 与行高同源」不变量（写歪会让点击跳行命中错行）。
+  @visibleForTesting
+  double auxDeltaBeforeForTest(int i) => _transDeltaBefore(i);
+
+  /// 第 i 行副行带来的额外高度。仅测试用。
+  @visibleForTesting
+  double auxExtraForTest(int i) => _transExtraHeightFor(i);
+
+  /// 本帧是否仍有副行进度在推进（空 = 已收敛）。仅测试用。
+  @visibleForTesting
+  bool get auxAnimatingForTest => _auxAnimating.isNotEmpty;
+
   /// 第 i 行 WordRenderer 上一次绘制算出的 sweep（扫光）前端位置（行内坐标）。
   ///
   /// 仅测试用：验证 [LyricFillMode.sweep] 下前端非负且随播放进度向右推进。
@@ -467,11 +492,24 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
   /// 缩放变化后旧模糊图长期不刷新的问题）。
   final Map<int, (ui.Image image, String signature)> _lineBlurImages = {};
 
+  /// Per-Line 副行模糊缓存：行索引 → (副行模糊图, 渲染输入签名)。
+  ///
+  /// **为什么与主行分开一张图**：副行的显隐是逐行动画（进度 0→1），若把副行
+  /// 烘焙进主行图，进度每变化一点就得重烘焙整行——那是逐帧离屏渲染。拆成独立
+  /// 图后，进度只影响合成期的 top 偏移与 Opacity（与清晰层副行同一位移公式
+  /// `subH × (progress - 1)`），**零重烘焙**即可让模糊副行跟着清晰副行一起
+  /// 长出 / 收起。代价是每行多一张小图（高 ≈ 副行高 + 2×padding）。
+  final Map<int, (ui.Image image, String signature)> _auxBlurImages = {};
+
   // 每次异步请求独占令牌，防止切歌/几何变化后旧纹理覆盖新缓存。
   final Map<int, (Object token, String signature)> _lineBlurPending = {};
+  final Map<int, (Object token, String signature)> _auxBlurPending = {};
 
   @visibleForTesting
   Future<ui.Image?> Function(int, int, DuetAlignment)? lineBlurRendererForTest;
+
+  @visibleForTesting
+  Future<ui.Image?> Function(int, int, DuetAlignment)? auxBlurRendererForTest;
 
   @visibleForTesting
   void updateLineBlurCacheForTest(Map<int, int> levels) =>
@@ -480,12 +518,20 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
   @visibleForTesting
   ui.Image? lineBlurImageForTest(int index) => _lineBlurImages[index]?.$1;
 
+  @visibleForTesting
+  ui.Image? auxBlurImageForTest(int index) => _auxBlurImages[index]?.$1;
+
   void _clearLineBlurCache() {
     _lineBlurPending.clear();
     for (final entry in _lineBlurImages.values) {
       entry.$1.dispose();
     }
     _lineBlurImages.clear();
+    _auxBlurPending.clear();
+    for (final entry in _auxBlurImages.values) {
+      entry.$1.dispose();
+    }
+    _auxBlurImages.clear();
   }
 
   /// 上次构建模糊层时的几何签名，用于字号/缩放/视口变化时强制重算 levels。
@@ -571,9 +617,9 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
     _duetAlignments = result.alignments;
     // 失效行高缓存，让 _recomputeLineHeightsIfNeeded 用新的 _cleanedLines 重算
     _cachedLinesRef = null;
-    // 歌词内容变化：清空副行收起表并重置副行进度（旧行索引不再适用于新歌词）
-    _transCollapsing.clear();
-    _translationExpandProgress = 0;
+    // 歌词内容变化：旧行索引不再适用于新歌词，副行进度缓冲整体作废
+    // （长度 / 目标在 _recomputeLineHeightsIfNeeded 末尾按新行数重建）
+    _resetAuxProgressBuffers();
     // 失效模糊图片缓存：对齐/文本变化后旧模糊图位置与内容均不再匹配
     _clearLineBlurCache();
     _cachedBlurLineIndex = -1;
@@ -761,11 +807,40 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
   /// speed = 18（300ms 内基本到位）
   double _interludeExpandProgress = 0;
 
-  /// 当前行翻译副行展开进度（0→1 副行"长出"，1→0 收起），指数逼近。
+  /// 逐行副行展开进度（0 = 完全收起，1 = 完全展开），索引与 [_cleanedLines] 对齐。
   ///
-  /// 仅当前行预留副行高度（未播放歌词不占位）。本进度同时驱动当前行副行的
-  /// 视觉"浮出"与 alpha 淡入（alpha 与位置同进度，淡入淡出贯穿整个过渡）。
-  double _translationExpandProgress = 0.0;
+  /// 引入「副行显示范围」前本状态是单值（只有当前行有副行）。泛化为逐行数组后：
+  /// - 目标值由 [resolveAuxTarget] 按 [LyricAuxScope] 给出（见 [_auxTargets]）；
+  /// - 「收起余量 + 展开量 ≡ 预留总量」不变量由「下行行与上行行共用同一速率」维持，
+  ///   于是稳态切行时当前行以下的行零位移（与原单值实现同一性质）；
+  /// - 高度消费统一走 [_transExtraHeightFor] / [_transDeltaBefore]，两者都是
+  ///   O(1)（后者用前缀和），所以主绘制循环 / 二分查找 / 间奏锚点零结构改动。
+  Float64List _auxProgress = Float64List(0);
+
+  /// 逐行副行目标进度，与 [_auxProgress] 同长度。
+  ///
+  /// 只在「当前行 / 范围 / 副行开关 / 显示模式 / 行数」变化时整体重算
+  /// （[_auxTargetsSignature] 命中即跳过），稳态帧不产生任何目标计算。
+  Float64List _auxTargets = Float64List(0);
+
+  /// 尚未到达目标的行索引队列（只推进这些行，稳态为空 → 零成本）。
+  final List<int> _auxAnimating = <int>[];
+
+  /// 逐行副行高度前缀和：`_auxTopsPrefix[i] = Σ_{k<i} 副行高度 × 进度`。
+  ///
+  /// [_transDeltaBefore] 是主绘制循环里每行都要调用的热点（N 行 × 每帧），
+  /// 逐行遍历会退化为 O(N²)；前缀和把查询压到 O(1)，脏标记保证每帧至多重算一次。
+  Float64List _auxTopsPrefix = Float64List(1);
+  bool _auxPrefixDirty = true;
+
+  /// 逐行进度数值代次：任何行进度变化 +1，用于重绘与模糊层重建门控。
+  int _auxProgressGeneration = 0;
+
+  /// [_auxTargets] 的输入签名，用于检测是否需要重算目标。
+  int _auxTargetsSignature = 0;
+
+  /// 判定「已到位」的误差阈值（与原单值实现的 0.001 同口径）。
+  static const double _auxSettleEpsilon = 0.001;
 
   /// 当前切行过渡的副行动画速率（/s），切行时按退场行时长捕获
   /// （[_fadeRateForMs]：快歌快、慢歌最多 1s），收起与展开共用——
@@ -827,13 +902,6 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
   double _auxSubHeightOf(int i) =>
       (i >= 0 && i < _auxSubHeights.length) ? _auxSubHeights[i] : 0;
 
-  /// 正在收起副行的行索引 → 收起进度（0=刚开始收起，1=完全收起后移除）。
-  ///
-  /// 行切换时上一当前行从当前展开进度登记（c0 = 1 - 展开进度），起点与切换
-  /// 瞬间的视觉完全一致，无跳变。用 Map 而非单槽：快歌（行隔 < 400ms）连切
-  /// 时上一轮收起可能未完成，各行需独立收完。
-  final Map<int, double> _transCollapsing = {};
-
   /// 指定行是否有副行文本（翻译或罗马音，按 displayMode）。
   bool _lineHasAuxText(int i) {
     if (i < 0 || i >= _cleanedLines.length) return false;
@@ -845,39 +913,190 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
     return aux != null && aux.isNotEmpty;
   }
 
+  /// 第 i 行的副行当前展开进度（越界 → 0）。
+  double _auxProgressAt(int i) =>
+      (i >= 0 && i < _auxProgress.length) ? _auxProgress[i] : 0.0;
+
+  /// 第 i 行的副行目标进度（越界 → 0）。
+  double _auxTargetAt(int i) =>
+      (i >= 0 && i < _auxTargets.length) ? _auxTargets[i] : 0.0;
+
   /// 第 i 行因副行动画产生的额外高度（行高消费点叠加）。
   ///
-  /// 当前行跟随展开进度增长；收起表中的行随收起进度回落；其余行恒 0
-  /// （静态行高即纯主行高度）。各自使用**该行自身的**副行预留高度
-  /// （[_auxSubHeightOf]，已含换行行数），换行副行不会与下一行重叠。
+  /// 每行独立使用**该行自身的**副行预留高度（[_auxSubHeightOf]，已含换行行数），
+  /// 乘该行当前进度——「所有行」与「已播行除外」都靠这一条公式自然成立，
+  /// 不存在静态预留导致的切行跳位。
   ///
-  /// **不读 showTranslation 做立即短路**：关闭翻译时 target 变 0、进度指数
-  /// 衰减到 0，高度跟随动画平滑收起——若在此短路，关闭瞬间高度直接塌缩。
-  /// 进度收敛后本值自然归 0，无残留。
+  /// **不读 showTranslation 做立即短路**：关闭副行时目标变 0、进度指数衰减到 0，
+  /// 高度跟随动画平滑收起；若在此短路，关闭瞬间高度会直接塌缩。
   double _transExtraHeightFor(int i) {
-    if (i == _currentLineIndex && _lineHasAuxText(i)) {
-      return _auxSubHeightOf(i) * _translationExpandProgress;
-    }
-    final double? c = _transCollapsing[i];
-    return c == null ? 0 : _auxSubHeightOf(i) * (1.0 - c);
+    return _auxSubHeightOf(i) * _auxProgressAt(i);
   }
 
   /// 第 i 行上方所有副行动画高度之和（行 top 消费点叠加）。
   ///
-  /// 当前行与收起中的行通常相邻（outgoing = current - 1），表极小（≤4），
-  /// 遍历开销可忽略。各行使用自身的副行预留高度（与 [_transExtraHeightFor] 同口径）。
+  /// 逐行进度下改为前缀和查询（O(1)），见 [_auxTopsPrefix]。
   /// **不读 showTranslation 短路**（理由同 [_transExtraHeightFor]）。
   double _transDeltaBefore(int i) {
-    double d = 0;
-    if (_currentLineIndex >= 0 &&
-        _currentLineIndex < i &&
-        _lineHasAuxText(_currentLineIndex)) {
-      d += _auxSubHeightOf(_currentLineIndex) * _translationExpandProgress;
+    if (i <= 0) return 0;
+    _ensureAuxPrefix();
+    final int last = _auxTopsPrefix.length - 1;
+    if (last <= 0) return 0;
+    return _auxTopsPrefix[i < last ? i : last];
+  }
+
+  /// 惰性重建副行高度前缀和（O(N)，仅在进度/副行高度变化后首次查询时执行）。
+  void _ensureAuxPrefix() {
+    if (!_auxPrefixDirty) return;
+    final int n = _auxSubHeights.length;
+    if (_auxTopsPrefix.length != n + 1) {
+      _auxTopsPrefix = Float64List(n + 1);
     }
-    _transCollapsing.forEach((k, v) {
-      if (k < i) d += _auxSubHeightOf(k) * (1.0 - v);
-    });
-    return d;
+    double acc = 0;
+    _auxTopsPrefix[0] = 0;
+    for (int i = 0; i < n; i++) {
+      acc += _auxSubHeightOf(i) * _auxProgressAt(i);
+      _auxTopsPrefix[i + 1] = acc;
+    }
+    _auxPrefixDirty = false;
+  }
+
+  /// 按副行显示范围重算逐行目标值（只在签名变化时调用）。
+  void _rebuildAuxTargets() {
+    final int n = _cleanedLines.length;
+    if (_auxTargets.length != n) _auxTargets = Float64List(n);
+    if (_auxProgress.length != n) {
+      final Float64List next = Float64List(n);
+      final int copy = math.min(n, _auxProgress.length);
+      for (int i = 0; i < copy; i++) {
+        next[i] = _auxProgress[i];
+      }
+      _auxProgress = next;
+    }
+    final prefs = LyricPreferences.instance;
+    final LyricAuxScope scope = prefs.auxScope;
+    final bool enabled = prefs.showTranslation;
+    final int current = _currentLineIndex;
+    _auxAnimating.clear();
+    for (int i = 0; i < n; i++) {
+      final double t = resolveAuxTarget(
+        scope: scope,
+        enabled: enabled,
+        hasAuxText: _lineHasAuxText(i),
+        lineIndex: i,
+        currentLineIndex: current,
+      );
+      _auxTargets[i] = t;
+      if ((t - _auxProgress[i]).abs() > _auxSettleEpsilon) {
+        _auxAnimating.add(i);
+      }
+    }
+    _auxPrefixDirty = true;
+  }
+
+  /// 目标计算的输入签名：任一变化都会改变逐行目标，需要整体重算。
+  int _auxTargetsSignatureNow() {
+    final prefs = LyricPreferences.instance;
+    return Object.hash(
+      _currentLineIndex,
+      prefs.auxScope,
+      prefs.showTranslation,
+      prefs.displayMode,
+      _cleanedLines.length,
+      _auxSubHeights.length,
+    );
+  }
+
+  /// 行数 / 歌词变化后重建进度缓冲：初值直接吸附到目标，不播放入场动画
+  /// （切歌或改字号时整屏副行不应「再长一遍」）。
+  void _resetAuxProgressBuffers() {
+    final int n = _cleanedLines.length;
+    _auxProgress = Float64List(n);
+    _auxTargets = Float64List(n);
+    _auxTopsPrefix = Float64List(n + 1);
+    _auxAnimating.clear();
+    _auxPrefixDirty = true;
+    _auxTargetsSignature = 0;
+    _rebuildAuxTargets();
+    for (int i = 0; i < n; i++) {
+      _auxProgress[i] = _auxTargets[i];
+    }
+    _auxAnimating.clear();
+    _auxPrefixDirty = true;
+    _auxProgressGeneration++;
+  }
+
+  /// 把所有行直接吸附到目标（快速连切 / seek 大跳兜底，不播放过渡）。
+  void _snapAuxProgressToTargets() {
+    bool changed = false;
+    for (int i = 0; i < _auxProgress.length; i++) {
+      final double t = _auxTargetAt(i);
+      if (_auxProgress[i] != t) {
+        _auxProgress[i] = t;
+        changed = true;
+      }
+    }
+    _auxAnimating.clear();
+    if (changed) {
+      _auxPrefixDirty = true;
+      _auxProgressGeneration++;
+    }
+  }
+
+  /// 推进逐行副行进度（替代原「单值进度 + 收起表」的步骤 7.5）。
+  ///
+  /// 速率规则与原实现一一对应：
+  /// - 本帧存在任意行在下行（target < progress）→ 全帧统一用 [_transSwitchRate]
+  ///   （切行时按退场行时长捕获）。下行与上行同速，「收起余量 + 展开量
+  ///   ≡ 预留总量」成立 → 稳态切行时当前行以下的行零位移；
+  /// - 纯展开（首帧 / 开副行 / 切范围）→ 当前行用该行时长速率，其余用 14.0；
+  /// - 暂停时照常推进（切范围是用户主动操作，不是播放驱动），收敛后由门控
+  ///   停 Ticker，不产生持续重绘。
+  void _advanceAuxProgress(double dt, {required bool fastLineSwitch}) {
+    final int sig = _auxTargetsSignatureNow();
+    if (sig != _auxTargetsSignature) {
+      _auxTargetsSignature = sig;
+      _rebuildAuxTargets();
+    }
+    if (_auxAnimating.isEmpty) return;
+    if (fastLineSwitch) {
+      _snapAuxProgressToTargets();
+      return;
+    }
+    bool anyDown = false;
+    for (final int i in _auxAnimating) {
+      if (_auxTargetAt(i) < _auxProgressAt(i) - 1e-4) {
+        anyDown = true;
+        break;
+      }
+    }
+    final double rate = anyDown
+        ? _transSwitchRate
+        : (_currentLineIndex >= 0 &&
+                  _currentLineIndex < widget.lines.length &&
+                  _lineHasAuxText(_currentLineIndex)
+              ? _fadeRateForMs(widget.lines[_currentLineIndex].duration)
+              : 14.0);
+    final double decay = 1 - math.exp(-rate * dt);
+    bool changed = false;
+    for (int k = _auxAnimating.length - 1; k >= 0; k--) {
+      final int i = _auxAnimating[k];
+      final double t = _auxTargetAt(i);
+      double p = _auxProgressAt(i);
+      p += (t - p) * decay;
+      if ((t - p).abs() < _auxSettleEpsilon) {
+        p = t;
+        _auxAnimating.removeAt(k);
+      }
+      if (p != _auxProgress[i]) {
+        _auxProgress[i] = p;
+        changed = true;
+      }
+    }
+    if (changed) {
+      _auxPrefixDirty = true;
+      _auxProgressGeneration++;
+    }
   }
 
   /// 根据 fontSize/viewportWidth/lines 变化判断是否需要重算 lineHeights/lineTops。
@@ -1008,6 +1227,13 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
     }
     _auxSubHeights = auxHeights;
     _auxWrapPlans = auxPlans;
+    // 副行预留高度重算 → 前缀和必然失效。行数变化时整体重建进度缓冲
+    // （旧行索引不再对应新歌词）；仅字号/行距变化时保留现有进度，
+    // 避免调滑块时整屏副行「重新长一遍」。
+    _auxPrefixDirty = true;
+    if (_auxProgress.length != _cleanedLines.length) {
+      _resetAuxProgressBuffers();
+    }
     // 重置激活间奏（lines 变化时）
     _activeInterludeIdx = -1;
     _lastActiveAnchorIdx = -1;
@@ -1439,6 +1665,16 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
     // v3 优化：切歌（lines 引用变化）时重启驱动，重新推进新行的 renderer
     if (!identical(oldWidget.lines, widget.lines) ||
         oldWidget.songBpm != widget.songBpm) {
+      // P0-A: 切歌即释放旧歌词绑定的 native 位图（每行模糊图 + 字形图/辉光）。
+      // 这些 ui.Image 不受 ImageCache LRU 管辖，此前只在 dispose / 字体变化时
+      // 释放；桌面端长会话切歌会持续创建新歌的位图，是引擎侧内存峰值来源之一。
+      // 必须在下面的弹簧/驱动状态重置之前完成，避免下一帧复用已释放的纹理。
+      if (!identical(oldWidget.lines, widget.lines)) {
+        _clearLineBlurCache();
+        _cachedBlurLineIndex = -1;
+        _cachedBlurLevels = const {};
+        _releaseRendererCaches();
+      }
       // 快慢歌辉光阈值随歌曲变化：重算并同步到渲染器（renderer 在渲染循环设置）
       _glowThresholdMs = EmphasizeEffect.resolveThresholdMs(
         lines: widget.lines,
@@ -1509,15 +1745,55 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
     _lineRenderers.clear();
   }
 
+  /// 仅测试用：当前按行渲染器缓存条目数（WordRenderer + LineRenderer）。
+  @visibleForTesting
+  int get rendererCacheSizeForTest =>
+      _wordRenderers.length + _lineRenderers.length;
+
+  /// 视口缓冲行数之外的保留余量：覆盖行切换离场动画与预启动窗口，
+  /// 避免清理掉仍在参与动画的行导致 renderer 被重建、alpha 状态跳变。
+  static const int _rendererCacheMargin = 8;
+
+  /// P0-A: 按当前行裁剪渲染器缓存。
+  ///
+  /// renderer 内部持有字形图/辉光等 [ui.Image]（native 内存，不受 ImageCache
+  /// LRU 管辖），长歌曲随可见窗口推进会单调累积。仅在缓存规模超过窗口上限时
+  /// 遍历，避免每行渲染都做 O(N) 扫描；越界条目先 dispose 再移除。
+  void _pruneRendererCaches() {
+    final radius = _overscan + _rendererCacheMargin;
+    final maxEntries = radius * 2 + 1;
+    if (_wordRenderers.length <= maxEntries &&
+        _lineRenderers.length <= maxEntries) {
+      return;
+    }
+    final center = _currentLineIndex < 0 ? 0 : _currentLineIndex;
+    final minIdx = center - radius;
+    final maxIdx = center + radius;
+    _wordRenderers.removeWhere((key, renderer) {
+      if (key >= minIdx && key <= maxIdx) return false;
+      renderer.dispose();
+      return true;
+    });
+    _lineRenderers.removeWhere((key, renderer) {
+      if (key >= minIdx && key <= maxIdx) return false;
+      renderer.dispose();
+      return true;
+    });
+  }
+
   // ============== 工具方法 ==============
 
   /// 获取或创建指定行的 [WordRenderer]。
-  WordRenderer _wordRendererFor(int index) =>
-      _wordRenderers.putIfAbsent(index, () => WordRenderer());
+  WordRenderer _wordRendererFor(int index) {
+    _pruneRendererCaches();
+    return _wordRenderers.putIfAbsent(index, () => WordRenderer());
+  }
 
   /// 获取或创建指定行的 [LineRenderer]。
-  LineRenderer _lineRendererFor(int index) =>
-      _lineRenderers.putIfAbsent(index, () => LineRenderer());
+  LineRenderer _lineRendererFor(int index) {
+    _pruneRendererCaches();
+    return _lineRenderers.putIfAbsent(index, () => LineRenderer());
+  }
 
   /// 获取或创建指定行的偏移弹簧。
   Spring _perLineSpringFor(int index) => _perLineSprings.putIfAbsent(
@@ -1759,67 +2035,22 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
       _lastSwitchWasFast = fastLineSwitch;
     }
     if (_currentLineIndex != _previousLineIndex) {
-      // 上一行副行收起登记：从当前展开进度继续收（c0 = 1 - p），
-      // 收起起点 = 切换瞬间的副行实际位置，无跳变。
-      // 独立判断（不放进级联块）：current 变为 -1（间奏/结尾）时同样要收起。
-      final int outgoingIdx = _previousLineIndex;
-      if (outgoingIdx >= 0 && _translationExpandProgress > 0.001) {
-        _transCollapsing[outgoingIdx] = (1.0 - _translationExpandProgress)
-            .clamp(0.0, 1.0);
-        // 兜底：极端连切导致条目过多时移除最旧（最小 key）条目
-        if (_transCollapsing.length > 4) {
-          _transCollapsing.remove(
-            _transCollapsing.keys.reduce((a, b) => a < b ? a : b),
-          );
-        }
-      }
       // 过渡速率 = 退场行主文本退场淡出速率（[_fadeRateForMs]：快歌快、
-      // 慢歌最多 1s），副行收起与原歌词退场严格同速；无退场行（首行/
-      // 间奏后）用入场行时长。收起与展开共用该速率，维持下方行零位移。
+      // 慢歌最多 1s）。逐行副行进度里「下行」与「上行」共用这一速率，于是
+      // 稳态切行（旧行 1→0、新行 0→1）时两者变化量之和恒为 0 ——
+      // 当前行以下的行零位移，与原单值实现同一不变量。
       // 边界防御：切歌等 lines 整体替换场景下，outgoingIdx 可能超出新歌词
       // 行数（_previousLineIndex 尚未随新行更新）。越界访问会让 _onTick 每帧
       // 抛异常、歌词永久冻结（外观与"省电模式失效"一致），故显式钳制。
+      final int outgoingIdx = _previousLineIndex;
       _transSwitchRate = outgoingIdx >= 0 && outgoingIdx < widget.lines.length
           ? _fadeRateForMs(widget.lines[outgoingIdx].duration)
           : (_currentLineIndex >= 0 && _currentLineIndex < widget.lines.length
                 ? _fadeRateForMs(widget.lines[_currentLineIndex].duration)
                 : 14.0);
-      // 新当前行展开进度重置：该行此前若正在收起，从当前进度续升（回环
-      // 连切连续性）；否则从头长出。
-      final double? resume = _currentLineIndex >= 0
-          ? _transCollapsing.remove(_currentLineIndex)
-          : null;
-      _translationExpandProgress = resume != null ? 1.0 - resume : 0.0;
-      // 快速连切时副行过渡不可能完成（450ms~1s），残留收起表只会让
-      // _transDeltaBefore/_transExtraHeightFor 每帧多算，直接清空，
-      // 展开进度在步骤 7.5 直接落到目标。
-      if (fastLineSwitch) _transCollapsing.clear();
-    }
-    // 退场行副行收起推进：暂停时也推进（UI 过渡而非播放驱动），收完移除，
-    // 保证 animConverged 判定与静态停帧不被残留占位阻塞。
-    // 快连切时旧条目沿用最新过渡速率（近似，多条目仅在极快连切时短暂共存）。
-    if (!fastLineSwitch && _transCollapsing.isNotEmpty) {
-      final double collapseDecay = 1 - math.exp(-_transSwitchRate * dt);
-      final List<int> done = <int>[];
-      _transCollapsing.forEach((k, v) {
-        // 指数趋近 1（与入场 _translationExpandProgress 同一推进方式）。
-        // 原实现是线性 `v + decay`：1/rate ≈ 150ms 就收完，而入场要 ~450ms，
-        // 出场比入场快约 3 倍，观感是"一闪而过、衔接僵硬"。
-        //
-        // 更关键的是它让本文件注释声明的不变量真正成立：稳态切行时
-        // 收起余量 (1-c) = p₀·e^(-λt)、展开量 = 1-e^(-λt)，两者之和恒为 p₀
-        // （上一行切走瞬间通常已完全展开，p₀=1）→ 当前行以下的行在切行期间
-        // **零位移**；线性推进下该和会中途掉 ~18%，表现为下方歌词整块抖一下。
-        final double next = v + (1.0 - v) * collapseDecay;
-        if (next >= 0.99) {
-          done.add(k);
-        } else {
-          _transCollapsing[k] = next;
-        }
-      });
-      for (final k in done) {
-        _transCollapsing.remove(k);
-      }
+      // 逐行目标值不在这里改：[_advanceAuxProgress] 每帧比对签名（含当前行
+      // 索引），变化即整体重算。切入行此前若正在收起，从当前进度自然续升；
+      // 快速连切由 [_advanceAuxProgress] 直接吸附到目标。
     }
 
     // 2. 推进滚动控制器（需要 lineHeight 与 intervalMs 计算目标 posY）
@@ -2073,12 +2304,14 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
         renderer.emphasizeEffect = _emphasizeEffect;
         // 快慢歌辉光阈值（切歌时重算），行绑定时据此判定强调字
         renderer.thresholdMs = _glowThresholdMs;
-        // 翻译副行浮出/渐显进度（仅当前行注入；非当前行 WordRenderer 不绘制副行）。
+        // 翻译副行浮出/渐显进度（逐行进度数组，当前行在本行窗口内取自身值）。
         // alpha 与位置共用展开进度，淡入淡出贯穿整个过渡。
         // 当前行恒为入场：副行绕底边从下翻转出现（方向标记必须无条件赋值，
         // 字段跨帧保留，漏设会让副行残留在上一行的出场方向上）。
-        renderer.translationExpand = _translationExpandProgress;
-        renderer.translationFade = _translationExpandProgress;
+        // 注：painter.paint 会在真正绘制前用同一份数组再赋一次值（按绘制行号，
+        // 不受本 ±overscan 窗口限制），这里是 tick 阶段的口径对齐。
+        renderer.translationExpand = _auxProgressAt(i);
+        renderer.translationFade = _auxProgressAt(i);
         renderer.translationExiting = false;
         renderer.setLineState(
           isActive: true,
@@ -2099,31 +2332,23 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
       } else {
         final renderer = _lineRendererFor(i);
         // 副行动画注入（必须无条件赋值——renderer 字段跨帧保留，漏设会残留
-        // 旧值画出幽灵副行）：
-        // - 当前行：跟随全局展开/渐显进度，LRC 当前行由此获得与 KRC 当前行
-        //   一致的长出动画（此前固定位置固定 alpha，切行瞬间出现）；
-        // - 收起中的退场行：注入 1 - 收起进度，副行从当前位置平滑缩回主行底
-        //   并渐隐，消除切行时副行瞬间消失的硬切；
-        // - 其余非当前行：两值恒 0，副行不绘制（与旧行为一致）。
-        if (isActive) {
-          renderer.translationExpand = _translationExpandProgress;
-          renderer.translationFade = _translationExpandProgress;
-          // 当前行：入场，绕副行底边从下翻转出现。
-          renderer.translationExiting = false;
-        } else {
-          final double? c = _transCollapsing[i];
-          renderer.translationExpand = c == null ? 0.0 : 1.0 - c;
-          renderer.translationFade = c == null ? 0.0 : 1.0 - c;
-          // 收起中的退场行：出场，绕副行顶边向上翻转消失（入场/出场锚线不同，
-          // 必须显式告知方向）；c == null 的行副行 alpha 为 0，方向无意义。
-          renderer.translationExiting = c != null;
-        }
+        // 旧值画出幽灵副行）：直接取该行自己的进度，与「副行显示范围」无关——
+        // 当前行 / 未播行 / 已播行都可能是同一个数组里的不同行。
+        // 方向标记按「目标 < 当前」判定：下行 = 出场（绕顶边向上翻走），
+        // 上行 = 入场（绕底边从下翻出）。
+        final double auxP = _auxProgressAt(i);
+        renderer.translationExpand = auxP;
+        renderer.translationFade = auxP;
+        renderer.translationExiting = _auxTargetAt(i) < auxP - 1e-4;
         renderer.setLineState(
           isActive: isActive,
           scale: scale,
           blurFade: _blurFade,
           blurActive: blurActive,
           activeColorValue: lineColorValue,
+          // 仅当上方行确实拿到已播色时才提高清晰层 alpha：无覆盖色时保持
+          // 原暗态层次，避免开关打开但没有可用颜色时整屏变亮。
+          isAboveCurrent: _aboveLineColorValue != null && i < _currentLineIndex,
         );
         renderer.tick(dt);
         if (!renderer.isConverged) anyRendererAnimating = true;
@@ -2210,36 +2435,14 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
       _lastActiveAnchorIdx = -1;
     }
 
-    // 7.5 翻译副行展开进度：当前行、开启翻译且有副行文本 → 展开，否则收起。
+    // 7.5 逐行副行展开进度：目标由「副行显示范围」决定（见 [LyricAuxScope]），
+    // 只有变化到目标的行会被推进（[_auxAnimating]），稳态帧零计算。
     // alpha 与位置共用同一进度（淡入淡出贯穿整个过渡时长，慢歌最多 ~1s
-    // 清晰可感知），因此不再维护独立的 fade 状态。
-    // 速率随行时长自适应：过渡期间（有退场行在收起）用切行捕获的
-    // [_transSwitchRate]，与收起严格同速（稳态切行「收起余量 + 展开量 ≡
-    // 预留总量」，当前行以下的行零位移）；纯展开（首次出现/翻译开关切换）
-    // 用当前行时长速率；无当前行兜底 14.0。
-    // **暂停时也指数推进（不再吸附）**：开关切换/切行是用户主动触发的 UI
-    // 过渡而非播放驱动，暂停中切翻译开关同样要有动画；推进到收敛后
-    // animConverged 成立、Ticker 自然停止，不会造成持续重绘。
-    final bool transVisible =
-        _currentLineIndex >= 0 &&
-        LyricPreferences.instance.showTranslation &&
-        _lineHasAuxText(_currentLineIndex);
-    final double transExpandTarget = transVisible ? 1.0 : 0.0;
-    if (fastLineSwitch) {
-      // 快速连切兜底：副行过渡不可能完成，直接落到目标高度，
-      // 保证行定位（_transExtraHeightFor/_transDeltaBefore）与视觉同步
-      _translationExpandProgress = transExpandTarget;
-    } else {
-      final double transRate = _transCollapsing.isNotEmpty
-          ? _transSwitchRate
-          : (_currentLineIndex >= 0 && _lineHasAuxText(_currentLineIndex)
-                ? _fadeRateForMs(widget.lines[_currentLineIndex].duration)
-                : 14.0);
-      _translationExpandProgress +=
-          (transExpandTarget - _translationExpandProgress) *
-          (1 - math.exp(-transRate * dt));
-      if (_translationExpandProgress < 0.001) _translationExpandProgress = 0;
-    }
+    // 清晰可感知），因此不维护独立的 fade 状态。
+    // **暂停时也指数推进（不再吸附）**：切范围 / 开关切换 / 切行是用户主动
+    // 触发的 UI 过渡而非播放驱动；推进到收敛后 animConverged 成立、Ticker
+    // 自然停止，不会造成持续重绘。
+    _advanceAuxProgress(dt, fastLineSwitch: fastLineSwitch);
 
     // 8. 级联弹簧延迟：检测当前行切换，从限幅后的视口顶部行自上而下错峰牵引
     if (_currentLineIndex >= 0 && _currentLineIndex != _previousLineIndex) {
@@ -2267,18 +2470,13 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
           rate: exitRate,
         );
       }
-      // 新当前行入场：若该行的旧模糊图仍在缓存且几何匹配，重置入场模糊淡出
-      // 进度为 0（叠加显示），随后指数淡出到隐藏——入场也有"模糊层淡出 + 跟随
-      // 放大"的过渡，与离场对称。无可用模糊图（纯文本/LRC 或关闭高斯）则保持隐藏。
-      // 淡出速率按该行歌词时长动态（快歌更快、慢歌最多 1s）。
+      // 新当前行入场模糊层已停用：旧实现会重置入场淡出进度为 0，让该行的
+      // 旧模糊图以满不透明整块叠加在新当前行位置，再指数淡出——表现为切行
+      // 瞬间「整行闪一下」（开启「上方行使用已播颜色」后与周围模糊块对比
+      // 更明显）。置 1.0 = 不显示，新当前行直接以清晰层逐字入场。
+      // _entryBlurRate 保留赋值，便于以后恢复该效果时直接接回推进逻辑。
       _entryBlurRate = _fadeRateForMs(widget.lines[_currentLineIndex].duration);
-      final cacheForCurrent = _lineBlurImages[_currentLineIndex];
-      if (cacheForCurrent != null &&
-          cacheForCurrent.$2.startsWith('${_blurGeometrySig()}|')) {
-        _entryBlurProgress = 0;
-      } else {
-        _entryBlurProgress = 1.0;
-      }
+      _entryBlurProgress = 1.0;
       if (fastLineSwitch) {
         // 快速连切兜底：跳过级联登记（延迟 60~750ms 永远等不到释放），
         // 直接把全部偏移弹簧归零、抵消基准对齐当前位置。
@@ -2556,8 +2754,8 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
         (_blurFade - blurFadeTarget).abs() < 0.001 &&
         _entryBlurProgress >= 0.999 &&
         (_interludeExpandProgress - interludeTarget).abs() < 0.001 &&
-        (_translationExpandProgress - transExpandTarget).abs() < 0.001 &&
-        _transCollapsing.isEmpty;
+        // 逐行副行进度：没有任何行偏离目标即收敛（「所有行」稳态即为空）
+        _auxAnimating.isEmpty;
     // P1-G: perLine 弹簧 / renderer 的收敛检测（各 O(±10 行) 遍历）只在
     // 需要"停 Ticker 决策"时执行：逐字歌词播放中永远不会停（P0-A 排除），
     // 跳过这两个循环；非逐字播放中仅每 200ms 唤醒帧执行一次。
@@ -2594,9 +2792,8 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
         (_entryBlurProgress - _lastRepaintEntryBlur).abs() > 0.001 ||
         (_interludeExpandProgress - _lastRepaintInterludeProgress).abs() >
             0.001 ||
-        (_translationExpandProgress - _lastRepaintTransExpand).abs() > 0.001 ||
-        // 副行收起期间占位高度逐帧变化，需持续重绘
-        _transCollapsing.isNotEmpty ||
+        // 逐行副行进度任一变化（多行同时下行/上行时单值差分不可用，用代次）
+        _auxProgressGeneration != _lastRepaintAuxGeneration ||
         // P1-G: 复用 renderer tick / spring 推进循环的聚合结果，避免二次遍历
         anySpringOffsetChanged ||
         anyRendererAnimating ||
@@ -2610,7 +2807,7 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
       _lastRepaintBlurFade = _blurFade;
       _lastRepaintEntryBlur = _entryBlurProgress;
       _lastRepaintInterludeProgress = _interludeExpandProgress;
-      _lastRepaintTransExpand = _translationExpandProgress;
+      _lastRepaintAuxGeneration = _auxProgressGeneration;
       // P0-1 方案 A：统一走持久化 painter 快路径（repaintNotifier 驱动文字层重绘），
       // 避免每帧 setState + build 重建整个 widget tree（LayoutBuilder/GestureDetector/
       // ShaderMask/模糊层 Stack）。
@@ -2626,9 +2823,11 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
           interludeExpandProgress: _interludeExpandProgress,
           activeInterludeIdx: _activeInterludeIdx,
           lastActiveAnchorIdx: _lastActiveAnchorIdx,
-          transExpandProgress: _translationExpandProgress,
+          auxProgress: _auxProgress,
+          auxTargets: _auxTargets,
+          auxTopsPrefix: _auxTopsPrefix,
+          auxProgressGeneration: _auxProgressGeneration,
           auxSubHeights: _auxSubHeights,
-          transCollapsing: _transCollapsing,
           perLineOffsets: _buildPerLineOffsets(),
           perLineOffsetsGeneration: _perLineOffsetsGeneration,
           perLineScales: _reusedPerLineScales,
@@ -2645,11 +2844,9 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
                         .abs() >
                     0.001 ||
                 // 副行动画期间模糊层位置（含 _transDeltaBefore）需逐帧跟随：
-                // 暂停切翻译开关时 posY 每帧位移低于 0.5px 门限，不跟踪会
-                // 导致模糊层位置滞留、累积越限后跳变（一顿一顿）
-                (_translationExpandProgress - _lastBlurRebuildTransExpand)
-                        .abs() >
-                    0.001 ||
+                // 暂停切翻译开关 / 切范围时 posY 每帧位移低于 0.5px 门限，不
+                // 跟踪会导致模糊层位置滞留、累积越限后跳变（一顿一顿）
+                _auxProgressGeneration != _lastBlurRebuildAuxGeneration ||
                 anySpringOffsetChanged ||
                 // scale 弹簧运动期间每帧重建模糊层，让 k（跟随缩放）实时生效
                 anyScaleChanged)) {
@@ -2658,7 +2855,7 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
           _lastBlurRebuildBlurFade = _blurFade;
           _lastBlurRebuildEntryBlur = _entryBlurProgress;
           _lastBlurRebuildInterludeProgress = _interludeExpandProgress;
-          _lastBlurRebuildTransExpand = _translationExpandProgress;
+          _lastBlurRebuildAuxGeneration = _auxProgressGeneration;
           setState(() {});
         }
       } else {
@@ -2993,15 +3190,18 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
             activeInterludeIdx: _activeInterludeIdx,
             lastActiveAnchorIdx: _lastActiveAnchorIdx,
             interludeExpandProgress: _interludeExpandProgress,
-            transExpandProgress: _translationExpandProgress,
+            auxProgress: _auxProgress,
+            auxTargets: _auxTargets,
+            auxTopsPrefix: _auxTopsPrefix,
+            auxProgressGeneration: _auxProgressGeneration,
             auxSubHeights: _auxSubHeights,
             wrapPlans: _wrapPlans,
             auxPlans: _auxWrapPlans,
-            transCollapsing: _transCollapsing,
             perLineOffsets: _buildPerLineOffsets(),
             blurFade: _blurFade,
             blurActive: useGaussian,
             blurReadyLineIndices: _lineBlurImages.keys,
+            auxBlurReadyLineIndices: _auxBlurImages.keys,
             textColorValue: LyricLayout.textColorValue,
             activeLineColorValue: _activeLineColorValue,
             aboveLineColorValue: _aboveLineColorValue,
@@ -3036,6 +3236,12 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
           _painter!.activeInterludeIdx = _activeInterludeIdx;
           _painter!.lastActiveAnchorIdx = _lastActiveAnchorIdx;
           _painter!.interludeExpandProgress = _interludeExpandProgress;
+          // 逐行副行进度 / 目标 / 前缀和：State 侧可能整体替换实例
+          // （行数变化重建缓冲、前缀和惰性重分配），必须逐次同步引用。
+          _painter!.auxProgress = _auxProgress;
+          _painter!.auxTargets = _auxTargets;
+          _painter!.auxTopsPrefix = _auxTopsPrefix;
+          _painter!.auxProgressGeneration = _auxProgressGeneration;
           // 逐行副行高度随行集/字号/宽度/displayMode 变化（重算中被替换为新列表），
           // 必须在此同步引用，否则换歌/切翻译后 painter 会读旧列表（长度不匹配）
           _painter!.auxSubHeights = _auxSubHeights;
@@ -3048,6 +3254,7 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
           _painter!.blurActive = useGaussian;
           // P2-I：同步已就绪模糊图行索引（live view，map 修改后自动反映最新状态）
           _painter!.blurReadyLineIndices = _lineBlurImages.keys;
+          _painter!.auxBlurReadyLineIndices = _auxBlurImages.keys;
           _painter!.textColorValue = LyricLayout.textColorValue;
           _painter!.activeLineColorValue = _activeLineColorValue;
           _painter!.aboveLineColorValue = _aboveLineColorValue;
@@ -3195,6 +3402,10 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
 
       if (y + geom.blockHeight < 0 || y > viewportHeight) continue;
 
+      // 逐行副行进度 / 预留高度：主行层与副行层的缩放补偿都要用
+      final double auxP = _auxProgressAt(i);
+      final double auxSubH = _auxSubHeightOf(i);
+
       // 模糊图已烘焙"非当前行缩放"（blurRenderScale），这里是 inactiveScale 基准。
       // 让模糊图跟随该行当前的形变 scale 动态缩放：离场行动画期间清晰层从
       // activeScale 平滑缩小到 inactiveScale，模糊图用 Transform 逐帧乘以
@@ -3233,11 +3444,15 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
       // 上方已播行着色：模糊图按主题色烘焙、在合成期用 ColorFilter 整体染色
       // （srcIn 只换 RGB、保留模糊 alpha），因此颜色变化不触发离屏重渲染，
       // 切换开关 / 拖动混色比例都能即时生效。
+      final bool isAbove = i < _currentLineIndex;
+      // 透明度偏好同样在合成期生效：不把偏好写进模糊图缓存签名，
+      // 拖滑块不触发离屏重烘焙，P2-I 的清晰层/模糊层互补关系保持不变。
+      final double prefScale = LyricLayout.blurOpacityScaleFor(isAbove: isAbove);
       final int? blurTintValue = lineColorOverrideValue(
         activeLineColorValue: _activeLineColorValue,
         aboveLineColorValue: _aboveLineColorValue,
         isActive: false,
-        isAboveCurrent: i < _currentLineIndex,
+        isAboveCurrent: isAbove,
       );
       Widget blurImage = RawImage(image: image, fit: BoxFit.fill);
       if (blurTintValue != null) {
@@ -3250,14 +3465,33 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
         );
       }
 
+      // === 缩放中心补偿（主行层） ===
+      //
+      // 清晰层（_LyricsPainter.paint）对**整行**做一次 `canvas.scale`：
+      // pivotY = y + (主行高 + 副行高 × 进度) / 2 —— 副行一展开，这个中心就往下走。
+      // 而模糊层是「主行图 + 副行图」两张图各自绕**自身块中心**缩放。
+      // 两个中心相差 d = pivotClear − pivotBlock，同一内容经缩放后的落点相差
+      // d × (1 − scale)：副行展开（progress=1、scale=0.85、副行高约 30px）时
+      // 主行约 2px、副行约 4px，正是肉眼看到的「清晰字与模糊影上下错开」。
+      //
+      // pivotBlock 是常量、pivotClear 随进度与弹簧 scale 逐帧变化，所以这里逐帧
+      // 求差并折算成**纯位移**补偿：不动烘焙内容、不加缓存键、不触发重烘。
+      // d_main = (主行高 + 副行高×p)/2 − 主行高/2 = 副行高×p/2
+      final double dyMain =
+          LyricLayout.blurPivotShiftMain(
+            auxSubHeight: auxSubH,
+            auxProgress: auxP,
+          ) *
+          (1 - currentScale);
+
       layers.add(
         Positioned(
-          top: y - geom.padding,
+          top: y - geom.padding + dyMain,
           left: 0,
           width: viewportW,
           height: imageHeight,
           child: Opacity(
-            opacity: _blurFade,
+            opacity: _blurFade * prefScale,
             child: Transform.scale(
               scale: k,
               alignment: Alignment(alignX, alignY),
@@ -3266,6 +3500,73 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
           ),
         ),
       );
+
+      // 副行模糊层：独立图，逐帧只算 top / opacity / 位移补偿，**不重烘焙**。
+      // 位置与清晰层 LineRenderer 副行同式：
+      //   offset.dy + mainHeight + transFontSize × 0.3 + subH × (progress - 1)
+      if (auxP > 0.001 && auxSubH > 0) {
+        final auxCached = _auxBlurImages[i];
+        if (auxCached != null) {
+          final ageom = _auxBlurGeometry(i, entry.value);
+          final double mainHeight = i < _lineHeights.length
+              ? _lineHeights[i]
+              : mainLineHeight;
+          final double gap = LyricLayout.auxGap(
+            LyricLayout.fontSize(context),
+          );
+          final double auxTop = y + mainHeight + gap + auxSubH * (auxP - 1.0);
+          final double auxImageHeight = ageom.imageHeight;
+          final double auxK = bakeScale > 0 && auxImageHeight > 0
+              ? currentScale / bakeScale
+              : 1.0;
+          // 缩放中心补偿（副行层）：pivotClear 与副行块中心相差
+          //   d_aux = −(主行高/2 + 形变间隙) + 副行高 × (1 − p)/2
+          // p=1 时退化为 −(主行高/2 + gap)：副行图整体需上移 d×(1−scale)，
+          // 否则副行模糊影会比清晰副行低约 4px（用户实测的主要偏差来源）。
+          final double dyAux =
+              LyricLayout.blurPivotShiftAux(
+                mainHeight: mainHeight,
+                auxSubHeight: auxSubH,
+                auxProgress: auxP,
+                auxGap: gap,
+              ) *
+              (1 - currentScale);
+          final double auxPivotY = ageom.padding + ageom.blockHeight / 2;
+          final double auxAlignY = auxImageHeight > 0
+              ? (auxPivotY / auxImageHeight) * 2 - 1
+              : 0;
+          Widget auxBlurImage = RawImage(
+            image: auxCached.$1,
+            fit: BoxFit.fill,
+          );
+          if (blurTintValue != null) {
+            auxBlurImage = ColorFiltered(
+              colorFilter: ColorFilter.mode(
+                Color(blurTintValue),
+                BlendMode.srcIn,
+              ),
+              child: auxBlurImage,
+            );
+          }
+          layers.add(
+            Positioned(
+              top: auxTop - ageom.padding + dyAux,
+              left: 0,
+              width: viewportW,
+              height: auxImageHeight,
+              // 烘焙 alpha 已是 translationOpacity，这里只叠进度与模糊淡入
+              child: Opacity(
+                opacity: _blurFade * prefScale * auxP,
+                child: Transform.scale(
+                  scale: auxK,
+                  alignment: Alignment(alignX, auxAlignY),
+                  child: auxBlurImage,
+                ),
+              ),
+            ),
+          );
+        }
+      }
     }
 
     // 入场模糊层：新当前行轨道成像后，其旧模糊图短暂保留并淡出（约 1s），
@@ -3312,9 +3613,17 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
                 ? (widgetPivotY / imageHeight) * 2 - 1
                 : 0;
             final double opacity = (1.0 - _entryBlurProgress) * _blurFade;
+            // 缩放中心补偿：入场层同样是「主行图绕块中心缩放 vs 清晰层绕整行
+            // 缩放」，副行已展开时要补同样的 d×(1−scale)。
+            final double edyMain =
+                LyricLayout.blurPivotShiftMain(
+                  auxSubHeight: _auxSubHeightOf(ci),
+                  auxProgress: _auxProgressAt(ci),
+                ) *
+                (1 - currentScale);
             layers.add(
               Positioned(
-                top: y - egeom.padding,
+                top: y - egeom.padding + edyMain,
                 left: 0,
                 width: viewportW,
                 height: imageHeight,
@@ -3377,6 +3686,13 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
           if (mounted) setState(() {});
         }
       });
+
+      // 副行图与主行图同一波次请求：副行进度是逐行动画的，若等「该行开始
+      // 显示副行」才请求，切行瞬间会先看到清晰副行再跳到模糊副行（闪一下）。
+      // 视口内行数有限（约 10 行），预烘焙成本可控。
+      if (_auxSubHeightOf(lineIndex) > 0) {
+        _requestAuxBlur(lineIndex, blurLevel);
+      }
     }
 
     // 清理不再需要的缓存。
@@ -3399,6 +3715,52 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
       _lineBlurImages[key]?.$1.dispose();
       _lineBlurImages.remove(key);
     }
+
+    // 副行图清理：口径与主行图一致（同窗口 + 当前行保留），额外要求该行仍
+    // 有副行预留高度——副行文本被清空（切范围到无副行的歌、切歌）时立即释放。
+    _auxBlurPending.removeWhere((index, _) => !levels.containsKey(index));
+    final auxKeysToRemove = _auxBlurImages.keys.where((k) {
+      if (levels.containsKey(k) && _auxSubHeightOf(k) > 0) return false;
+      if (k == _currentLineIndex &&
+          (_auxBlurImages[k]?.$2.startsWith('$geomSig|') ?? false)) {
+        return false;
+      }
+      return true;
+    }).toList();
+    for (final key in auxKeysToRemove) {
+      _auxBlurImages[key]?.$1.dispose();
+      _auxBlurImages.remove(key);
+    }
+  }
+
+  /// 请求渲染某行的副行模糊图（令牌 / 签名过期保护与主行图完全同构）。
+  void _requestAuxBlur(int lineIndex, int blurLevel) {
+    final String signature = _auxBlurCacheSignature(blurLevel);
+    final cached = _auxBlurImages[lineIndex];
+    if (cached != null && cached.$2 == signature) return;
+    if (_auxBlurPending[lineIndex]?.$2 == signature) return;
+    final token = Object();
+    _auxBlurPending[lineIndex] = (token, signature);
+    (auxBlurRendererForTest ?? _renderAuxBlur)(
+      lineIndex,
+      blurLevel,
+      _duetAlignmentAt(lineIndex),
+    ).then((image) {
+      if (!mounted || _auxBlurPending[lineIndex]?.$1 != token) {
+        image?.dispose();
+        return;
+      }
+      _auxBlurPending.remove(lineIndex);
+      if (_auxBlurCacheSignature(blurLevel) != signature) {
+        image?.dispose();
+        return;
+      }
+      if (image != null) {
+        _auxBlurImages[lineIndex]?.$1.dispose();
+        _auxBlurImages[lineIndex] = (image, signature);
+        if (mounted) setState(() {});
+      }
+    });
   }
 
   /// 获取指定行的对唱对齐方式（越界或未处理时返回默认左对齐）。
@@ -3437,22 +3799,50 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
     );
   }
 
+  /// 副行模糊图几何（渲染与定位共用，口径见 [_blurGeometry]）。
+  ///
+  /// blockHeight 取该行副行预留高度 [_auxSubHeightOf]（含换行行数），**不含**
+  /// 副行进度——进度只影响合成期位置与透明度，因此本几何与 blurLevel 一起
+  /// 构成稳定的缓存键，进度动画期间不会触发重烘焙。
+  ({double sigma, double padding, double blockHeight, double fontSize,
+    double imageHeight}) _auxBlurGeometry(int lineIndex, int blurLevel) {
+    final double sigma = (blurLevel * LyricPreferences.instance.blurIntensity)
+        .clamp(0.5, 10.0);
+    final double fontSize = LyricLayout.fontSize(context);
+    final double blockHeight = _auxSubHeightOf(lineIndex);
+    final double padding = sigma * 3;
+    return (
+      sigma: sigma,
+      padding: padding,
+      blockHeight: blockHeight,
+      fontSize: fontSize,
+      imageHeight: blockHeight + padding * 2,
+    );
+  }
+
   /// 模糊层几何签名（不含 blurLevel）：影响渲染结果的所有输入。
   ///
   /// 必须含 `LyricLayout.lineHeight`：模糊图内文字按 `height: lineHeight` 排版，
   /// 行间距变化若不进签名，旧模糊图会停留在旧行高上（表现为调行间距不刷新）。
+  /// 必须含 `displayMode`：副行模糊图烘焙的是翻译或罗马音之一，切换模式后
+  /// 旧图内容会与新文本不符。
   String _blurGeometrySig() {
     final double fontSize = LyricLayout.fontSize(context);
     return '${fontSize.toStringAsFixed(2)}|${_viewportWidth.toStringAsFixed(2)}'
         '|${widget.enableScale}|${LyricLayout.inactiveScale.toStringAsFixed(4)}'
         '|${LyricLayout.lineHeight.toStringAsFixed(4)}'
         '|${LyricLayout.fontFamily}|${LyricPreferences.instance.blurIntensity.toStringAsFixed(4)}'
-        '|${LyricLayout.fontWeight.value}';
+        '|${LyricLayout.fontWeight.value}'
+        '|${LyricPreferences.instance.displayMode.name}';
   }
 
-  /// 模糊图缓存签名 = 几何签名 + blurLevel。
+  /// 模糊图缓存签名 = 几何签名 + blurLevel（主行）。
   String _blurCacheSignature(int blurLevel) =>
       '${_blurGeometrySig()}|$blurLevel';
+
+  /// 副行模糊图缓存签名：与主行图隔离，避免两类图互相覆盖。
+  String _auxBlurCacheSignature(int blurLevel) =>
+      '${_blurGeometrySig()}|aux|$blurLevel';
 
   /// 异步渲染单行模糊图片。
   ///
@@ -3493,7 +3883,7 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
             LyricLayout.textRed,
             LyricLayout.textGreen,
             LyricLayout.textBlue,
-            0.5,
+            LyricLayout.blurBakedAlpha,
           ),
           fontSize: fontSize,
           height: LyricLayout.lineHeight,
@@ -3576,6 +3966,125 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
         renderHeight.round(),
       );
       // toImage 经 native 回调栅格化，future 完成后 Picture 不再被引用，此刻释放才安全。
+      picture.dispose();
+      return image;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 异步渲染单行**副行**模糊图片。
+  ///
+  /// 与 [_renderLineBlur] 同一套烘焙约定（sigma / padding / pivot+scale / 尺寸取整），
+  /// 差别只有三处：内容取该行副行文本（翻译或罗马音，按 `displayMode`）、
+  /// 字号取 `LyricLayout.translationFontSize`、行距取 `translationLineHeight`。
+  ///
+  /// 对齐用 [TextPainter.textAlign] + 「左右各留 1em」的布局宽度实现：该区间的
+  /// 左缘 / 中心 / 右缘恰好等于清晰层副行的 `_alignX` 三个落点，无需逐行
+  /// 复刻多行拆分（副行本来就按 wrap plan 的硬断点排版，行数两边一致）。
+  Future<ui.Image?> _renderAuxBlur(
+    int lineIndex,
+    int blurLevel,
+    DuetAlignment alignment,
+  ) async {
+    try {
+      if (_viewportWidth <= 0) return null;
+      if (lineIndex < 0 || lineIndex >= _cleanedLines.length) return null;
+      final geom = _auxBlurGeometry(lineIndex, blurLevel);
+      if (geom.blockHeight <= 0) return null;
+
+      final double sigma = geom.sigma;
+      final double padding = geom.padding;
+      final double fontSize = geom.fontSize;
+      final double renderHeight = geom.imageHeight;
+      final double leftPadding = fontSize;
+      final double maxTextWidth = _viewportWidth - fontSize * 2;
+
+      final LyricLine line = _cleanedLines[lineIndex];
+      final String? auxText =
+          LyricPreferences.instance.displayMode == LyricDisplayMode.roma
+          ? line.roma
+          : line.translation;
+      if (auxText == null || auxText.isEmpty) return null;
+
+      // 与清晰层副行同一份换行计划（含硬断点），保证「画几行 == 预留几行」
+      final LyricWrapPlan auxPlan = lineIndex < _auxWrapPlans.length
+          ? _auxWrapPlans[lineIndex]
+          : LyricWrapPlanner.forText(
+              auxText,
+              LyricLayout.auxStyle(fontSize),
+              maxTextWidth,
+              balanced: LyricPreferences.instance.lineBalance,
+            );
+
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder);
+
+      final textPainter = TextPainter(
+        textAlign: alignment == DuetAlignment.right
+            ? TextAlign.right
+            : alignment == DuetAlignment.center
+            ? TextAlign.center
+            : TextAlign.left,
+        textDirection: TextDirection.ltr,
+      );
+      textPainter.text = TextSpan(
+        text: auxPlan.rowTexts.join('\n'),
+        style: TextStyle(
+          // 烘焙 alpha = 主行烘焙值 × 副行相对亮度（0.25）。行/帧级别的淡出与
+          // 用户透明度偏好都由合成期 Opacity 承担，于是进度动画与拖滑块都不
+          // 触发重烘焙。
+          color: Color.fromRGBO(
+            LyricLayout.textRed,
+            LyricLayout.textGreen,
+            LyricLayout.textBlue,
+            LyricLayout.blurAuxBakedAlpha,
+          ),
+          fontSize: LyricLayout.translationFontSize(fontSize),
+          height: LyricLayout.translationLineHeight,
+          fontFamily: LyricLayout.fontFamily,
+          fontWeight: LyricLayout.fontWeight,
+        ),
+      );
+      textPainter.layout(maxWidth: maxTextWidth);
+
+      final blurPaint = Paint()
+        ..imageFilter = ui.ImageFilter.blur(
+          sigmaX: tvBlurSigma(sigma),
+          sigmaY: tvBlurSigma(sigma),
+        );
+      canvas.saveLayer(
+        Rect.fromLTWH(0, 0, _viewportWidth, renderHeight),
+        blurPaint,
+      );
+
+      final double blurScale = LyricLayout.blurRenderScale(
+        enableScale: widget.enableScale,
+      );
+      final double pivotX = alignment == DuetAlignment.right
+          ? _viewportWidth - leftPadding
+          : alignment == DuetAlignment.center
+          ? _viewportWidth / 2
+          : leftPadding;
+      // 与主行图同款：pivot 取副行块中心（烘焙空间），合成期 Transform 的
+      // alignment 也按同一局部坐标给，两层缩放行为一致。
+      final double pivotY = padding + geom.blockHeight / 2;
+      canvas.save();
+      canvas.translate(pivotX, pivotY);
+      canvas.scale(blurScale, blurScale);
+      canvas.translate(-pivotX, -pivotY);
+      canvas.save();
+      canvas.translate(leftPadding, padding);
+      textPainter.paint(canvas, Offset.zero);
+      canvas.restore();
+      canvas.restore();
+      canvas.restore();
+
+      final picture = recorder.endRecording();
+      final image = await picture.toImage(
+        _viewportWidth.round(),
+        renderHeight.round(),
+      );
       picture.dispose();
       return image;
     } catch (_) {
@@ -3692,16 +4201,23 @@ class _LyricsPainter extends CustomPainter {
   int lastActiveAnchorIdx;
   double interludeExpandProgress;
 
-  /// 翻译副行动画：当前行展开进度（0→1）/ 逐行副行预留高度（含过长换行，
-  /// 索引与 lines 对齐）/ 收起中的行
-  /// （索引 → 收起进度，live 引用，State 侧原地更新，与 blurReadyLineIndices 同模式）。
-  double transExpandProgress;
+  /// 副行动画（逐行）：展开进度 / 目标 / 上方高度前缀和 / 进度代次。
+  ///
+  /// 三者都是 State 侧的 live 引用（State 可能整体替换实例，构建与
+  /// [updatePerFrame] 都会同步），与 [blurReadyLineIndices] 同模式。
+  /// 语义必须与 `_LyricsPainter` 之外的 State 侧实现**逐字对应**：
+  /// 高度模型、前缀和口径任一岔开都会让清晰层与模糊层错位（本仓重叠教训）。
+  List<double> auxProgress;
+  List<double> auxTargets;
+  List<double> auxTopsPrefix;
+  int auxProgressGeneration;
+
+  /// 逐行副行预留高度（含过长换行，索引与 lines 对齐）。
   List<double> auxSubHeights;
 
   /// 每行主歌词 / 副行的换行计划（由 State 统一生产，索引与 lines 对齐）。
   List<LyricWrapPlan> wrapPlans;
   List<LyricWrapPlan> auxPlans;
-  Map<int, double> transCollapsing;
   List<double> perLineOffsets;
   double blurFade;
   bool blurActive;
@@ -3709,6 +4225,11 @@ class _LyricsPainter extends CustomPainter {
   // 当 blurActive && blurFade > 0.99 时，非当前行文字 alpha≈0（不可见），
   // 若该行模糊图已就绪则跳过文字层绘制——模糊层已覆盖显示。
   Iterable<int> blurReadyLineIndices;
+  /// 已就绪的**副行**模糊图行索引集合（live view，零分配）。
+  ///
+  /// 跳过清晰层的条件必须同时看它：该行有可见副行时，若只等主行图就绪就跳过，
+  /// 副行会在模糊层接管后整体消失（「所有行」下几乎每行都有副行）。
+  Iterable<int> auxBlurReadyLineIndices;
   int textColorValue;
   int? activeLineColorValue;
 
@@ -3745,15 +4266,18 @@ class _LyricsPainter extends CustomPainter {
     required this.activeInterludeIdx,
     required this.lastActiveAnchorIdx,
     required this.interludeExpandProgress,
-    required this.transExpandProgress,
+    required this.auxProgress,
+    required this.auxTargets,
+    required this.auxTopsPrefix,
+    required this.auxProgressGeneration,
     required this.auxSubHeights,
     required this.wrapPlans,
     required this.auxPlans,
-    required this.transCollapsing,
     required this.perLineOffsets,
     required this.blurFade,
     required this.blurActive,
     this.blurReadyLineIndices = const <int>[],
+    this.auxBlurReadyLineIndices = const <int>[],
     required this.textColorValue,
     required this.activeLineColorValue,
     required this.aboveLineColorValue,
@@ -3773,9 +4297,11 @@ class _LyricsPainter extends CustomPainter {
     required double interludeExpandProgress,
     required int activeInterludeIdx,
     required int lastActiveAnchorIdx,
-    required double transExpandProgress,
+    required List<double> auxProgress,
+    required List<double> auxTargets,
+    required List<double> auxTopsPrefix,
+    required int auxProgressGeneration,
     required List<double> auxSubHeights,
-    required Map<int, double> transCollapsing,
     required List<double> perLineOffsets,
     required int perLineOffsetsGeneration,
     required List<double> perLineScales,
@@ -3787,9 +4313,11 @@ class _LyricsPainter extends CustomPainter {
     this.interludeExpandProgress = interludeExpandProgress;
     this.activeInterludeIdx = activeInterludeIdx;
     this.lastActiveAnchorIdx = lastActiveAnchorIdx;
-    this.transExpandProgress = transExpandProgress;
+    this.auxProgress = auxProgress;
+    this.auxTargets = auxTargets;
+    this.auxTopsPrefix = auxTopsPrefix;
+    this.auxProgressGeneration = auxProgressGeneration;
     this.auxSubHeights = auxSubHeights;
-    this.transCollapsing = transCollapsing;
     this.perLineOffsets = perLineOffsets;
     this.perLineOffsetsGeneration = perLineOffsetsGeneration;
     this.perLineScales = perLineScales;
@@ -3805,47 +4333,27 @@ class _LyricsPainter extends CustomPainter {
   double _topOf(int i) =>
       i < lineTops.length ? lineTops[i] : i * mainLineHeight;
 
-  /// 指定行是否有副行文本（与 State._lineHasAuxText 同口径；
-  /// lines 即 _cleanedLines）。
-  bool _lineHasAuxText(int i) {
-    if (i < 0 || i >= lines.length) return false;
-    final line = lines[i];
-    final String? aux =
-        LyricPreferences.instance.displayMode == LyricDisplayMode.roma
-        ? line.roma
-        : line.translation;
-    return aux != null && aux.isNotEmpty;
-  }
-
   /// 第 i 行的副行预留高度（与 State._auxSubHeightOf 同口径，含换行行数）。
   double _auxSubHeightOf(int i) =>
       (i >= 0 && i < auxSubHeights.length) ? auxSubHeights[i] : 0;
 
-  /// 第 i 行副行动画额外高度（与 State._transExtraHeightFor 同口径）：
-  /// 当前行跟随展开进度增长，收起表中的行随收起进度回落，且各自使用
-  /// **该行自身的**副行预留高度（含换行），换行副行不会与下一行重叠。
-  /// 不读 showTranslation 短路（关闭翻译时进度衰减到 0，高度平滑收起）。
-  double _transExtra(int i) {
-    if (i == currentLineIndex && _lineHasAuxText(i)) {
-      return _auxSubHeightOf(i) * transExpandProgress;
-    }
-    final double? c = transCollapsing[i];
-    return c == null ? 0 : _auxSubHeightOf(i) * (1.0 - c);
-  }
+  /// 第 i 行的副行当前进度（越界 → 0，与 State._auxProgressAt 同口径）。
+  double _auxProgressAt(int i) =>
+      (i >= 0 && i < auxProgress.length) ? auxProgress[i] : 0.0;
+
+  /// 第 i 行副行动画额外高度（与 State._transExtraHeightFor **逐字同式**）：
+  /// 该行自身的副行预留高度（含换行行数）× 该行当前进度。
+  /// 不读 showTranslation 短路（关闭副行时进度衰减到 0，高度平滑收起）。
+  double _transExtra(int i) => _auxSubHeightOf(i) * _auxProgressAt(i);
 
   /// 第 i 行上方副行动画高度之和（与 State._transDeltaBefore 同口径），
   /// 叠加到行 top 消费点（主绘制循环 / 二分查找 / 间奏锚点）。
+  /// 读 State 维护的前缀和（live 引用），O(1)。
   double _transDeltaBefore(int i) {
-    double d = 0;
-    if (currentLineIndex >= 0 &&
-        currentLineIndex < i &&
-        _lineHasAuxText(currentLineIndex)) {
-      d += _auxSubHeightOf(currentLineIndex) * transExpandProgress;
-    }
-    transCollapsing.forEach((k, v) {
-      if (k < i) d += _auxSubHeightOf(k) * (1.0 - v);
-    });
-    return d;
+    if (i <= 0) return 0;
+    final int last = auxTopsPrefix.length - 1;
+    if (last <= 0) return 0;
+    return auxTopsPrefix[i < last ? i : last];
   }
 
   /// 计算指定行索引上方激活间奏的占位高度。
@@ -3922,12 +4430,14 @@ class _LyricsPainter extends CustomPainter {
       //   未就绪时仍绘制文字层，避免 blurFade 刚跨过 0.99 但模糊图尚未到位时出现空缺
       // - !isExitFading：刚退场的行正在做清晰层淡出（与模糊图重叠），
       //   此时跳过绘制会让淡出失效、退回硬切
-      // - !transCollapsing.containsKey(i)：该行副行正在收起，收起中的副行
-      //   由清晰层绘制；主文字淡出完成后若被模糊层接管跳过，副行会中途消失
+      // - 该行的模糊图（主行 + 副行）都已就绪：副行也要由模糊层接管，
+      //   否则跳过清晰层会让副行整体消失（「所有行」下几乎每行都有副行）
+      final bool auxBlurReady =
+          _auxProgressAt(i) <= 0.001 || auxBlurReadyLineIndices.contains(i);
       if (blurActive &&
           blurFade > 0.99 &&
           !isActive &&
-          !transCollapsing.containsKey(i) &&
+          auxBlurReady &&
           blurReadyLineIndices.contains(i) &&
           !(lineRenderers[i]?.isExitFading ?? false)) {
         continue;
@@ -3936,7 +4446,7 @@ class _LyricsPainter extends CustomPainter {
       // 形变 scale 与 alpha scale 分开取：
       // - 形变（canvas.scale）用弹簧值，切行时产生 0.850→1.0 的弹性放大；
       // - alpha 用稳态值（当前行恒为 activeScale），使 factor=1、
-      //   dynamicDarkAlpha=0.4 —— 新当前行从 0.4 起淡入，而不是被弹簧
+      //   默认 unplayedOpacity=0.4 —— 新当前行从 0.4 起淡入，而不是被弹簧
       //   在起点处压到 0.2 再慢慢亮起来。
       // 与 _onTick 步骤 4 传给 renderer 的 scale 口径保持一致。
       // 形变 scale 用每行自己的弹簧位置（perLineScales），这样离场行从 1.0
@@ -3990,6 +4500,12 @@ class _LyricsPainter extends CustomPainter {
       if (useWordRenderer) {
         // 逐字模式：当前行的 KRC 行
         final renderer = wordRenderers[i] ?? WordRenderer();
+        // 副行进度按**绘制行号**注入（不走 _onTick 的 ±overscan 窗口）：
+        // 逐行进度下任意行都可能有副行，窗口外行若残留旧值会画出幽灵副行。
+        final double auxP = _auxProgressAt(i);
+        renderer.translationExpand = auxP;
+        renderer.translationFade = auxP;
+        renderer.translationExiting = false;
         renderer.setLineState(
           isActive: true,
           scale: alphaScale,
@@ -4011,12 +4527,23 @@ class _LyricsPainter extends CustomPainter {
       } else {
         // 整行模式：LRC/纯文本行 + 非当前行的 KRC 行
         final renderer = lineRenderers[i] ?? LineRenderer();
+        // 副行进度按绘制行号注入（理由同上）。方向标记按「目标 < 当前」判定：
+        // 下行 = 出场（绕顶边向上翻走），上行 = 入场（绕底边从下翻出）。
+        final double auxP = _auxProgressAt(i);
+        final double auxT = (i >= 0 && i < auxTargets.length)
+            ? auxTargets[i]
+            : 0.0;
+        renderer.translationExpand = auxP;
+        renderer.translationFade = auxP;
+        renderer.translationExiting = auxT < auxP - 1e-4;
         renderer.setLineState(
           isActive: isActive,
           scale: alphaScale,
           blurFade: blurFade,
           blurActive: blurActive,
           activeColorValue: lineColorValue,
+          // 与 _onTick 同一口径：仅上方行且确有已播色时提高清晰层 alpha。
+          isAboveCurrent: aboveLineColorValue != null && i < currentLineIndex,
         );
         renderer.paintLine(
           canvas,

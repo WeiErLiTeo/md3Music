@@ -324,4 +324,49 @@ void main() {
       expect(prefs.getDouble('lyric_interlude_dot_spacing'), isNull);
     });
   });
+
+  /// 已播 / 未播歌词透明度：满 factor 目标 alpha，默认复刻历史观感。
+  group('⑨ 已播 / 未播歌词透明度 playedOpacity / unplayedOpacity', () {
+    test('默认值为 100% / 40%，范围为 0~100%', () {
+      expect(LyricPreferences.instance.playedOpacity, 1.0);
+      expect(LyricPreferences.instance.unplayedOpacity, 0.4);
+      expect(LyricPreferences.minPlayedOpacityForCurrentPlatform, 0.0);
+      expect(LyricPreferences.maxPlayedOpacityForCurrentPlatform, 1.0);
+      expect(LyricPreferences.minUnplayedOpacityForCurrentPlatform, 0.0);
+      expect(LyricPreferences.maxUnplayedOpacityForCurrentPlatform, 1.0);
+    });
+
+    test('setter 生效并 clamp 到 [0, 1]', () async {
+      await LyricPreferences.instance.setPlayedOpacity(0.37);
+      expect(LyricPreferences.instance.playedOpacity, closeTo(0.37, 1e-9));
+      await LyricPreferences.instance.setPlayedOpacity(999);
+      expect(LyricPreferences.instance.playedOpacity, 1.0);
+      await LyricPreferences.instance.setPlayedOpacity(-5);
+      expect(LyricPreferences.instance.playedOpacity, 0.0);
+
+      await LyricPreferences.instance.setUnplayedOpacity(-5);
+      expect(LyricPreferences.instance.unplayedOpacity, 0.0);
+      await LyricPreferences.instance.setUnplayedOpacity(999);
+      expect(LyricPreferences.instance.unplayedOpacity, 1.0);
+    });
+
+    test('持久化到 lyric_played_opacity / lyric_unplayed_opacity', () async {
+      await LyricPreferences.instance.setPlayedOpacity(0.37);
+      await LyricPreferences.instance.setUnplayedOpacity(0.62);
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getDouble('lyric_played_opacity'), closeTo(0.37, 1e-9));
+      expect(prefs.getDouble('lyric_unplayed_opacity'), closeTo(0.62, 1e-9));
+    });
+
+    test('reset 后回到默认值且 key 被移除', () async {
+      await LyricPreferences.instance.setPlayedOpacity(0.37);
+      await LyricPreferences.instance.setUnplayedOpacity(0.62);
+      await LyricPreferences.instance.reset();
+      expect(LyricPreferences.instance.playedOpacity, 1.0);
+      expect(LyricPreferences.instance.unplayedOpacity, 0.4);
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getDouble('lyric_played_opacity'), isNull);
+      expect(prefs.getDouble('lyric_unplayed_opacity'), isNull);
+    });
+  });
 }

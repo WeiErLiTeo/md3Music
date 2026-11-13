@@ -1973,9 +1973,27 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
     /// 仅更新媒体3会话稳定标题/艺术家（不重压缩封面）。
     public static void updateActiveSessionTitleArtist(
             String expectedMediaId, long generation, String title, String artist) {
+        updateActiveSessionTitleArtist(expectedMediaId, generation, title, artist,
+                /* prewrite= */ false);
+    }
+
+    /// MD3Music fork v67：prewrite=true 的先行变体——切歌瞬间新歌 metadata 早于
+    /// setUrl 到达（item 还是上一首），宽松 item 身份校验、仅保留 generation 守卫，
+    /// 让车机/岛在切歌当场看到新歌名（此前先行总被身份校验挡掉 → 车机"很久才
+    /// 切换、一直显示上一首"）。写进旧 item 的标题会在 setUrl 后由 Dart MediaItem
+    /// 覆盖；解析失败时由自愈推送纠正。
+    public static void prewriteActiveSessionTitleArtist(
+            String expectedMediaId, long generation, String title, String artist) {
+        updateActiveSessionTitleArtist(expectedMediaId, generation, title, artist,
+                /* prewrite= */ true);
+    }
+
+    private static void updateActiveSessionTitleArtist(
+            String expectedMediaId, long generation, String title, String artist,
+            boolean prewrite) {
         AudioPlayer p = sActivePlayer;
         if (p != null) {
-            p.applySessionTitleArtist(expectedMediaId, generation, title, artist);
+            p.applySessionTitleArtist(expectedMediaId, generation, title, artist, prewrite);
             // v43（审查 P1）：活跃播放器已存在，任何滞留 pending 都是陈旧的——清。
             sPendingMetadata = null;
         } else {
@@ -2021,13 +2039,22 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
             final long generation,
             final String title,
             final String artist) {
+        applySessionTitleArtist(expectedMediaId, generation, title, artist, false);
+    }
+
+    private void applySessionTitleArtist(
+            final String expectedMediaId,
+            final long generation,
+            final String title,
+            final String artist,
+            final boolean prewrite) {
         try {
             final androidx.media3.common.Player p = player;
             if (p == null) return;
             Handler handler = new Handler(p.getApplicationLooper());
             if (!registerExternalMetadataGeneration(generation)) return;
             handler.post(() ->
-                    doApplySessionTitleArtist(expectedMediaId, generation, title, artist));
+                    doApplySessionTitleArtist(expectedMediaId, generation, title, artist, prewrite));
         } catch (Exception e) {
             Log.w("AudioFocusFork", "applySessionTitleArtist dispatch failed: " + e);
         }
@@ -2036,11 +2063,20 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
     /// 在 player 线程只更新 Title/Artist；与现有值相同则跳过，避免无谓的 MediaItem 替换事件。
     private void doApplySessionTitleArtist(
             String expectedMediaId, long generation, String title, String artist) {
+        doApplySessionTitleArtist(expectedMediaId, generation, title, artist, false);
+    }
+
+    private void doApplySessionTitleArtist(
+            String expectedMediaId, long generation, String title, String artist,
+            boolean prewrite) {
         try {
             if (!isExternalMetadataGenerationCurrent(generation)) return;
             MediaItem cur = player.getCurrentMediaItem();
             if (cur == null) return;
-            if (!matchesExpectedMediaItem(cur, expectedMediaId, title, artist)) {
+            // v67：prewrite（切歌先行）只认 generation 守卫——切歌瞬间 item 还是
+            // 上一首，严格身份比对会把新歌标题当"不匹配数据"丢弃（车机因此
+            // "很久才切换、一直显示上一首"）。常规路径保持严格校验。
+            if (!prewrite && !matchesExpectedMediaItem(cur, expectedMediaId, title, artist)) {
                 logDiscardedIdentity("title/artist", cur, expectedMediaId);
                 return;
             }
@@ -2051,6 +2087,20 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
             MediaMetadata.Builder mb = m.buildUpon();
             if (title != null && !title.isEmpty()) mb.setTitle(title);
             if (artist != null && !artist.isEmpty()) mb.setArtist(artist);
+            // MD3Music fork v66：先行的轻量 metadata 不得携带上一首的歌词键。
+            // 车机（JoviInCar）读 extras 的 ucar 整段 LRC 自行滚动——若保留旧词，
+            // 中间态会呈现"新歌标题 + 旧歌歌词"的错位（真机：歌词与声音不同步
+            // 复发，伴随换源重试时中间态被拉长）。此处仅在标题/艺术家变化（=切歌
+            // 先行）时执行（相同则上面已早退）；清键后由歌词就绪路径
+            // doApplySessionTitleArtistAndLyricInfo 按新曲补回。移除键 ≠ 写负
+            // 状态，不触发车机"负状态永久单行"铁律。
+            android.os.Bundle extras = m.extras != null
+                    ? new android.os.Bundle(m.extras)
+                    : new android.os.Bundle();
+            extras.remove(SESSION_LYRIC_INFO_KEY);
+            extras.remove(UCAR_LYRICS_WHOLE);
+            extras.remove(UCAR_LYRICS_STATUS);
+            mb.setExtras(extras);
             player.replaceMediaItem(
                     player.getCurrentMediaItemIndex(),
                     cur.buildUpon().setMediaMetadata(mb.build()).build());

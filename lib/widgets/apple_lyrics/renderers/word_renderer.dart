@@ -557,27 +557,19 @@ class WordRenderer {
     double dark,
   ) => _alphaAtX(x, start, span, bright, dark);
 
-  /// 当前 scale 对应的 factor（0~1）。
-  ///
-  /// 公式：`factor = clamp01((scale - inactiveScale) / (activeScale - inactiveScale))`
-  /// 当 inactiveScale == activeScale（如 Windows 便携版默认关闭缩放）时分母为 0，
-  /// 退化为 1.0（所有行等大，按当前行观感处理）。
-  double get factor {
-    final denom = LyricLayout.activeScale - LyricLayout.inactiveScale;
-    if (denom.abs() < 1e-9) return 1.0;
-    final raw = (_scale - LyricLayout.inactiveScale) / denom;
-    return raw.clamp(0.0, 1.0).toDouble();
-  }
+  /// 当前 scale 对应的 factor（0~1），口径统一由 [LyricLayout.factorFor] 提供。
+  /// 分母为 0（inactiveScale == activeScale）时退化为 1.0。
+  double get factor => LyricLayout.factorFor(_scale);
 
   /// 动态暗态 alpha（未播字 / 非当前行 SOLID）。
   ///
-  /// 公式：`dynamicDarkAlpha = factor * 0.2 + 0.2`，范围 0.2~0.4。
-  double get dynamicDarkAlpha => factor * 0.2 + 0.2;
+  /// 由「未播歌词透明度」调节；默认值下恒等于原 `factor * 0.2 + 0.2`。
+  double get dynamicDarkAlpha => LyricLayout.darkAlphaFor(factor);
 
   /// 动态亮态 alpha（已播字 / 当前字目标）。
   ///
-  /// 公式：`dynamicBrightAlpha = factor * 0.8 + 0.2`，范围 0.2~1.0。
-  double get dynamicBrightAlpha => factor * 0.8 + 0.2;
+  /// 由「已播歌词透明度」调节；默认值下恒等于原 `factor * 0.8 + 0.2`。
+  double get dynamicBrightAlpha => LyricLayout.brightAlphaFor(factor);
 
   /// 当前是否为当前行。
   bool get isActive => _isActive;
@@ -1356,7 +1348,9 @@ class WordRenderer {
 
     // 辅助副行（翻译或罗马音）：WordRenderer 仅在当前行（KRC）被调用，故无需再判 _isActive。
     // 根据 displayMode 选择显示 translation 还是 roma。
-    // 副行字号为主行 70%；alpha = translationOpacity × translationFade（渐显渐隐），
+    // 副行字号为主行 70%；alpha = 主行亮态 alpha × translationOpacity × 进度。
+    // WordRenderer 只服务当前行，其满亮档位就是 playedOpacity（factor 恒 1），
+    // 乘上去才能让「已播歌词透明度」同时作用于副行（旧实现固定 0.5，副行不跟随）。
     // 位置随 translationExpand 从主行底平滑浮出（占位高度由动画进度动态叠加）。
     // **不读 showTranslation 做立即短路**：关闭翻译时注入进度衰减到 0、
     // alpha 平滑渐隐至消失——若在此短路，关闭瞬间副行直接消失无动画。
@@ -1364,7 +1358,10 @@ class WordRenderer {
         LyricPreferences.instance.displayMode == LyricDisplayMode.roma
         ? line.roma
         : line.translation;
-    final double transAlpha = LyricLayout.translationOpacity * translationFade;
+    final double transAlpha =
+        LyricLayout.playedOpacity *
+        LyricLayout.translationOpacity *
+        translationFade;
     if (transAlpha > 0.001 && auxText != null && auxText.isNotEmpty) {
       final transFontSize = LyricLayout.translationFontSize(fontSize);
       // currentY 是循环结束后的最后视觉行 Y。

@@ -6,10 +6,12 @@
 /// - hasWordTiming=true 的非当前行（KRC）：用本类降级渲染（性能优化）
 ///
 /// 渲染规则：
-/// - 当前行（isActive）：整行 alpha = dynamicBrightAlpha（随 scale 0.2~1.0）
-/// - 非当前行：整行 alpha = dynamicDarkAlpha（随 scale 0.2~0.4，SOLID 模式）
+/// - 当前行（isActive）：整行 alpha = dynamicBrightAlpha（默认随 scale 0.2~1.0）
+/// - 非当前行：整行 alpha = dynamicDarkAlpha（默认随 scale 0.2~0.4，SOLID 模式）
 /// - 行内无 mask 渐变，整行使用同一 alpha
 /// - 行切换通过指数衰减实现淡入淡出过渡（变亮 ATTACK_SPEED=50，变暗 RELEASE_SPEED=7）
+///
+/// 两档满 factor 目标分别由「已播歌词透明度」/「未播歌词透明度」调节。
 ///
 /// 与 [WordRenderer] 的关系：
 /// - [WordRenderer] 处理当前行 + hasWordTiming=true 的逐字模式（有 mask 渐变 + 上浮）
@@ -44,11 +46,22 @@ class LineRenderer {
   /// 当前是否为当前行（高亮）。默认 false（SOLID 暗态）。
   bool _isActive = false;
 
-  /// 当前整行 alpha 值。初始 [LyricLayout.currentDarkAlpha]=0.2（SOLID 非当前行暗态）。
-  double _currentAlpha = LyricLayout.currentDarkAlpha;
+  /// 当前整行 alpha 值。初始为暗态渐隐基线（默认 0.2，随偏好变化）。
+  double _currentAlpha = LyricLayout.darkAlphaFor(0.0);
 
-  /// 目标 alpha 值。isActive=true 时 1.0，false 时 0.2。
-  double _targetAlpha = LyricLayout.currentDarkAlpha;
+  /// 目标 alpha 值。默认 isActive=true 时 1.0，false 时 0.2。
+  double _targetAlpha = LyricLayout.darkAlphaFor(0.0);
+
+  /// 该行的**档位 alpha**（不含模糊淡出、不含退场淡出）。
+  ///
+  /// 由「当前行亮态 / 未播暗态 / 上方已播行」三个档位之一决定，反映用户在
+  /// 「已播 / 未播歌词透明度」里的设置。副行 alpha 以它为基准（乘
+  /// [LyricLayout.translationOpacity]），于是调透明度滑块时副行跟着变。
+  ///
+  /// 刻意不用 [_currentAlpha]：那个值含 `(1 - blurFade)`，而副行模糊图是异步
+  /// 烘焙的，就绪前需要清晰层单独撑住副行；若副行也乘模糊淡出，切行瞬间会
+  /// 「整行闪空」。
+  double _auxBaseAlpha = LyricLayout.darkAlphaFor(0.0);
 
   /// v3 优化：alpha 是否已收敛到 target（最近一次 tick 中 alpha 变化 < 1e-6）。
   /// 用于 AppleLyricsView 判断是否可以停止 Ticker。
@@ -108,24 +121,25 @@ class LineRenderer {
 
   /// 翻译副行展开进度（0→1 副行"长出"，1→0 收回）。由 AppleLyricsView 注入。
   ///
-  /// - 当前行（LRC/纯文本整行模式）：跟随全局展开进度，与 WordRenderer
-  ///   （KRC 当前行）一致的长出动画；
-  /// - 收起中的退场行：注入 1 - 收起进度，副行从当前位置平滑缩回主行底。
-  /// 默认 0：非当前行且未注入时副行位于隐藏位（配合 fade=0 不绘制）。
+  /// 逐行注入：无论当前行、未播行还是退场的已播行，都取该行自己的进度
+  /// （`AppleLyricsView._auxProgress[i]`）。「副行显示范围」为「所有行」时，
+  /// 视口内每一行都会拿到非 0 值；「已播行除外」时已播行的进度会平滑回落到 0。
+  /// 默认 0：未注入时副行位于隐藏位（配合 fade=0 不绘制）。
   double translationExpand = 0.0;
 
   /// 翻译副行显隐 alpha 进度（0→1 渐显，1→0 渐隐）。由 AppleLyricsView 注入。
   ///
-  /// 当前实现与 [translationExpand] 同值注入（alpha 与位置同进度，
-  /// 淡入淡出贯穿整个过渡时长，速率随行时长自适应）。
+  /// 与 [translationExpand] 同值注入（alpha 与位置同进度，淡入淡出贯穿整个
+  /// 过渡时长，速率随行时长自适应）。
   double translationFade = 0.0;
 
-  /// 副行是否处于**出场**阶段（收起中的退场行）。由 AppleLyricsView 注入。
+  /// 副行是否处于**出场**阶段（进度正在下降的行）。由 AppleLyricsView 注入。
   ///
   /// 决定翻转绕哪条锚线、往哪个方向转（见 [LyricLayout.sublineFlipAngle]）：
-  /// - false（当前行 / 入场）：绕副行底边，从下翻转出现；
-  /// - true（收起中的退场行 / 出场）：绕副行顶边，向上翻转消失。
-  /// 默认 false：非当前行且未注入时副行 alpha 为 0，方向无意义。
+  /// - false（进度上升 / 静止）：绕副行底边，从下翻转出现；
+  /// - true（进度下降）：绕副行顶边，向上翻转消失。
+  /// 判据是「该行目标 < 当前进度」，因此「已播行除外」下每切一句，上一行的
+  /// 副行都会走一次出场翻转。
   bool translationExiting = false;
 
   /// v4 优化：上次 set text + layout 时的 alpha。
@@ -191,6 +205,12 @@ class LineRenderer {
   double _lastBlurFade = double.nan;
   bool _lastBlurActive = false;
   int? _lastActiveColorValue;
+  // 透明度偏好也参与早退判定：稳态下拖滑块改变偏好时必须重算 targetAlpha，
+  // 否则 5 个原始输入全等会持续早退，用户看不到任何变化。
+  double _lastPlayedOpacity = -1;
+  double _lastUnplayedOpacity = -1;
+  // 上方已播行使用独立 alpha（见 LyricLayout.aboveLineAlpha），同样参与早退判定
+  bool _lastIsAboveCurrent = false;
 
   // ============== 状态查询 ==============
 
@@ -213,6 +233,12 @@ class LineRenderer {
   /// 目标 alpha（用于测试断言）。
   @visibleForTesting
   double get targetAlpha => _targetAlpha;
+
+  /// 该行的档位 alpha（不含模糊淡出 / 退场淡出）。
+  ///
+  /// 副行 alpha = 本值 × `translationOpacity` × 副行进度。用于断言
+  /// 「拖动已播 / 未播歌词透明度时副行跟随」（旧实现固定 0.5，不跟随）。
+  double get auxBaseAlpha => _auxBaseAlpha;
 
   /// 最近一次绘制实际解析出的文字颜色 ARGB（用于颜色回归断言）。
   ///
@@ -239,13 +265,19 @@ class LineRenderer {
     double blurFade = 1.0,
     bool blurActive = true,
     int? activeColorValue,
+    bool isAboveCurrent = false,
   }) {
-    // 输入缓存早退：稳态下 5 个输入全相等 → 跳过 dynamic 公式重算与 target 比较
+    // 输入缓存早退：稳态下 8 个输入全相等 → 跳过 alpha 公式重算与 target 比较
+    final double playedOpacity = LyricPreferences.instance.playedOpacity;
+    final double unplayedOpacity = LyricPreferences.instance.unplayedOpacity;
     if (isActive == _lastIsActive &&
         scale == _lastScale &&
         blurFade == _lastBlurFade &&
         blurActive == _lastBlurActive &&
-        activeColorValue == _lastActiveColorValue) {
+        activeColorValue == _lastActiveColorValue &&
+        playedOpacity == _lastPlayedOpacity &&
+        unplayedOpacity == _lastUnplayedOpacity &&
+        isAboveCurrent == _lastIsAboveCurrent) {
       return;
     }
     _lastIsActive = isActive;
@@ -253,16 +285,22 @@ class LineRenderer {
     _lastBlurFade = blurFade;
     _lastBlurActive = blurActive;
     _lastActiveColorValue = activeColorValue;
+    _lastPlayedOpacity = playedOpacity;
+    _lastUnplayedOpacity = unplayedOpacity;
+    _lastIsAboveCurrent = isAboveCurrent;
 
     _isActive = isActive;
     _activeColorValue = activeColorValue;
-    final double factor =
-        ((scale - LyricLayout.inactiveScale) /
-                (LyricLayout.activeScale - LyricLayout.inactiveScale))
-            .clamp(0.0, 1.0)
-            .toDouble();
-    final double dynamicDark = factor * 0.2 + 0.2;
-    final double dynamicBright = factor * 0.8 + 0.2;
+    final double factor = LyricLayout.factorFor(scale);
+    // 上方已播行（开关开启时）用更高一档的暗态 alpha：非当前行 factor 恒 0，
+    // 若沿用渐隐基线（0.2）会让已播色在细笔画上不可见，且与模糊层（有效 ~0.5）
+    // 亮度断层，关闭模糊/滚动淡出时突兀。
+    final double dynamicDark = isAboveCurrent
+        ? LyricLayout.aboveLineAlpha
+        : LyricLayout.darkAlphaFor(factor);
+    final double dynamicBright = LyricLayout.brightAlphaFor(factor);
+    // 副行基准：档位 alpha（不含下面的模糊淡出）
+    _auxBaseAlpha = isActive ? dynamicBright : dynamicDark;
     // 非当前行 alpha = dynamicDark * (1 - blurFade)，blurActive=false 时不降低
     final double effectiveFade = blurActive ? blurFade : 0.0;
     final double newTargetAlpha = isActive
@@ -454,19 +492,24 @@ class LineRenderer {
 
     // 辅助副行（翻译或罗马音）：有内容 + 渐显进度 > 0 时绘制。
     // 根据 displayMode 选择显示 translation 还是 roma。
-    // - 当前行：expand/fade 由 AppleLyricsView 注入全局进度，与 WordRenderer
-    //   （KRC 当前行）同一长出/渐显动画（此前固定位置固定 alpha，行切换瞬间出现）；
-    // - 收起中的退场行：注入收起进度（expand = 1-c、fade = 1-c），副行从当前
-    //   位置平滑缩回主行底并渐隐，消除切行时副行瞬间消失的硬切；
-    // - 其余非当前行：两值默认 0 → alpha=0 不绘制，行为与旧版一致。
+    // expand / fade 都是**该行自己的**逐行进度（由 AppleLyricsView 按绘制行号
+    // 注入）：「所有行」下每行都有各自的副行，切范围 / 切行时逐行平滑过渡；
+    // 方向（入场 / 出场）由该行目标是否低于当前进度决定。
     // **不读 showTranslation 做立即短路**：关闭翻译时注入进度衰减到 0、
     // alpha 平滑渐隐至消失——若在此短路，关闭瞬间副行直接消失无动画。
-    // 副行字号为主行 70%，alpha = translationOpacity × translationFade。
+    // 副行字号为主行 70%，alpha = 该行**档位 alpha** × translationOpacity × 进度。
+    // 档位 alpha（[_auxBaseAlpha]）是 played / unplayed 透明度与「上方行已播色」
+    // 决定的满亮值，于是拖「已播 / 未播歌词透明度」滑块时副行同步变化
+    // （旧实现固定 `translationOpacity × 进度`，主行变了副行不动）。
+    // 刻意**不用 [_currentAlpha]**：它含 `(1 - blurFade)`，而副行模糊图是异步
+    // 烘焙的，就绪前清晰层要单独撑住副行；乘上去会让副行跟着主行一起被压到 0，
+    // 表现为切行时「整行闪空」。档位 alpha 不含模糊淡出，正好只跟随用户偏好。
     final auxText =
         LyricPreferences.instance.displayMode == LyricDisplayMode.roma
         ? line.roma
         : line.translation;
-    final double transAlpha = LyricLayout.translationOpacity * translationFade;
+    final double transAlpha =
+        _auxBaseAlpha * LyricLayout.translationOpacity * translationFade;
     if (transAlpha > 0.001 && auxText != null && auxText.isNotEmpty) {
       final transFontSize = LyricLayout.translationFontSize(fontSize);
       // 主文本实际高度（含换行）：与 measureLineHeight 的压缩模型一致。
@@ -742,13 +785,13 @@ class LineRenderer {
     }
   }
 
-  /// 重置状态：alpha 回到初始值（0.2），isActive=false。
+  /// 重置状态：alpha 回到暗态渐隐基线（默认 0.2），isActive=false。
   ///
   /// **v4 优化**：重置 alpha 缓存字段，下次 paintLine 会重新 set text + layout。
   void reset() {
     _isActive = false;
-    _currentAlpha = LyricLayout.currentDarkAlpha;
-    _targetAlpha = LyricLayout.currentDarkAlpha;
+    _currentAlpha = LyricLayout.darkAlphaFor(0.0);
+    _targetAlpha = LyricLayout.darkAlphaFor(0.0);
     _isConverged = true;
     _isExitFading = false;
     _exitRate = _exitFadeSpeed;
@@ -766,6 +809,9 @@ class LineRenderer {
     _lastBlurFade = double.nan;
     _lastBlurActive = false;
     _lastActiveColorValue = null;
+    _lastPlayedOpacity = -1;
+    _lastUnplayedOpacity = -1;
+    _lastIsAboveCurrent = false;
     // 折行槽位失效：清文本令下次绘制必重排（painter 实例保留复用）
     for (final slot in _rowSlots) {
       slot.text = null;

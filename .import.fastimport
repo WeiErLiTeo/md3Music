@@ -30084,3 +30084,309 @@ fix(swipe-exit): 增加任务移除轮询看门狗，修复 MIUI 不投递回调
 统一销毁入口 SwipeExitPolicy.executeExit，两个播放服务的
 onCreate 启动看门狗（幂等）、onTaskRemoved 共用入口。
 from :2869
+commit refs/heads/rust-local-force
+mark :2871
+author vcexml <3356141621@qq.com> 1794459751 +0800
+committer vcexml <3356141621@qq.com> 1794459751 +0800
+data 205
+fix(swipe-exit): 统一任务移除销毁并消除硬解尾音
+
+通过 stopWithTask 服务立即停播退出，并在划掉退出开启时让硬解让路，避免进程死亡后 OFFLOAD 仍继续播放。
+from :2870
+commit refs/heads/rust-local-force
+mark :2872
+author vcexml <3356141621@qq.com> 1794468056 +0800
+committer vcexml <3356141621@qq.com> 1794468056 +0800
+data 432
+fix(offload): 非 Android 平台硬解决策器不启动
+
+桌面端/Web 没有 offload 通路，服务此前照常 init/refresh：读到划掉
+退出默认开启就生成「硬件解码播放已让路」提示并经 PlayerProvider 弹
+Toast（Windows 便携版实测复现）。现 init/refresh/notePlatformFallback
+按 supportsAudioOffload 门控，桌面端不读 pref、不注册通道与监听、
+不产生任何硬解提示。
+from :2871
+commit refs/heads/rust-local-force
+mark :2873
+author vcexml <3356141621@qq.com> 1794468057 +0800
+committer vcexml <3356141621@qq.com> 1794468057 +0800
+data 427
+fix(settings): 桌面端隐藏「硬件解码播放」设置入口与搜索条目
+
+硬解子页依赖 Media3 audio offload + MediaCodec（API>=29 协商），
+是 Android 独享功能，Windows 上点进去只有「平台不支持」。现按
+supportsAudioOffload 门控子页入口，并在设置搜索运行时过滤该条目，
+避免桌面端搜索「硬解」跳到空页面（与 USB 独占、音效链同款做法）。
+from :2872
+commit refs/heads/rust-local-force
+mark :2874
+author vcexml <3356141621@qq.com> 1794469811 +0800
+committer vcexml <3356141621@qq.com> 1794469811 +0800
+data 287
+fix(launchpad): 接入 ContentWidth 大屏自适应限宽
+
+LaunchPad 页 body 是裸 CustomScrollView，是全站唯一没走 ContentWidth
+的页面，Windows 宽窗下直接占满整窗。现与其它页面同一套自适应规则：
+手机限宽不变，大屏按比例居中留白。
+from :2873
+commit refs/heads/rust-local-force
+mark :2875
+author vcexml <3356141621@qq.com> 1794469811 +0800
+committer vcexml <3356141621@qq.com> 1794469811 +0800
+data 315
+feat(layout): 大屏自适应限宽比例 85% → 92%
+
+contentWidthFor 全局比例调整，所有走 ContentWidth 的页面统一生效；
+同步更新 page_layout 注释与布局测试断言（断言用 1280 * 0.92 表达式
+而非字面量，0.92 的二进制浮点乘积不等于十进制字面量 1177.6）。
+from :2874
+commit refs/heads/rust-local-force
+mark :2876
+author vcexml <3356141621@qq.com> 1794475534 +0800
+committer vcexml <3356141621@qq.com> 1794475534 +0800
+data 63
+fix: 放慢播放页收起动画并修复退出时背景抖动
+from :2875
+commit refs/heads/rust-local-force
+mark :2877
+author github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1794309861 +0000
+committer github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1794309861 +0000
+data 32
+chore: update GitHub star trend
+from :2847
+commit refs/heads/rust-local-force
+mark :2878
+author Little-White3110 <53994162+Little-White3110@users.noreply.github.com> 1794387519 +0800
+committer GitHub <noreply@github.com> 1794387519 +0800
+data 58
+Merge branch 'zzyoxml:rust-local-two' into rust-local-two
+from :2877
+merge :2856
+commit refs/heads/rust-local-force
+mark :2879
+author github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1794395449 +0000
+committer github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1794395449 +0000
+data 32
+chore: update GitHub star trend
+from :2878
+commit refs/heads/rust-local-force
+mark :2880
+author Little-White3110 <53994162+Little-White3110@users.noreply.github.com> 1794401518 +0800
+committer GitHub <noreply@github.com> 1794401518 +0800
+data 58
+Merge branch 'zzyoxml:rust-local-two' into rust-local-two
+from :2879
+merge :2858
+commit refs/heads/rust-local-force
+mark :2881
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794409825 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794409825 +0800
+data 240
+perf: 优化 Windows 端内存占用，减少 native 位图峰值
+- 歌词切歌时释放旧渲染器缓存与模糊位图
+- 封面、缩略图按显示物理宽限制解码尺寸
+- 歌词渲染器按滑动窗口裁剪，避免单调累积
+from :2880
+commit refs/heads/rust-local-force
+mark :2882
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794415056 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794415056 +0800
+data 235
+feat: 新增已播/未播歌词透明度调节功能
+
+新增已播和未播歌词透明度的设置项与滑块
+默认值为1.0和0.4，兼容原视觉效果
+新增相关渲染逻辑与测试用例
+完善设置页说明与文档记录
+from :2881
+commit refs/heads/rust-local-force
+mark :2883
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794417388 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794417388 +0800
+data 251
+refactor(apple_lyrics_view): 停用当前行入场的模糊层叠加效果
+
+移除了入场时重置模糊进度为0的逻辑，避免歌词切换时出现整行闪一下的问题。保留了_entryBlurRate变量赋值，便于后续恢复该效果。
+from :2882
+commit refs/heads/rust-local-force
+mark :2884
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794418499 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794418499 +0800
+data 64
+feat(lyrics): 添加上方已播行清晰层 alpha 适配逻辑
+from :2883
+commit refs/heads/rust-local-force
+mark :2885
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794459862 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794459862 +0800
+data 334
+feat: 新增歌词副行显示范围设置功能
+
+新增「仅当前行」「所有行」「已播行除外」三种副行显示范围选项
+同步修改行高计算逻辑，确保副行显隐与行高一致
+修复副行透明度不跟随已播/未播歌词透明度的问题
+新增对应测试用例覆盖范围逻辑与行高契约
+from :2884
+commit refs/heads/rust-local-force
+mark :2886
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794461287 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794461287 +0800
+data 267
+refactor(歌词设置): 重构副行显示范围为字段式下拉控件
+
+- 移除 auxScopeDescription 方法
+- 重构设置页副行显示范围 UI 为 M3E 字段式下拉
+- 更新搜索索引将三档选项转为同义词
+- 调整测试用例匹配新的 UI 结构
+from :2885
+commit refs/heads/rust-local-force
+mark :2887
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794470840 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794470840 +0800
+data 343
+feat(歌词过滤): 新增在线歌词头部信息块过滤规则
+
+新增在线歌词头部信息块的结构性判定逻辑，移除「作者 - 歌名」首行及后续的制作名单、版权声明行
+新增对应的测试用例，验证头部块过滤的边界情况
+更新设置页的说明文本，明确隐藏歌词作者信息的范围
+from :2886
+commit refs/heads/rust-local-force
+mark :2888
+author Little-White3110 <53994162+Little-White3110@users.noreply.github.com> 1794472960 +0800
+committer GitHub <noreply@github.com> 1794472960 +0800
+data 58
+Merge branch 'zzyoxml:rust-local-two' into rust-local-two
+from :2887
+merge :2875
+commit refs/heads/rust-local-force
+mark :2889
+author Little-White3110 <53994162+Little-White3110@users.noreply.github.com> 1794473039 +0800
+committer GitHub <noreply@github.com> 1794473039 +0800
+data 98
+Merge pull request #187 from Little-White3110/rust-local-two
+
+歌词ui开放更多自定义选项
+from :2875
+merge :2888
+commit refs/heads/rust-local-force
+mark :2890
+author vcexml <3356141621@qq.com> 1794475537 +0800
+committer vcexml <3356141621@qq.com> 1794475537 +0800
+data 97
+Merge branch 'rust-local-two' of https://github.com/zzyoxml/private_md3music into rust-local-two
+from :2876
+merge :2889
+commit refs/heads/rust-local-force
+mark :2891
+author github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1794482627 +0000
+committer github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1794482627 +0000
+data 32
+chore: update GitHub star trend
+from :2890
+commit refs/heads/rust-local-force
+mark :2892
+author vcexml <3356141621@qq.com> 1794488042 +0800
+committer vcexml <3356141621@qq.com> 1794488042 +0800
+data 707
+fix(tv): 目录选择兜底内置弹层并防 SAF 闪退
+
+- 原生 pickFolder 捕获 ActivityNotFoundException，经 SafeReplyOnceResult
+  返回 PICKER_UNAVAILABLE，区分"打不开"与"用户取消"，修复遥控器点击
+  选择文件夹直接闪退
+- FolderPickerService 增加 safUnavailable 标记；新增
+  pickFolderTv：系统 SAF 可用优先走系统，打不开才兜底内置目录选择弹层
+- 新增 TvFolderPickerSheet：遥控器可操作的目录浏览器（内部存储/U 盘
+  枚举、逐级进入、当前目录确认），TvSheetFocus 保证首焦点
+- 扫描/排除文件夹与云音乐上传三处入口接入；LibraryProvider 增加可选
+  path 参数，非 TV 行为不变
+from :2891
+commit refs/heads/rust-local-force
+mark :2893
+author vcexml <3356141621@qq.com> 1794488055 +0800
+committer vcexml <3356141621@qq.com> 1794488055 +0800
+data 480
+fix(tv): TvSheetFocus 等转场完成再请求首焦点
+
+TV 真机实测：ModalRoute 转场期间子树禁止获焦，提前 requestFocus 被
+FocusManager 静默丢弃；重试窗口整段耗在转场里后，dpad root 的 restore
+兜底把焦点放回页面节点（首焦点落在弹层外，OK 无反应）。
+
+改为等转场动画 completed 后才开始逐帧请求；焦点进入弹层子树即收工，
+不抢用户已移动的焦点；targetNode 变化时重置窗口。
+from :2892
+commit refs/heads/rust-local-force
+mark :2894
+author vcexml <3356141621@qq.com> 1794488065 +0800
+committer vcexml <3356141621@qq.com> 1794488065 +0800
+data 535
+fix(tv): 本地音乐搜索框增加遥控器焦点逃逸
+
+搜索框可被 dpad root 兜底选中，但 framework 文本编辑 shortcuts 把
+方向键消费成光标移动，dpad 的光标到边逃逸被顶掉，遥控器焦点被吸进
+搜索框后出不去。
+
+TV 构建给搜索框 FocusNode 挂 onKeyEvent，在事件到达 Shortcuts 之前
+拦截：上下键直接移出（单行无纵向光标），左右键光标到文本边缘才移出，
+IME 组合中不拦截；移动经 DpadController 与遥控器同一套遍历策略。
+from :2893
+commit refs/heads/rust-local-force
+mark :2895
+author vcexml <3356141621@qq.com> 1794490098 +0800
+committer vcexml <3356141621@qq.com> 1794490098 +0800
+data 805
+fix(api): 用户数据请求失败日志入库并自动重试
+
+TV 32 位弱设备上收藏/签到/云盘全部显示失败，诊断包却无任何请求日志：
+诊断日志只重定向 debugPrint，而 API 层与签到链路全用 print，失败记录
+全部丢失；_get/_post 吞异常返回 null，页面层只能静默空态。
+
+- kugou_api_client / kugou_provider / kugou_models 全部 print 转
+  debugPrint，失败日志自动入诊断包（68 处）
+- 新增 _userDataWithRetry：收藏歌单列表、云盘列表、签到两步共四个
+  接口接入，最多 3 次尝试、间隔 800ms；仅对"无响应"（null）重试，
+  有响应体的业务失败（未登录/风控）不重试直接透传
+- 每次重试写 debugPrint 入诊断日志，弱设备间歇性失败可从诊断包定位
+from :2894
+commit refs/heads/rust-local-force
+mark :2896
+author floveey <54261748+floveey@users.noreply.github.com> 1794533724 +0800
+committer vcexml <3356141621@qq.com> 1794533724 +0800
+data 1053
+fix(car): 车机歌词与声音不同步——切歌先行 metadata 清掉上一首歌词键
+
+真机复现（用户自编 v65 包）：车机投屏歌词与声音不同步。根因：v62 加的
+"切歌立即先行发 title/artist metadata"走 doApplySessionTitleArtist 时
+沿用了 buildUpon 保留的 extras——上一首的 ucar 整段 LRC（LYRICS_WHOLE/
+LYRICS_STATUS）与 lyricInfo 一并被带出，车机读到"新歌标题 + 旧歌歌词"
+的中间态，按旧词时间戳滚动即错位；遇上换源重试（http 416）中间态被
+拉长，观感就是整段不同步。
+
+修复：该先行路径（仅在标题/艺术家变化=切歌时执行，相同已早退）在替换
+前移除三个歌词键；歌词就绪后由既有 doApplySessionTitleArtistAndLyricInfo
+按新曲补回（其内部本就是"先 remove 再按新词写入"）。移除键不等于写负
+状态，不触发车机"负状态永久单行"铁律；岛侧 lrc_change 走独立 extras
+通道不受影响。
+
+(cherry-picked from commit ecfb1460, PR zzyoxml/md3Music#228)
+from :2895
+commit refs/heads/rust-local-force
+mark :2897
+author floveey <54261748+floveey@users.noreply.github.com> 1794533762 +0800
+committer vcexml <3356141621@qq.com> 1794533762 +0800
+data 1017
+fix(car): 车机切歌"很久才切换/一直显示上一首"——先行 metadata 破身份校验
+
+真机反馈：车机投屏切歌后很久才切换、期间一直显示上一首。排查确认
+v62 的"切歌先行 title/artist"从未真正生效：申请发生在 setUrl 之前，
+播放器里还是上一首 item，doApplySessionTitleArtist 的严格身份比对把
+新歌标题当"不匹配数据"整段丢弃，车机只能等封面链走完才更新。
+
+修复（prewrite 通道）：updateActiveSessionTitleArtist 增加 prewrite
+变体（仅 APS 切歌先行的调用点使用）——跳过 item 身份比对、保留
+generation 守卫（防旧数据乱序覆盖）。写进旧 item 的标题会在 setUrl
+后由 Dart MediaItem 覆盖，解析失败时由自愈推送纠正；封面失败兜底等
+其余调用路径保持严格校验不变。配合 v66 的先行清歌词键，车机在切歌
+当场即可拿到新歌名且不带旧歌词。
+
+(cherry-picked from commit 5df20ef4, PR zzyoxml/md3Music#228)
+from :2896

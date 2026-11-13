@@ -201,6 +201,12 @@ class AudioOffloadService extends ChangeNotifier {
     if (_inited) return;
     _inited = true;
 
+    // 桌面端 / Web 没有 offload 通路（supportsAudioOffload 仅 Android）：
+    // 整个决策器不启动 —— 不读 pref、不注册通道与监听、不下发、不产生
+    // 「已让路/已恢复」提示。否则 Windows 上会因本地残留 pref 或划掉退出
+    // 默认值弹出「硬件解码播放已让路」这类无意义 Toast。
+    if (!supportsAudioOffload) return;
+
     try {
       // 开关持久化统一走 SettingsRepository（键与 [keyEnabled] 是同一字面量），
       // 避免同一条设置在两个类里各读一遍 prefs、后续改名漏改一处。
@@ -319,6 +325,8 @@ class AudioOffloadService extends ChangeNotifier {
   /// [immediate] 为 true 时即使「正在播放」也立刻下发（用于必须马上让路的场景，
   /// 例如变速切到非 1.0 倍）。恢复路径默认不 immediate，等下一次起播。
   Future<void> refresh({bool immediate = false}) async {
+    // 非 Android 平台整个决策器未启动（见 [init]），任何刷新都不产生副作用。
+    if (!supportsAudioOffload) return;
     final String? previousReason = _yieldReason;
     final bool previousEffective = effective;
 
@@ -522,6 +530,8 @@ class AudioOffloadService extends ChangeNotifier {
   ///
   /// 只记提示 + 标记本轮兜底已用，不擅自关用户开关 —— 是否继续尝试由用户决定。
   void notePlatformFallback() {
+    // 非 Android 平台没有硬解通路，不存在「回退到软解」一说。
+    if (!supportsAudioOffload) return;
     if (_fallbackApplied) return;
     _fallbackApplied = true;
     _notice = '硬件解码不可用，已回退到软件解码';

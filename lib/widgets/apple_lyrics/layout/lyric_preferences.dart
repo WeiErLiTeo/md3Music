@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../core/services/windows_default_font.dart';
+import 'lyric_aux_scope.dart';
 
 /// 歌词字体来源枚举（与全局 [FontSource] 解耦，允许歌词使用与 UI 不同的字体）。
 ///
@@ -223,6 +224,29 @@ class LyricPreferences extends ChangeNotifier {
   /// 渲染侧取负值作为 Y 偏移（向上为负）。
   static const double defaultLiftHeightPx = 3.0;
 
+  // ============== 已播 / 未播歌词透明度 ==============
+
+  /// 已播歌词透明度下限（0 = 完全隐藏）。
+  static const double minPlayedOpacity = 0.0;
+
+  /// 已播歌词透明度上限（alpha 物理上限 1.0，故不做中轴对称）。
+  static const double maxPlayedOpacity = 1.0;
+
+  /// 已播歌词透明度默认值：1.0 = 原 `dynamicBrightAlpha` 满 factor 值。
+  static const double defaultPlayedOpacity = 1.0;
+
+  /// 未播歌词透明度下限（0 = 完全隐藏）。
+  static const double minUnplayedOpacity = 0.0;
+
+  /// 未播歌词透明度上限（alpha 物理上限 1.0，故不做中轴对称）。
+  static const double maxUnplayedOpacity = 1.0;
+
+  /// 未播歌词透明度默认值：0.4 = 原 `dynamicDarkAlpha` 满 factor 值。
+  ///
+  /// 渐隐基线取本值的一半（默认 0.2），使默认值代入新公式后逐点退化为
+  /// 原 `factor*0.8+0.2` / `factor*0.2+0.2`，升级后视觉不变。
+  static const double defaultUnplayedOpacity = 0.4;
+
   // ============== Windows 便携版歌词动画参数（用户实调值即默认/中轴） ======
   //
   // 用户把便携版「歌词动画」页调到了自己满意的手感，这里把这些值固化为
@@ -404,6 +428,17 @@ class LyricPreferences extends ChangeNotifier {
   ///   预测失效（快歌/seek/暂停）时回落为固定窗口压缩（滞后恒 3×步长）。
   static const bool defaultStaggerFromCurrentLine = true;
 
+  /// 已播 / 未播歌词透明度：alpha 物理上限为 1.0，各平台同值，
+  /// 不套用「默认值居中」约定（见 docs/lyric-animation-params.md 物理边界优先）。
+  static double get minPlayedOpacityForCurrentPlatform => minPlayedOpacity;
+  static double get maxPlayedOpacityForCurrentPlatform => maxPlayedOpacity;
+  static double get defaultPlayedOpacityForCurrentPlatform =>
+      defaultPlayedOpacity;
+  static double get minUnplayedOpacityForCurrentPlatform => minUnplayedOpacity;
+  static double get maxUnplayedOpacityForCurrentPlatform => maxUnplayedOpacity;
+  static double get defaultUnplayedOpacityForCurrentPlatform =>
+      defaultUnplayedOpacity;
+
   // ============== 歌词模糊强度 ==============
 
   /// 歌词模糊强度倍数下限。
@@ -582,6 +617,9 @@ class LyricPreferences extends ChangeNotifier {
   static const String _keyInterludeDotsStartX = 'lyric_interlude_dots_start_x';
   static const String _keyInterludeDotRadius = 'lyric_interlude_dot_radius';
   static const String _keyInterludeDotSpacing = 'lyric_interlude_dot_spacing';
+  static const String _keyPlayedOpacity = 'lyric_played_opacity';
+  static const String _keyUnplayedOpacity = 'lyric_unplayed_opacity';
+  static const String _keyAuxScope = 'lyric_aux_scope';
 
   // ============== 当前值 ==============
 
@@ -645,6 +683,11 @@ class LyricPreferences extends ChangeNotifier {
   double _interludeDotsStartX = defaultInterludeDotsStartX;
   double _interludeDotRadius = defaultInterludeDotRadius;
   double _interludeDotSpacing = defaultInterludeDotSpacingForCurrentPlatform;
+  // 已播 / 未播歌词透明度（满 factor 时的目标 alpha，默认复刻历史观感）
+  double _playedOpacity = defaultPlayedOpacityForCurrentPlatform;
+  double _unplayedOpacity = defaultUnplayedOpacityForCurrentPlatform;
+  // 副行（翻译 / 罗马音）显示范围（默认仅当前行 = 引入本设置前的观感）
+  LyricAuxScope _auxScope = LyricAuxScope.currentLine;
   // 运行时加载成功后填充的 family（仅 custom 模式且加载成功时非 null）
   String? _loadedCustomFontFamily;
   bool _loaded = false;
@@ -690,6 +733,9 @@ class LyricPreferences extends ChangeNotifier {
   bool get lineBalance => _lineBalance;
   bool get showTranslation => _showTranslation;
   LyricDisplayMode get displayMode => _displayMode;
+
+  /// 副行（翻译 / 罗马音）显示范围，AM 与 MD3 两张播放页共用。
+  LyricAuxScope get auxScope => _auxScope;
   LyricFontSource get fontSource => _fontSource;
   String? get customFontPath => _customFontPath;
   ui.Color? get customTextColor => _customTextColor;
@@ -790,6 +836,19 @@ class LyricPreferences extends ChangeNotifier {
   /// [minInterludeDotSpacing]~[maxInterludeDotSpacing]）。
   double get interludeDotSpacing => _interludeDotSpacing;
 
+  /// 已播歌词透明度（满 factor 时的亮态 alpha，范围
+  /// [minPlayedOpacity]~[maxPlayedOpacity]）。
+  ///
+  /// 作用于当前行已唱过的字（GRADIENT 亮态）与整行高亮；渐变基线由
+  /// [unplayedOpacity] 推导，保留随行缩放的 factor 联动。
+  double get playedOpacity => _playedOpacity;
+
+  /// 未播歌词透明度（满 factor 时的暗态 alpha，范围
+  /// [minUnplayedOpacity]~[maxUnplayedOpacity]）。
+  ///
+  /// 作用于当前行未唱的字（GRADIENT 暗态）与非当前行整行（SOLID）。
+  double get unplayedOpacity => _unplayedOpacity;
+
   /// 自定义字体（[LyricFontSource.custom]）是否加载成功。
   ///
   /// 面板提示「已应用自定义字体 / 字体加载失败」必须用它：
@@ -862,6 +921,7 @@ class LyricPreferences extends ChangeNotifier {
     _lineBalance = prefs.getBool(_keyLineBalance) ?? false;
     _showTranslation = prefs.getBool(_keyShowTranslation) ?? true;
     _displayMode = _displayModeFromName(prefs.getString(_keyDisplayMode));
+    _auxScope = auxScopeFromName(prefs.getString(_keyAuxScope));
     _fontSource = _fontSourceFromName(prefs.getString(_keyFontSource));
     _customFontPath = prefs.getString(_keyCustomFontPath);
     final colorValue = prefs.getInt(_keyCustomTextColor);
@@ -941,6 +1001,16 @@ class LyricPreferences extends ChangeNotifier {
                 defaultInterludeDotSpacingForCurrentPlatform)
             .clamp(minInterludeDotSpacingForCurrentPlatform,
                 maxInterludeDotSpacingForCurrentPlatform);
+    _playedOpacity =
+        (prefs.getDouble(_keyPlayedOpacity) ??
+                defaultPlayedOpacityForCurrentPlatform)
+            .clamp(minPlayedOpacityForCurrentPlatform,
+                maxPlayedOpacityForCurrentPlatform);
+    _unplayedOpacity =
+        (prefs.getDouble(_keyUnplayedOpacity) ??
+                defaultUnplayedOpacityForCurrentPlatform)
+            .clamp(minUnplayedOpacityForCurrentPlatform,
+                maxUnplayedOpacityForCurrentPlatform);
     _loaded = true;
     notifyListeners();
     // 若已配置自定义字体，立即尝试加载（Fire-and-forget，加载完成后会 notifyListeners）
@@ -1228,6 +1298,28 @@ class LyricPreferences extends ChangeNotifier {
     await prefs.setDouble(_keyLiftHeightPx, _liftHeightPx);
   }
 
+  /// 设置已播歌词透明度并持久化。
+  Future<void> setPlayedOpacity(double value) async {
+    final clamped = value.clamp(
+        minPlayedOpacityForCurrentPlatform, maxPlayedOpacityForCurrentPlatform);
+    if (clamped == _playedOpacity) return;
+    _playedOpacity = clamped;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_keyPlayedOpacity, _playedOpacity);
+  }
+
+  /// 设置未播歌词透明度并持久化。
+  Future<void> setUnplayedOpacity(double value) async {
+    final clamped = value.clamp(minUnplayedOpacityForCurrentPlatform,
+        maxUnplayedOpacityForCurrentPlatform);
+    if (clamped == _unplayedOpacity) return;
+    _unplayedOpacity = clamped;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_keyUnplayedOpacity, _unplayedOpacity);
+  }
+
   /// 设置级联错峰起点（从当前行开始）并持久化。
   Future<void> setStaggerFromCurrentLine(bool enabled) async {
     if (_staggerFromCurrentLine == enabled) return;
@@ -1265,6 +1357,18 @@ class LyricPreferences extends ChangeNotifier {
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_keyDisplayMode, mode.name);
+  }
+
+  /// 设置副行显示范围并持久化。
+  ///
+  /// 两张播放页各自监听本类：AM 页把范围解析成逐行展开进度并平滑过渡，
+  /// MD3 页按范围重算行高，因此这里只负责落值 + 通知，不做任何渲染逻辑。
+  Future<void> setAuxScope(LyricAuxScope scope) async {
+    if (_auxScope == scope) return;
+    _auxScope = scope;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_keyAuxScope, scope.name);
   }
 
   /// 设置「屏蔽歌词作者信息」开关并持久化。
@@ -1351,6 +1455,8 @@ class LyricPreferences extends ChangeNotifier {
     'glowIntensity',
     'glowThresholdFactor',
     'glowFixedThresholdMs',
+    'playedOpacity',
+    'unplayedOpacity',
   ];
 
   /// 枚举型参数键及合法取值（持久化/导出均用 name 字符串）。
@@ -1391,7 +1497,7 @@ class LyricPreferences extends ChangeNotifier {
     return result;
   }
 
-  /// 导出本页 18 项当前值（数值均为 double，枚举为 name 字符串）。
+  /// 导出本页 20 项当前值（数值均为 double，枚举为 name 字符串）。
   Map<String, Object?> exportAnimationValues() => <String, Object?>{
         'inactiveScale': _inactiveScale,
         'alignPosition': _alignPosition,
@@ -1411,6 +1517,8 @@ class LyricPreferences extends ChangeNotifier {
         'glowThresholdFactor': _glowThresholdFactor,
         'glowFixedThresholdMs': _glowFixedThresholdMs,
         'fillMode': _fillMode.name,
+        'playedOpacity': _playedOpacity,
+        'unplayedOpacity': _unplayedOpacity,
       };
 
   /// 应用本页参数。
@@ -1486,6 +1594,10 @@ class LyricPreferences extends ChangeNotifier {
         fillMode == 'classic' ? LyricFillMode.classic : LyricFillMode.sweep,
       );
     }
+    final playedOpacity = values['playedOpacity'];
+    if (playedOpacity is double) await setPlayedOpacity(playedOpacity);
+    final unplayedOpacity = values['unplayedOpacity'];
+    if (unplayedOpacity is double) await setUnplayedOpacity(unplayedOpacity);
   }
 
   // ============== 歌词字体来源 ==============
@@ -1629,6 +1741,9 @@ class LyricPreferences extends ChangeNotifier {
     _interludeDotsStartX = defaultInterludeDotsStartXForCurrentPlatform;
     _interludeDotRadius = defaultInterludeDotRadiusForCurrentPlatform;
     _interludeDotSpacing = defaultInterludeDotSpacingForCurrentPlatform;
+    _playedOpacity = defaultPlayedOpacityForCurrentPlatform;
+    _unplayedOpacity = defaultUnplayedOpacityForCurrentPlatform;
+    _auxScope = LyricAuxScope.currentLine;
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setDouble(_keyFontSize, _fontSize);
@@ -1665,6 +1780,9 @@ class LyricPreferences extends ChangeNotifier {
     await prefs.remove(_keyInterludeDotsStartX);
     await prefs.remove(_keyInterludeDotRadius);
     await prefs.remove(_keyInterludeDotSpacing);
+    await prefs.remove(_keyPlayedOpacity);
+    await prefs.remove(_keyUnplayedOpacity);
+    await prefs.remove(_keyAuxScope);
     await prefs.remove(_keyFontSource);
     await prefs.remove(_keyCustomFontPath);
     await prefs.remove(_keyCustomTextColor);
