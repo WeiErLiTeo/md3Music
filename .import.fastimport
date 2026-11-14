@@ -30390,3 +30390,28 @@ generation 守卫（防旧数据乱序覆盖）。写进旧 item 的标题会在
 
 (cherry-picked from commit 5df20ef4, PR zzyoxml/md3Music#228)
 from :2896
+commit refs/heads/rust-local-force
+mark :2898
+author vcexml <3356141621@qq.com> 1794548257 +0800
+committer vcexml <3356141621@qq.com> 1794548257 +0800
+data 1204
+fix(audio): 音频共存模式彻底退出焦点体系，切歌不再抢占其它应用焦点
+
+issue #229（HarmonyOS MatePad 真机 logcat）：开启「允许与其他应用同时
+播放音频」后切歌，MD3Music 仍先 abandon 再 request AUDIOFOCUS_GAIN，
+系统把 B 站等其它持有者踢成 LOSS 并暂停。
+
+根因：ignore 标志只跳过了 Media3 AudioFocusManager 的内置响应（不
+duck/暂停/abandon），但切歌路径的焦点申请照发——setMediaItem 的 IDLE
+态 abandon + play 的 request(GAIN)，主动踢人。
+
+修复：updateAudioFocus 入口统一拦截 ignoreAudioFocus——不申请、不持有、
+不响应。若切模式前已持焦点补一次 abandon 干净退出，状态置
+NOT_REQUESTED。与开源阅读（legado）同款语义：共存 = 双向不打扰，
+其它 app 无需预测。拔耳机 becomingNoisy、车机/蓝牙 MediaSession 路由
+不依赖音频焦点，均不受影响；关闭共存开关后恢复原三模式行为。
+
+小米 24117RK2CC 真机验证（logcat 12 万行）：共存模式下全程零
+requestAudioFocus/abandonAudioFocus，B 站开播申请焦点后 MD3Music 继续
+播放，手动切歌 B 站保持播放不再暂停。
+from :2897
