@@ -369,4 +369,28 @@ void main() {
       expect(prefs.getDouble('lyric_unplayed_opacity'), isNull);
     });
   });
+
+  /// 歌词字体柔边抗锯齿：独立开关，默认关闭（= 历史锐利字形）。
+  group('⑩ 字体柔边抗锯齿 softEdgeAntiAlias', () {
+    test('默认关闭', () {
+      expect(LyricPreferences.instance.softEdgeAntiAlias, isFalse);
+      expect(LyricPreferences.instance.softEdgeAntiAlias,
+          equals(LyricPreferences.defaultSoftEdgeAntiAlias));
+    });
+
+    test('setter 落盘到 lyric_soft_edge_antialias', () async {
+      await LyricPreferences.instance.setSoftEdgeAntiAlias(true);
+      expect(LyricPreferences.instance.softEdgeAntiAlias, isTrue);
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getBool('lyric_soft_edge_antialias'), isTrue);
+    });
+
+    test('reset 后回到默认关闭且 key 被移除', () async {
+      await LyricPreferences.instance.setSoftEdgeAntiAlias(true);
+      await LyricPreferences.instance.reset();
+      expect(LyricPreferences.instance.softEdgeAntiAlias, isFalse);
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getBool('lyric_soft_edge_antialias'), isNull);
+    });
+  });
 }

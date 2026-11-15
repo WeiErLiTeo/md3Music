@@ -30415,3 +30415,448 @@ NOT_REQUESTED。与开源阅读（legado）同款语义：共存 = 双向不打�
 requestAudioFocus/abandonAudioFocus，B 站开播申请焦点后 MD3Music 继续
 播放，手动切歌 B 站保持播放不再暂停。
 from :2897
+commit refs/heads/rust-local-force
+mark :2899
+author github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1794567987 +0000
+committer github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1794567987 +0000
+data 32
+chore: update GitHub star trend
+from :2898
+commit refs/heads/rust-local-force
+mark :2900
+author github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1794482925 +0000
+committer github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1794482925 +0000
+data 32
+chore: update GitHub star trend
+from :2888
+commit refs/heads/rust-local-force
+mark :2901
+author Little-White3110 <53994162+Little-White3110@users.noreply.github.com> 1794490520 +0800
+committer GitHub <noreply@github.com> 1794490520 +0800
+data 58
+Merge branch 'zzyoxml:rust-local-two' into rust-local-two
+from :2900
+merge :2895
+commit refs/heads/rust-local-force
+mark :2902
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794506178 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794506178 +0800
+data 359
+feat(歌词动画): 新增模糊等级渐变切换开关与时长滑块
+
+新增「模糊等级渐变切换」开关和「模糊等级渐变时长」滑块，实现切行时模糊图的交叉淡入淡出过渡效果，默认关闭过渡保持硬切。同步更新设置搜索索引、文档及测试用例，确保功能正常运行且不影响原有预设。
+from :2901
+commit refs/heads/rust-local-force
+mark :2903
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794507320 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794507320 +0800
+data 241
+feat(歌词动画): 优化切行时模糊等级渐变切换逻辑
+
+新增了模糊等级渐变切换的交接逻辑。
+调整了入场模糊淡出的时长计算与不透明度起始值。
+新增了对应测试用例确保功能正确性。
+from :2902
+commit refs/heads/rust-local-force
+mark :2904
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794548928 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794548928 +0800
+data 316
+feat: 新增提前换行歌词动画开关及相关实现
+
+新增「提前换行」开关功能，支持KRC逐字歌词在当前行逐字完成后提前切换到下一行布局，同时保持视觉冻结直到真实音频边界。
+新增搜索索引项、设置页开关及测试用例，完善相关文档说明。
+from :2903
+commit refs/heads/rust-local-force
+mark :2905
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794551065 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794551065 +0800
+data 159
+docs: 更新提前换行的间奏说明
+
+test: 新增提前换行保留间奏的测试用例
+
+refactor: 移除提前换行的间奏撤销逻辑及调试日志
+from :2904
+commit refs/heads/rust-local-force
+mark :2906
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794554819 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794554819 +0800
+data 445
+fix(apple_lyrics_view): 修复隐藏歌词作者信息后开头无歌词间奏点的问题
+
+新增头部间奏槽位处理逻辑。当隐藏歌词作者信息移除开头名单行后，原本的间奏锚点消失，导致开头空档无法检测。新增 _interludeIntroIndex 标记头部间奏，在首行起点超过阈值时补间奏槽位，同时调整偏移计算，让首行也让位占位高度，确保间奏点显示在首行上方。
+from :2905
+commit refs/heads/rust-local-force
+mark :2907
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794556002 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794556002 +0800
+data 503
+fix(apple-lyrics-view): 修复头部间奏期间首行显示异常及滚动跳位问题
+
+新增头部间奏焦点槽位判断逻辑，将焦点行索引替换为渲染口径的 focusLineIndex，使间奏期间首行按模糊暗态渲染而非高亮清晰。
+调整滚动目标计算逻辑，确保间奏结束后滚动位置无跳变，同时更新模糊缓存失效条件以适配焦点槽位变化。
+新增测试用例验证间奏期间及结束后的焦点、模糊等级和滚动位置正确性。
+from :2906
+commit refs/heads/rust-local-force
+mark :2908
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794557367 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794557367 +0800
+data 239
+fix(apple_lyrics): 修复行间间奏圆点偏上的问题
+
+统一间奏滚动目标与圆点绘制逻辑，确保间奏占位行对准当前行位置
+新增测试验证歌曲中间间奏点不再偏上，同时补充测试帧等待逻辑
+from :2907
+commit refs/heads/rust-local-force
+mark :2909
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794559641 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794559641 +0800
+data 76
+fix(lyric): 修复当前行未播字与下方未播行颜色不一致问题
+from :2908
+commit refs/heads/rust-local-force
+mark :2910
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794560779 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794560779 +0800
+data 298
+refactor(lyric): 调整高斯模糊层系数为绝对映射修复未播行偏白问题
+
+- 修改高斯模糊层合成期系数计算逻辑，从相对默认比例改为绝对映射
+- 修复未播歌词模糊层偏白的用户反馈问题
+- 更新对应文档和测试用例，确保逻辑一致性
+from :2909
+commit refs/heads/rust-local-force
+mark :2911
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794561910 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794561910 +0800
+data 369
+fix: 修复歌词辉光触发时英文字距变大的问题
+
+新增整词 shaped 布局的字符起点计算逻辑，优先使用整词 TextPainter 的字符 caret 位置作为逐字符绘制的起点，避免逐字符独立布局累加丢失整词 kerning 导致的宽度跳变。新增回归测试验证修复效果，补充排查文档说明根因与修复方案。
+from :2910
+commit refs/heads/rust-local-force
+mark :2912
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794566247 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794566247 +0800
+data 320
+fix: 修复歌词辉光强调字换行行垂直位移台阶问题
+
+新增字符字形图行盒记账逻辑，按主行/换行行（0.8×）分别烘焙字形图
+删除换行行退回 TextPainter 的硬编码门禁，保证亚像素位移连续
+新增测试用例验证主行与换行行强调字的垂直位移平滑性
+from :2911
+commit refs/heads/rust-local-force
+mark :2913
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794566745 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794566745 +0800
+data 288
+refactor(歌词效果): 复用歌词作者信息过滤规则，统一头部元信息判定
+
+- 新增 matchesCreditText 与 matchesArtistTitleForm 规则入口
+- 辉光效果与中位数统计复用上述规则，避免关键词表漂移
+- 新增对应测试用例覆盖规则复用场景
+from :2912
+commit refs/heads/rust-local-force
+mark :2914
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794567947 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794567947 +0800
+data 237
+fix: 修复逐字歌词动画出现进度回退的问题
+
+新增回退死区常量，调整平滑时钟校正逻辑，避免小幅采样相位差导致的进度回退
+新增回归测试，验证死区内小幅回退不影响平滑时钟
+from :2913
+commit refs/heads/rust-local-force
+mark :2915
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794574250 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794574250 +0800
+data 409
+feat(apple_lyrics): 添加副行预栅格化图优化翻转性能
+
+新增副行预栅格化图机制，解决透视矩阵下逐帧渲染字形路径导致的切行掉帧问题。翻转期间改用预渲染的白字纹理绘制，透视变换交由 GPU 处理，大幅降低副行动效的性能开销。同时添加完整的测试用例，验证烘焙逻辑、重复绘制限制和资源释放的正确性。
+from :2914
+commit refs/heads/rust-local-force
+mark :2916
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794575053 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794575053 +0800
+data 310
+perf(歌词渲染): 优化副行动画期间的渲染性能
+
+新增副行进度专用重建信号，将副行动画的重建与整页 build 分离。
+修改翻转角判断逻辑，过渡中段也使用预栅格化图避免逐帧重排。
+调整画布 save/restore 逻辑，仅在需要变换时执行操作。
+from :2915
+commit refs/heads/rust-local-force
+mark :2917
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794576493 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794576493 +0800
+data 358
+refactor(apple_lyrics): 将模糊层从 widget 树重构为画布合成，优化性能
+
+- 移除模糊层重建相关的状态标记和 ValueNotifier
+- 新增模糊层绘制器，用 CustomPaint 替代 Stack 子树
+- 测试用例适配画布合成的断言方式，验证染色和不透明度
+- 减少每帧重建 widget 树的开销，提升滚动流畅度
+from :2916
+commit refs/heads/rust-local-force
+mark :2918
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794579988 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794579988 +0800
+data 388
+feat(歌词错峰): 重构级联错峰逻辑，预启动与回落共用统一轮次
+
+- 新增级联轮次管理类，合并预启动与回落逻辑
+- 新增预绑定方法，将逐字测量提前到非动画帧
+- 修复错峰起点随帧相位漂移的问题
+- 新增测试用例验证关闭错峰起点的逻辑正确性
+- 优化 seek 判定逻辑，放宽 posY 跳变阈值避免误判
+from :2917
+commit refs/heads/rust-local-force
+mark :2919
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794580961 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794580961 +0800
+data 329
+fix: 修复歌词预启动窗口内行被跳过导致的位置异常问题
+
+修改歌词视图中预启动接管的行处理逻辑，改为整段无条件按住所有行，不再跳过回弹中的行。新增测试用例验证关闭错峰起点时窗口内行需全部按住，同时添加临时诊断日志用于定位问题。
+from :2918
+commit refs/heads/rust-local-force
+mark :2920
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794583148 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794583148 +0800
+data 363
+fix(apple_lyrics): 修复副行过渡与级联释放的速度突变问题
+
+- 替换副行指数插值为固定时长 smoothstep 过渡，避免切行时副行高度突跳
+- 级联释放时注入 -滚动速度 作为弹簧初速，保证屏幕速度连续
+- 新增副行模糊渲染的退出状态判断，避免错位
+- 新增对应测试用例验证修复效果
+from :2919
+commit refs/heads/rust-local-force
+mark :2921
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794586374 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794586374 +0800
+data 308
+perf: 优化歌词清晰层与模糊层的淡入淡出过渡效果
+
+- 新增清晰层模糊淡出系数，解决白字残留导致的颜色跳变问题
+- 调整变暗速率逻辑，高斯模糊开启时使用更快的淡出速度
+- 同步副行清晰层与模糊层的过渡系数，消除幽灵副行显示
+from :2920
+commit refs/heads/rust-local-force
+mark :2922
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794588763 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794588763 +0800
+data 342
+feat: 新增歌词字体柔边抗锯齿功能
+
+新增歌词字体柔边抗锯齿开关，默认关闭，开启后为AM歌词与翻译副行的字形边缘添加轻微柔化效果，提升观感。
+新增相关配置项、持久化逻辑与测试用例，修改绘制链路适配柔边效果，确保开关切换时正确重建绘制样式。
+from :2921
+commit refs/heads/rust-local-force
+mark :2923
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794589452 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794589452 +0800
+data 512
+feat: 为 Windows 桌面方向键添加长按连续调节功能
+
+实现了 Windows 桌面方向键的长按连续调节逻辑。短按仍保持原单次步进语义，长按超过 400ms 阈值后进入连续模式。音量长按每 100ms 步进 5%，松手一次性落盘；快进长按临时切 2 倍速，松手恢复原速；快退长按暂停后以 2 倍速连续回退，松手落定位置并按需续播。同时补充了测试用例和文档说明，处理了窗口失焦、页面切换等边界情况。
+from :2922
+commit refs/heads/rust-local-force
+mark :2924
+author Little-White3110 <53994162+Little-White3110@users.noreply.github.com> 1794551162 +0800
+committer GitHub <noreply@github.com> 1794551162 +0800
+data 58
+Merge branch 'zzyoxml:rust-local-two' into rust-local-two
+from :2901
+merge :2898
+commit refs/heads/rust-local-force
+mark :2925
+author github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1794568396 +0000
+committer github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1794568396 +0000
+data 32
+chore: update GitHub star trend
+from :2924
+commit refs/heads/rust-local-force
+mark :2926
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794589832 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794589832 +0800
+data 106
+Merge branch 'rust-local-two' of https://github.com/Little-White3110/private_md3music into rust-local-two
+from :2923
+merge :2925
+commit refs/heads/rust-local-force
+mark :2927
+author Little-White3110 <53994162+Little-White3110@users.noreply.github.com> 1794589937 +0800
+committer GitHub <noreply@github.com> 1794589937 +0800
+data 77
+Merge pull request #188 from Little-White3110/rust-local-two
+
+am歌词优化
+from :2899
+merge :2926
+commit refs/heads/rust-local-force
+mark :2928
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794592850 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794593976 +0800
+data 100
+feat: AM歌词页性能优化计划
+
+Co-authored-by: traeagent <traeagent@users.noreply.github.com>
+from :2926
+commit refs/heads/rust-local-force
+mark :2929
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794593650 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794593979 +0800
+data 100
+feat: AM歌词页性能优化计划
+
+Co-authored-by: traeagent <traeagent@users.noreply.github.com>
+from :2928
+commit refs/heads/rust-local-force
+mark :2930
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794630867 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794630867 +0800
+data 308
+perf: 优化歌词界面 CPU 占用与绘制性能
+
+- 实现高刷新率设备默认开启歌词省电模式，满帧拖动时自动解锁
+- 收紧绘制裁剪范围，减少光栅化行数
+- 缓存字号避免每帧重复查询，削减主线程热路径成本
+- 更新安卓 so 库文件适配优化需求
+from :2929
+commit refs/heads/rust-local-force
+mark :2931
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794632590 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794632590 +0800
+data 310
+perf: 落地歌词 P1-2 预栅格与 P1-3 渐变优化
+
+新增非当前行整行预栅格缓存逻辑，仅稳态行使用图片绘制降低光栅化成本
+移除整屏 ShaderMask，改为绘制期按行应用边缘渐变，减少离屏合成面积
+更新优化方案文档状态，标记两项优化已落地
+from :2930
+commit refs/heads/rust-local-force
+mark :2932
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794634691 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794634691 +0800
+data 400
+perf(歌词): 实现文字层两层分层优化，仅当前行逐字重绘
+
+将歌词文字层拆分为当前行层与其余行层，当前行层仅绘制焦点行，逐字帧每帧重绘；其余行层保持静态位图，仅在几何布局或非当前行动画变化时重绘。
+新增分层相关的状态变量与 painter 同步逻辑，避免重影问题，大幅降低 UI 线程绘制开销。
+from :2931
+commit refs/heads/rust-local-force
+mark :2933
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794592850 +0800
+committer trae-solo-agent [origin=mobile] <solo-agent@trae.ai> 1794592850 +0800
+data 100
+feat: AM歌词页性能优化计划
+
+Co-authored-by: traeagent <traeagent@users.noreply.github.com>
+from :2926
+commit refs/heads/rust-local-force
+mark :2934
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794593650 +0800
+committer trae-solo-agent [origin=mobile] <solo-agent@trae.ai> 1794593650 +0800
+data 100
+feat: AM歌词页性能优化计划
+
+Co-authored-by: traeagent <traeagent@users.noreply.github.com>
+from :2933
+commit refs/heads/rust-local-force
+mark :2935
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794635762 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794635762 +0800
+data 106
+Merge branch 'rust-local-two' of https://github.com/Little-White3110/private_md3music into rust-local-two
+from :2932
+merge :2934
+commit refs/heads/rust-local-force
+mark :2936
+author Little-White3110 <53994162+Little-White3110@users.noreply.github.com> 1794636316 +0800
+committer GitHub <noreply@github.com> 1794636316 +0800
+data 83
+Merge pull request #189 from Little-White3110/rust-local-two
+
+am歌词性能优化
+from :2927
+merge :2935
+commit refs/heads/rust-local-force
+mark :2937
+author vcexml <3356141621@qq.com> 1794652723 +0800
+committer vcexml <3356141621@qq.com> 1794652723 +0800
+data 118
+fix(tv): 目录选择弹层首焦点随层级切换，修复根层焦点落在禁用按钮导致遥控器反复按键
+from :2936
+commit refs/heads/rust-local-force
+mark :2938
+author github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1794652409 +0000
+committer github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1794652409 +0000
+data 32
+chore: update GitHub star trend
+from :2936
+commit refs/heads/rust-local-force
+mark :2939
+author vcexml <3356141621@qq.com> 1794652726 +0800
+committer vcexml <3356141621@qq.com> 1794652726 +0800
+data 97
+Merge branch 'rust-local-two' of https://github.com/zzyoxml/private_md3music into rust-local-two
+from :2937
+merge :2938
+commit refs/heads/rust-local-force
+mark :2940
+author vcexml <3356141621@qq.com> 1794665276 +0800
+committer vcexml <3356141621@qq.com> 1794665276 +0800
+data 110
+feat(tv): 本地音乐搜索框收起为图标并并入分类行，避免遥控路过弹键盘与多余留白
+from :2939
+commit refs/heads/rust-local-force
+mark :2941
+author vcexml <3356141621@qq.com> 1794713636 +0800
+committer vcexml <3356141621@qq.com> 1794713636 +0800
+data 527
+Windows Zen 沉浸切换消除 DWM 过渡残影；发现页区块默认按平台区分
+
+- flutter_window: 进/出全屏不再 ShowWindow(SW_RESTORE)（真实中间态 + DWM 还原动画是「窗口套窗口」「缩小黑圈」残影的来源）；最大化经 SetWindowPlacement 干净退出内部状态，退出路径先恢复样式再单步套快照（无边框下缺 WS_MAXIMIZEBOX 会静默跳过最大化）
+- discover: Windows 桌面五区块默认全显示，Android/TV 维持原默认；已持久化配置不受影响
+from :2940
+commit refs/heads/rust-local-force
+mark :2942
+author vcexml <3356141621@qq.com> 1794716383 +0800
+committer vcexml <3356141621@qq.com> 1794716383 +0800
+data 624
+Zen 退出进一步消除 DWM 最大化动画与中间帧残影
+
+- 进/出全屏改为「隐藏 → 原生形态一步落定 → 显示」：进入用 SW_RESTORE 干净退出内部最大化状态（保留还原矩形），退出恢复样式后直接 SW_SHOWMAXIMIZED / 摆回快照矩形，不再走 SetWindowPlacement（其先落还原矩形再最大化的两段过程会被 DWM 抓到中间帧）
+- 切换期间系统级关闭 MinAnimate：DWMWA_TRANSITIONS_TO_DISABLED 对 SetWindowPlacement/最大化动画实测无效，SPI_SETANIMATION 才能压掉旧窗口纹理从还原矩形放大的残影；切换完恢复原值
+from :2941
+commit refs/heads/rust-local-force
+mark :2943
+author vcexml <3356141621@qq.com> 1794716919 +0800
+committer vcexml <3356141621@qq.com> 1794716919 +0800
+data 41
+docs: 更新 changelog 至 v6.4.0 版本
+from :2942
+commit refs/heads/rust-local-force
+mark :2944
+author vcexml <3356141621@qq.com> 1794717377 +0800
+committer vcexml <3356141621@qq.com> 1794717377 +0800
+data 40
+chore: 更新应用版本号至6.4.0+55
+from :2943
+commit refs/heads/rust-local-force
+mark :2945
+author vcexml <3356141621@qq.com> 1794719026 +0800
+committer vcexml <3356141621@qq.com> 1794719026 +0800
+data 171
+Gradle wrapper 升至 9.3.1：Flutter stable 3.50 要求 Gradle >= 9.3.1，CI 用 stable 浮动渠道后发版失败；AGP 9.0.1 兼容，本地已验证 APK 构建通过
+from :2944
+commit refs/heads/rust-local-force
+mark :2946
+author vcexml <3356141621@qq.com> 1794720842 +0800
+committer vcexml <3356141621@qq.com> 1794720842 +0800
+data 163
+AGP 升至 9.1.1：Flutter stable 3.50 要求 AGP >= 9.1.1；本地 Gradle configure 验证通过，aapt2 仅本地网络无法访问 dl.google.com（CI 正常）
+from :2945

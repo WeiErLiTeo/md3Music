@@ -268,7 +268,7 @@ class _LyricAnimationSettingsPageState extends State<LyricAnimationSettingsPage>
                 ),
               // 歌词模糊强度：仅高斯模糊开启时显示（开关在播放页样式页，
               // AnimatedBuilder 监听 prefs，开关变化后进本页即自动显隐）
-              if (prefs.useGaussianBlur)
+              if (prefs.useGaussianBlur) ...[
                 _buildSliderTile<double>(
                   prefs: prefs,
                   title: '歌词模糊强度',
@@ -279,6 +279,49 @@ class _LyricAnimationSettingsPageState extends State<LyricAnimationSettingsPage>
                   label: prefs.blurIntensity.toStringAsFixed(1),
                   onChanged: (v) => prefs.setBlurIntensity(v),
                 ),
+                // 切行时不同 blurLevel 的模糊图交叉淡入淡出，默认关闭。
+                SwitchListTile(
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                  title: const Text('模糊等级渐变切换'),
+                  subtitle: const Text(
+                    '切行时不同模糊程度的图用透明度交叉淡入淡出，'
+                    '时长在下方调节；关闭时保持原有直接切换（默认）',
+                  ),
+                  value: prefs.blurLevelCrossfade,
+                  onChanged: (v) => prefs.setBlurLevelCrossfade(v),
+                ),
+                _buildSliderTile<double>(
+                  prefs: prefs,
+                  title: '模糊等级渐变时长',
+                  subtitle: '交叉淡入淡出的持续时间，最长 1000ms（需开启渐变切换）',
+                  value: prefs.blurLevelFadeMs,
+                  min: LyricPreferences.minBlurLevelFadeMs,
+                  max: LyricPreferences.maxBlurLevelFadeMs,
+                  label: '${prefs.blurLevelFadeMs.round()} ms',
+                  onChanged: (v) => prefs.setBlurLevelFadeMs(v),
+                ),
+                SwitchListTile(
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                  title: const Text('提前换行'),
+                  subtitle: const Text(
+                    '当前行逐字完成后提前滚到下一行，但保持模糊与缩放，'
+                    '等字内渐变开始才激活（仅逐字歌词生效，默认关闭）',
+                  ),
+                  value: prefs.earlyLineSwitch,
+                  onChanged: (v) => prefs.setEarlyLineSwitch(v),
+                ),
+                _buildSliderTile<double>(
+                  prefs: prefs,
+                  title: '模糊褪去时长',
+                  subtitle: '下一行变当前行时，旧模糊图褪去的时长上限，'
+                      '最长 1000ms（清晰层亮得更快会跟着更早退完）',
+                  value: prefs.entryBlurFadeMs,
+                  min: LyricPreferences.minEntryBlurFadeMs,
+                  max: LyricPreferences.maxEntryBlurFadeMs,
+                  label: '${prefs.entryBlurFadeMs.round()} ms',
+                  onChanged: (v) => prefs.setEntryBlurFadeMs(v),
+                ),
+              ],
               // 辉光强度：仅辉光效果开启时显示（开关在播放页样式页，
               // AnimatedBuilder 监听 prefs，开关变化后进本页即自动显隐）
               if (prefs.useGlowEffect)
@@ -426,6 +469,7 @@ class _LyricAnimationSettingsPageState extends State<LyricAnimationSettingsPage>
             '已播歌词透明度、未播歌词透明度、'
             '间奏点水平位置、间奏点圆点大小、间奏点间距、'
             '错峰上限/步长/衰减、错峰起点开关、歌词模糊强度、'
+            '模糊等级渐变切换、模糊等级渐变时长、提前换行、模糊褪去时长、'
             '动态颜色混色比例、辉光强度、辉光触发阈值、'
             '辉光判定方式、辉光固定时长、字内渐变样式）'
             '恢复为默认值，确定继续吗？',
@@ -472,6 +516,10 @@ class _LyricAnimationSettingsPageState extends State<LyricAnimationSettingsPage>
         .setStaggerFromCurrentLine(LyricPreferences.defaultStaggerFromCurrentLine);
     await prefs.setBlurIntensity(
         LyricPreferences.defaultBlurIntensityForCurrentPlatform);
+    await prefs.setBlurLevelCrossfade(false);
+    await prefs.setBlurLevelFadeMs(LyricPreferences.defaultBlurLevelFadeMs);
+    await prefs.setEarlyLineSwitch(false);
+    await prefs.setEntryBlurFadeMs(LyricPreferences.defaultEntryBlurFadeMs);
     // 动态颜色混色比例回到 15%（历史观感）
     await prefs.setDynamicColorMixRatio(
         LyricPreferences.defaultDynamicColorMixRatioForCurrentPlatform);

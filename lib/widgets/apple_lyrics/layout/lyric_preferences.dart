@@ -457,6 +457,35 @@ class LyricPreferences extends ChangeNotifier {
   /// 1.0 = 历史行为（sigma 等于距离分级值 1~5），确保升级后视觉不变。
   static const double defaultBlurIntensity = 1.0;
 
+  // ============== 模糊等级渐变时长 ==============
+
+  /// 过渡时长下限（ms）：低于一帧的时长没有视觉意义，也避免除零。
+  static const double minBlurLevelFadeMs = 50.0;
+
+  /// 过渡时长上限（ms）：按需求最长支持到 1s。
+  static const double maxBlurLevelFadeMs = 1000.0;
+
+  /// 过渡时长默认值（ms）。
+  ///
+  /// 500ms（60fps 下 30 帧）约为初版 150ms 的 3.3 倍：相邻 blurLevel
+  /// 的 sigma 差通常不足 1.5px，短过渡肉眼几乎无法分辨。本值接近
+  /// 范围中轴，仍留足上下调节空间。
+  static const double defaultBlurLevelFadeMs = 500.0;
+
+  // ============== 模糊褪去时长（当前行入场交接） ==============
+
+  /// 旧模糊图褪去时长下限（ms）。
+  static const double minEntryBlurFadeMs = 100.0;
+
+  /// 褪去时长上限（ms）：按需求最长支持到 1s。
+  static const double maxEntryBlurFadeMs = 1000.0;
+
+  /// 褪去时长默认值（ms）。
+  ///
+  /// 600ms 是「不早于清晰层亮起」与「不让整行糊着」的折中。它只是**上限**
+  /// ——若该行清晰层亮得更快，模糊层会跟着更早退完（互补关系不变）。
+  static const double defaultEntryBlurFadeMs = 600.0;
+
   // ============== 歌词动态颜色 ==============
 
   /// 动态颜色混色比例下限。
@@ -505,6 +534,15 @@ class LyricPreferences extends ChangeNotifier {
   /// false = 只停掉放大与水平外扩，仍保留上浮、正弦浮层与辉光呼吸——
   /// 让不喜欢"字被顶大"的用户能保留发光但不要弹跳。
   static const bool defaultGlowCharScale = true;
+
+  // ============== 字体柔边抗锯齿开关 ==============
+
+  /// 歌词字体柔边抗锯齿开关默认值。
+  ///
+  /// false = 历史行为（字形按系统抗锯齿锐利绘制）。
+  /// true = 给 AM 歌词与翻译副行的字形边缘叠加极小半径柔化，
+  /// 观感更柔滑（见 `LyricLayout.paintStyle`）。
+  static const bool defaultSoftEdgeAntiAlias = false;
 
   // ============== 间奏点（节奏点）自定义 ==============
 
@@ -582,9 +620,15 @@ class LyricPreferences extends ChangeNotifier {
   static const String _keyFontWeight = 'lyric_font_weight';
   static const String _keyUseGaussianBlur = 'lyric_use_gaussian_blur';
   static const String _keyBlurIntensity = 'lyric_blur_intensity';
+  static const String _keyBlurLevelCrossfade =
+      'lyric_blur_level_crossfade';
+  static const String _keyBlurLevelFadeMs = 'lyric_blur_level_fade_ms';
+  static const String _keyEarlyLineSwitch = 'lyric_early_line_switch';
+  static const String _keyEntryBlurFadeMs = 'lyric_entry_blur_fade_ms';
   static const String _keyUseGlowEffect = 'lyric_use_glow_effect';
   static const String _keyGlowIntensity = 'lyric_glow_intensity';
   static const String _keyGlowCharScale = 'lyric_glow_char_scale';
+  static const String _keySoftEdgeAntiAlias = 'lyric_soft_edge_antialias';
   static const String _keyUseFlowingBackground = 'lyric_use_flowing_background';
   static const String _keyFontSource = 'lyric_font_source';
   static const String _keyCustomFontPath = 'lyric_custom_font_path';
@@ -629,11 +673,21 @@ class LyricPreferences extends ChangeNotifier {
   bool _useGaussianBlur = false;
   // 歌词模糊强度倍数（默认 1.0 = 历史行为）
   double _blurIntensity = defaultBlurIntensityForCurrentPlatform;
+  // 模糊等级交叉淡入淡出（默认关闭 = 保持原有硬切）
+  bool _blurLevelCrossfade = false;
+  // 交叉淡入淡出时长（ms，默认 500）
+  double _blurLevelFadeMs = defaultBlurLevelFadeMs;
+  // 提前换行（默认关闭 = 严格按 next.startTime 切行）
+  bool _earlyLineSwitch = false;
+  // 当前行入场时旧模糊图的褪去时长（ms，默认 600）
+  double _entryBlurFadeMs = defaultEntryBlurFadeMs;
   bool _useGlowEffect = false;
   // 辉光强度倍数（默认 1.0 = 历史行为）
   double _glowIntensity = defaultGlowIntensityForCurrentPlatform;
   // 辉光字符缩放开关（默认开启 = 历史行为：凸起放大 + 左右外扩）
   bool _glowCharScale = defaultGlowCharScale;
+  // 字体柔边抗锯齿（默认关闭 = 保持历史锐利字形）
+  bool _softEdgeAntiAlias = defaultSoftEdgeAntiAlias;
   bool _useFlowingBackground = false;
   bool _useDuetLayout = false;
   // 平衡行换行默认关闭：保持歌词布局的原始自动换行行为。
@@ -708,6 +762,31 @@ class LyricPreferences extends ChangeNotifier {
   /// AppleLyricsView._blurGeometry。倍数保持"离当前行越远越糊"的相对关系。
   double get blurIntensity => _blurIntensity;
 
+  /// 切行时不同模糊等级的图用透明度交叉淡入淡出（默认关闭）。
+  ///
+  /// 关闭时旧图仍按原逻辑立即 dispose 并替换，渲染结果逐像素不变；
+  /// 开启时额外保留一批旧位图约 150ms，见 AppleLyricsView._buildBlurLayers。
+  bool get blurLevelCrossfade => _blurLevelCrossfade;
+
+  /// 模糊等级交叉淡入淡出的时长（ms），由「动画细节」页滑块调节。
+  ///
+  /// **不进动画预设参数表**：与渐变切换开关同属「效果细节」，
+  /// 切换预设不应把用户调好的时长覆盖掉；`animationValueKeys`
+  /// 的 20 项契约由 lyric_animation_preset_store_test.dart 钉住。
+  double get blurLevelFadeMs => _blurLevelFadeMs;
+
+  /// 「提前换行」：当前行逐字完成后预先把布局/滚动换到下一行，
+  /// 但冻结清晰层与缩放，等真实音频边界（字内渐变开始）才激活。
+  /// 默认关闭；仅 KRC 逐字行生效，LRC 保持原行为。
+  bool get earlyLineSwitch => _earlyLineSwitch;
+
+  /// 当前行入场时旧模糊图的褪去时长（ms）。
+  ///
+  /// 只是**上限**：清晰层如果亮得更快，模糊层会跟着更早退完（两者互补）。
+  /// **不进动画预设参数表**（与「模糊等级渐变切换」同属效果细节，
+  /// `animationValueKeys` 的 20 项契约由 lyric_animation_preset_store_test 钉住）。
+  double get entryBlurFadeMs => _entryBlurFadeMs;
+
   bool get useGlowEffect => _useGlowEffect;
 
   /// 歌词辉光强度倍数（范围 [minGlowIntensity]~[maxGlowIntensity]）。
@@ -723,6 +802,12 @@ class LyricPreferences extends ChangeNotifier {
   /// 上浮（`offsetYEm`）、正弦浮层（`floatYEm`）与辉光亮度（`glowLevel`）
   /// 全部保留——发光仍在，只是不再"顶大"。
   bool get useGlowCharScale => _glowCharScale;
+
+  /// 字体柔边抗锯齿开关（默认关闭 = 历史锐利字形）。
+  ///
+  /// 开启后 AM 歌词主文本与翻译/罗马音副行的字形边缘改用极小半径
+  /// `MaskFilter.blur` 柔化，观感更柔滑；关闭时绘制路径与改造前逐像素一致。
+  bool get softEdgeAntiAlias => _softEdgeAntiAlias;
   bool get useFlowingBackground => _useFlowingBackground;
   bool get useDuetLayout => _useDuetLayout;
 
@@ -903,6 +988,14 @@ class LyricPreferences extends ChangeNotifier {
             .clamp(minFontWeightForCurrentPlatform,
                 maxFontWeightForCurrentPlatform);
     _useGaussianBlur = prefs.getBool(_keyUseGaussianBlur) ?? false;
+    _blurLevelCrossfade = prefs.getBool(_keyBlurLevelCrossfade) ?? false;
+    _blurLevelFadeMs = (prefs.getDouble(_keyBlurLevelFadeMs) ??
+            defaultBlurLevelFadeMs)
+        .clamp(minBlurLevelFadeMs, maxBlurLevelFadeMs);
+    _earlyLineSwitch = prefs.getBool(_keyEarlyLineSwitch) ?? false;
+    _entryBlurFadeMs = (prefs.getDouble(_keyEntryBlurFadeMs) ??
+            defaultEntryBlurFadeMs)
+        .clamp(minEntryBlurFadeMs, maxEntryBlurFadeMs);
     _blurIntensity =
         (prefs.getDouble(_keyBlurIntensity) ??
                 defaultBlurIntensityForCurrentPlatform)
@@ -916,6 +1009,8 @@ class LyricPreferences extends ChangeNotifier {
                 maxGlowIntensityForCurrentPlatform);
     _glowCharScale =
         prefs.getBool(_keyGlowCharScale) ?? defaultGlowCharScale;
+    _softEdgeAntiAlias = prefs.getBool(_keySoftEdgeAntiAlias) ??
+        defaultSoftEdgeAntiAlias;
     _useFlowingBackground = prefs.getBool(_keyUseFlowingBackground) ?? false;
     _useDuetLayout = prefs.getBool(_keyUseDuetLayout) ?? false;
     _lineBalance = prefs.getBool(_keyLineBalance) ?? false;
@@ -926,7 +1021,7 @@ class LyricPreferences extends ChangeNotifier {
     _customFontPath = prefs.getString(_keyCustomFontPath);
     final colorValue = prefs.getInt(_keyCustomTextColor);
     _customTextColor = colorValue == null ? null : ui.Color(colorValue);
-    _ecoMode = prefs.getBool(_keyEcoMode) ?? false;
+    _ecoMode = prefs.getBool(_keyEcoMode) ?? _defaultEcoMode();
     _useDynamicLyricColor = prefs.getBool(_keyUseDynamicLyricColor) ?? false;
     _dynamicColorMixRatio =
         (prefs.getDouble(_keyDynamicColorMixRatio) ??
@@ -1019,6 +1114,26 @@ class LyricPreferences extends ChangeNotifier {
     }
   }
 
+  /// 高刷新率设备（>90Hz）默认开启歌词省电模式。
+  ///
+  /// 逐字歌词按 60fps 推进与满帧观感一致，但满帧会让 UI/Raster 线程
+  /// 每帧全量重绘歌词层。跟手拖动/惯性期间仍会解锁满帧
+  /// （见 AppleLyricsView._syncEcoDriver），不影响手感。
+  /// 取不到刷新率（测试环境、早期启动）时保持历史默认：关闭。
+  static bool _defaultEcoMode() {
+    // 仅移动端按刷新率自动开启：测试宿主与桌面端保持历史默认，
+    // 避免改变测试语义与桌面端行为。
+    if (defaultTargetPlatform != TargetPlatform.android &&
+        defaultTargetPlatform != TargetPlatform.iOS) {
+      return false;
+    }
+    for (final ui.Display display in ui.PlatformDispatcher.instance.displays) {
+      final double rate = display.refreshRate;
+      if (rate.isFinite && rate > 90) return true;
+    }
+    return false;
+  }
+
   /// 设置字号并持久化。会触发 [notifyListeners]。
   Future<void> setFontSize(double size) async {
     final clamped = size.clamp(
@@ -1061,6 +1176,45 @@ class LyricPreferences extends ChangeNotifier {
     await prefs.setBool(_keyUseGaussianBlur, enabled);
   }
 
+  /// 设置模糊等级交叉淡入淡出开关并持久化。
+  Future<void> setBlurLevelCrossfade(bool enabled) async {
+    if (_blurLevelCrossfade == enabled) return;
+    _blurLevelCrossfade = enabled;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyBlurLevelCrossfade, enabled);
+  }
+
+  /// 设置「提前换行」开关并持久化。
+  Future<void> setEarlyLineSwitch(bool enabled) async {
+    if (_earlyLineSwitch == enabled) return;
+    _earlyLineSwitch = enabled;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyEarlyLineSwitch, enabled);
+  }
+
+  /// 设置模糊等级渐变时长并持久化（clamp 到 50~1000ms）。
+  Future<void> setBlurLevelFadeMs(double value) async {
+    final clamped =
+        value.clamp(minBlurLevelFadeMs, maxBlurLevelFadeMs);
+    if (clamped == _blurLevelFadeMs) return;
+    _blurLevelFadeMs = clamped;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_keyBlurLevelFadeMs, _blurLevelFadeMs);
+  }
+
+  /// 设置当前行入场模糊褪去时长并持久化（clamp 到 100~1000ms）。
+  Future<void> setEntryBlurFadeMs(double value) async {
+    final clamped = value.clamp(minEntryBlurFadeMs, maxEntryBlurFadeMs);
+    if (clamped == _entryBlurFadeMs) return;
+    _entryBlurFadeMs = clamped;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_keyEntryBlurFadeMs, _entryBlurFadeMs);
+  }
+
   /// 设置歌词模糊强度倍数并持久化。
   Future<void> setBlurIntensity(double value) async {
     final clamped = value.clamp(minBlurIntensityForCurrentPlatform,
@@ -1099,6 +1253,15 @@ class LyricPreferences extends ChangeNotifier {
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_keyGlowCharScale, enabled);
+  }
+
+  /// 设置歌词字体柔边抗锯齿开关并持久化。
+  Future<void> setSoftEdgeAntiAlias(bool enabled) async {
+    if (_softEdgeAntiAlias == enabled) return;
+    _softEdgeAntiAlias = enabled;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keySoftEdgeAntiAlias, enabled);
   }
 
   /// 设置动态流光背景开关并持久化。
@@ -1708,6 +1871,10 @@ class LyricPreferences extends ChangeNotifier {
     _fontWeight = defaultFontWeightForCurrentPlatform;
     _useGaussianBlur = false;
     _blurIntensity = defaultBlurIntensity;
+    _blurLevelCrossfade = false;
+    _blurLevelFadeMs = defaultBlurLevelFadeMs;
+    _earlyLineSwitch = false;
+    _entryBlurFadeMs = defaultEntryBlurFadeMs;
     _useGlowEffect = false;
     _useFlowingBackground = false;
     _useDuetLayout = false;
@@ -1727,6 +1894,7 @@ class LyricPreferences extends ChangeNotifier {
     _glowFixedThresholdMs = defaultGlowFixedThresholdMsForCurrentPlatform;
     _glowIntensity = defaultGlowIntensityForCurrentPlatform;
     _glowCharScale = defaultGlowCharScale;
+    _softEdgeAntiAlias = defaultSoftEdgeAntiAlias;
     _inactiveScale = defaultInactiveScaleForCurrentPlatform;
     _alignPosition = defaultAlignPositionForCurrentPlatform;
     _cascadeMaxDelayMs = defaultCascadeMaxDelayMsForCurrentPlatform;
@@ -1751,6 +1919,9 @@ class LyricPreferences extends ChangeNotifier {
     await prefs.setInt(_keyFontWeight, _fontWeight);
     await prefs.setBool(_keyUseGaussianBlur, _useGaussianBlur);
     await prefs.remove(_keyBlurIntensity);
+    await prefs.remove(_keyBlurLevelCrossfade);
+    await prefs.remove(_keyBlurLevelFadeMs);
+    await prefs.remove(_keyEarlyLineSwitch);
     await prefs.setBool(_keyUseGlowEffect, _useGlowEffect);
     await prefs.setBool(_keyUseFlowingBackground, _useFlowingBackground);
     await prefs.setBool(_keyUseDuetLayout, _useDuetLayout);
@@ -1766,6 +1937,7 @@ class LyricPreferences extends ChangeNotifier {
     await prefs.remove(_keyGlowFixedThresholdMs);
     await prefs.remove(_keyGlowIntensity);
     await prefs.remove(_keyGlowCharScale);
+    await prefs.remove(_keySoftEdgeAntiAlias);
     await prefs.remove(_keyInactiveScale);
     await prefs.remove(_keyAlignPosition);
     await prefs.remove(_keyCascadeMaxDelayMs);

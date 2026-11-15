@@ -107,9 +107,32 @@ class LyricCreditFilter {
   ///
   /// 开关未开启时恒为 false（零成本短路），调用方可放心常驻调用。
   static bool isFilteredLine(String text) {
-    if (!enabled || text.isEmpty) return false;
-    return _regexFor(LyricPreferences.instance.creditPattern)
-        .hasMatch(text.trim());
+    if (!enabled) return false;
+    return matchesCreditText(text);
+  }
+
+  /// 判断一行文本是否命中「作者/制作信息」规则（**不看过滤开关**）。
+  ///
+  /// [isFilteredLine] 是"开关 + 规则"的显示口径；需要「无论开关如何都排除名单行」
+  /// 的场景（如辉光判定：头部信息行不该被当成歌词打强调效果）走本入口，
+  /// 保证两边用的是同一套规则 —— 不要再各维护一份关键词表，否则必然漂移
+  /// （如英文名单 / 【…】包装行 / 版权声明句只在本规则里覆盖）。
+  static bool matchesCreditText(String text) {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return false;
+    return _regexFor(LyricPreferences.instance.creditPattern).hasMatch(trimmed);
+  }
+
+  /// 判断一行文本是否呈「作者 - 歌名」头部形态（**不看过滤开关**）。
+  ///
+  /// 在线歌词首行固定为该形态（如 `周杰伦 - 晴天`），行级正则覆盖不到：
+  /// 过滤列表时由 [_headCreditBlockEnd] 结合上下文整块移除，而「只能看单行」
+  /// 的场景（辉光判定）只能按形态近似——误伤面仅限整行恰似 `作者 - 歌名`
+  /// 的歌词行（带 ` - ` 分隔、且总长受限，实际罕见）。
+  static bool matchesArtistTitleForm(String text) {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return false;
+    return _artistTitleLine.hasMatch(trimmed);
   }
 
   /// 按当前偏好过滤歌词行列表。

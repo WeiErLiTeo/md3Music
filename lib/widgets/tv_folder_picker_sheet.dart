@@ -68,13 +68,21 @@ class _TvFolderPickerSheetState extends State<_TvFolderPickerSheet> {
   /// 当前所在目录；空串表示处于根层（列出存储卷）。
   String _currentPath = '';
 
-  /// tv: 首焦点（「选择当前文件夹」主动作）。弹层延迟挂载 autofocus 不可靠，
-  /// 由 [TvSheetFocus] 显式 requestFocus。
+  /// tv: 首焦点（子目录层的「选择当前文件夹」主动作）。弹层延迟挂载
+  /// autofocus 不可靠，由 [TvSheetFocus] 显式 requestFocus。
   final FocusNode _confirmNode = FocusNode();
+
+  /// tv: 根层（存储设备列表）的首焦点，挂在第一个存储项上。根层的
+  /// 「选择当前文件夹」「上一级」都被禁用，dpad 对 disabled 节点设
+  /// canRequestFocus=false 并整体跳过，首焦点若指向它们会落空（高亮
+  /// 悬空、要反复按方向键才撞进存储列表），因此根层必须以首个存储项
+  /// 为首焦点目标。
+  final FocusNode _firstEntryNode = FocusNode();
 
   @override
   void dispose() {
     _confirmNode.dispose();
+    _firstEntryNode.dispose();
     super.dispose();
   }
 
@@ -124,11 +132,15 @@ class _TvFolderPickerSheetState extends State<_TvFolderPickerSheet> {
   }
 
   /// 进入子目录 / 返回上级后把焦点收回主动作，避免焦点悬在已销毁的列表行上。
+  /// 目标随层级切换：根层回到首个存储项（确认按钮此时禁用不可获焦），
+  /// 子目录层回到「选择当前文件夹」。
   void _navigate(String path) {
     setState(() => _currentPath = path);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && _confirmNode.context != null) {
-        _confirmNode.requestFocus();
+      if (!mounted) return;
+      final node = _currentPath.isEmpty ? _firstEntryNode : _confirmNode;
+      if (node.context != null && node.context!.mounted) {
+        node.requestFocus();
       }
     });
   }
@@ -146,7 +158,10 @@ class _TvFolderPickerSheetState extends State<_TvFolderPickerSheet> {
     }
 
     return TvSheetFocus(
-      targetNode: _confirmNode,
+      // 首焦点随层级切换：根层（确认按钮禁用）落到首个存储项，
+      // 子目录层落到「选择当前文件夹」。targetNode 变化时 TvSheetFocus
+      // 会重开请求窗口，覆盖进出目录后的焦点恢复。
+      targetNode: atRoot ? _firstEntryNode : _confirmNode,
       child: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(AppSpacing.lg),
@@ -239,6 +254,8 @@ class _TvFolderPickerSheetState extends State<_TvFolderPickerSheet> {
                         void enter() => _navigate(dir.path);
                         return DpadFocusable(
                           debugLabel: 'tv_folder_entry_$index',
+                          // 首项挂根层首焦点节点（见 _firstEntryNode 注释）
+                          focusNode: index == 0 ? _firstEntryNode : null,
                           onSelect: enter,
                           enabled: true,
                           child: ListTile(

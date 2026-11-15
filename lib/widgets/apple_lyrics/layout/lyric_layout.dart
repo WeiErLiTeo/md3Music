@@ -136,6 +136,51 @@ class LyricLayout {
     fontWeight: fontWeight,
   );
 
+  // ============== 字体柔边抗锯齿 ==============
+
+  /// 歌词字体柔边抗锯齿开关（AM 歌词专用，默认关闭）。
+  static bool get softEdgeAntiAlias =>
+      LyricPreferences.instance.softEdgeAntiAlias;
+
+  /// 柔边 sigma（逻辑 px）：随字号缓慢增长，限制在 [0.35, 1.0]。
+  static double softEdgeSigma(double fontSize) =>
+      (fontSize * 0.02).clamp(0.35, 1.0);
+
+  /// 柔边外扩（逻辑 px）：3σ，保证模糊衰减不被图层/图片边界裁断。
+  static double softEdgePad(double fontSize) => softEdgeSigma(fontSize) * 3;
+
+  /// 歌词文字绘制样式（统一注入柔边抗锯齿）。
+  ///
+  /// - 关闭柔边：普通 `color` 绘制，与改造前逐像素一致；
+  /// - 开启柔边：改用 `foreground` Paint + `MaskFilter.blur`，字形 alpha 边缘
+  ///   多一圈亚像素过渡。**不要同时设置 color**（两者互斥）。
+  ///
+  /// [softSigma] 供超采样烘焙覆盖：字形图按 `fontSize × 超采样倍数` 渲染时，
+  /// 传入 `softEdgeSigma(逻辑字号) × 超采样倍数`，缩回逻辑尺寸后柔边宽度才一致。
+  static TextStyle paintStyle({
+    required double fontSize,
+    required double height,
+    required Color color,
+    double? softSigma,
+  }) {
+    final TextStyle base = TextStyle(
+      fontSize: fontSize,
+      height: height,
+      fontFamily: fontFamily,
+      fontWeight: fontWeight,
+    );
+    if (!softEdgeAntiAlias) return base.copyWith(color: color);
+    return base.copyWith(
+      foreground: Paint()
+        ..color = color
+        ..isAntiAlias = true
+        ..maskFilter = MaskFilter.blur(
+          BlurStyle.normal,
+          softSigma ?? softEdgeSigma(fontSize),
+        ),
+    );
+  }
+
   /// 测量指定行在视口宽度内实际占用的总高度（含自动换行）。
   ///
   /// 行数一律由 `LyricWrapPlanner` 的换行计划给出，测量方不再自行数行。
@@ -484,17 +529,30 @@ class LyricLayout {
     return ((scale - inactiveScale) / denom).clamp(0.0, 1.0).toDouble();
   }
 
-  /// 高斯模糊层合成期系数：上方已播行跟随 [playedOpacity]、下方未播行跟随
-  /// [unplayedOpacity]，默认偏好下恒为 1.0（零视觉回归）。
+  /// 高斯模糊层合成期系数：让**模糊层的有效 alpha 严格等于同一行清晰层的
+  /// alpha**（模糊全开时非当前行的清晰层被 P2-I 跳过，模糊图就是该行唯一的
+  /// 呈现，两者不同就等于"开关模糊会改变歌词亮度"）。
   ///
-  /// 只压暗不提亮：`Opacity` 上限为 1.0，故调高透明度时在模糊层不再叠加
-  /// （清晰层仍会生效）；离屏模糊图烘焙 alpha 固定 0.5 不变，避免重烘焙。
+  /// 目标 alpha：
+  /// - 上方已播行 = [aboveLineAlpha]（= playedOpacity × 0.5）；
+  /// - 下方未播行 = [alphaBase]（= unplayedOpacity × 0.5）。
+  ///
+  /// 烘焙图 alpha 恒为 [blurBakedAlpha]，故系数 = 目标 α ÷ 烘焙 α。
+  ///
+  /// **旧口径的坑**：此前按「相对默认偏好的比例」缩放（`U ÷ 0.4`），与清晰层的
+  /// 绝对基线（`U × 0.5`）不是同一口径——默认偏好下未播模糊行就已比清晰层亮
+  /// 2.5 倍（0.5 vs 0.2），未播透明度调得越低偏差越大，观感"下方未播歌词的
+  /// 模糊层偏白"（用户 2026-11-13 反馈）。上方已播行两种口径数值相同，所以只有
+  /// 未播行露馅。
+  ///
+  /// 只压暗不提亮：`Opacity` 上限为 1.0，目标 α 最大 0.5（= 烘焙 α）时系数到顶，
+  /// 调高透明度不再叠加（清晰层仍会生效）；离屏模糊图仍不随偏好重烘焙。
   static double blurOpacityScaleFor({required bool isAbove}) {
     final prefs = LyricPreferences.instance;
-    final double ratio = isAbove
-        ? prefs.playedOpacity / LyricPreferences.defaultPlayedOpacity
-        : prefs.unplayedOpacity / LyricPreferences.defaultUnplayedOpacity;
-    return ratio.clamp(0.0, 1.0).toDouble();
+    final double targetAlpha = isAbove
+        ? prefs.playedOpacity * 0.5
+        : prefs.unplayedOpacity * 0.5;
+    return (targetAlpha / blurBakedAlpha).clamp(0.0, 1.0).toDouble();
   }
 
   /// ATTACK 速度：当前字变亮指数渐变系数

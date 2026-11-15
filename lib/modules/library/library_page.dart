@@ -69,7 +69,11 @@ class _LibraryPageState extends State<LibraryPage>
       // 其余（含 IME 组合中）照常交给输入编辑。
       onKeyEvent: kTvBuild ? _onSearchKeyEvent : null,
     );
-    if (kTvBuild) TvFabFocusBridge.instance.register(_tvFabNode);
+    if (kTvBuild) {
+      TvFabFocusBridge.instance.register(_tvFabNode);
+      // tv: 焦点离开搜索框即收起为图标（见 [_onSearchFocusChanged]）。
+      _searchFocusNode.addListener(_onSearchFocusChanged);
+    }
     // 监听 FullPlayer 展开状态：展开时取消搜索框焦点，防止返回时自动弹输入法
     playerExpansion.addListener(_onPlayerExpansionChanged);
     // 页面加载后立即取消搜索框焦点，防止输入法自动弹出。
@@ -114,7 +118,7 @@ class _LibraryPageState extends State<LibraryPage>
   /// 功能操作不应保留输入焦点；在新路由记忆旧焦点前同步清除。
   void _dismissSearchFocus() {
     _searchFocusNode.unfocus();
-    if (!kTvBuild && _searchInputEnabled) {
+    if (_searchInputEnabled) {
       setState(() => _searchInputEnabled = false);
     }
     FocusManager.instance.primaryFocus?.unfocus();
@@ -173,7 +177,9 @@ class _LibraryPageState extends State<LibraryPage>
             : null,
         bottom: hasMusic || isScanning
             ? PreferredSize(
-                preferredSize: Size.fromHeight(compactHeader ? 64 : 116),
+                preferredSize: Size.fromHeight(
+                  compactHeader ? 64 : (_tvSearchCollapsed ? 64 : 116),
+                ),
                 child: ContentWidth(
                   child: Padding(
                     padding: EdgeInsets.fromLTRB(
@@ -195,16 +201,21 @@ class _LibraryPageState extends State<LibraryPage>
                               const Gap(AppSpacing.lg),
                               Expanded(
                                 flex: 3,
-                                child: _buildCategoryRow(textTheme, colorScheme,
-                                    showScan: isLandscape),
+                                child: _buildCategoryRow(textTheme,
+                                    colorScheme, showScan: isLandscape),
                               ),
                             ],
                           )
                         : Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              _buildSearchField(libraryProvider, colorScheme),
-                              const Gap(AppSpacing.sm),
+                              // tv: 收起态搜索图标已在分类行首，这里不再占行，
+                              // header 高度同步由 116 收到 64。
+                              if (!_tvSearchCollapsed) ...[
+                                _buildSearchField(
+                                    libraryProvider, colorScheme),
+                                const Gap(AppSpacing.sm),
+                              ],
                               _buildCategoryRow(
                                 textTheme,
                                 colorScheme,
@@ -262,9 +273,34 @@ class _LibraryPageState extends State<LibraryPage>
     );
   }
 
+  /// tv: 收起态只画搜索图标——搜索框一旦进入焦点路径，遥控器路过（焦点落到
+  /// TextField）就会立刻弹输入法，用户并没打算搜索。故 TV 下必须先按 OK
+  /// 展开成输入框，键盘才出现。
+  bool get _tvSearchCollapsed => kTvBuild && !_searchInputEnabled;
+
+  /// tv: 展开搜索输入框并移入焦点（触发输入法）。已展开时只把焦点要回来。
+  void _expandTvSearch() {
+    if (_searchInputEnabled) {
+      _searchFocusNode.requestFocus();
+      return;
+    }
+    setState(() => _searchInputEnabled = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _searchInputEnabled) _searchFocusNode.requestFocus();
+    });
+  }
+
+  /// tv: 焦点离开搜索框即收起为图标，避免展开态常驻后遥控再次路过又弹键盘。
+  void _onSearchFocusChanged() {
+    if (!mounted) return;
+    final bool focused = _searchFocusNode.hasFocus;
+    if (focused == _searchInputEnabled) return;
+    setState(() => _searchInputEnabled = focused);
+  }
+
   void _activateSearchFocus() {
     if (kTvBuild) {
-      _searchFocusNode.requestFocus();
+      _expandTvSearch();
       return;
     }
     if (_searchInputEnabled) return;
@@ -323,6 +359,27 @@ class _LibraryPageState extends State<LibraryPage>
     }
   }
 
+  /// tv: 搜索入口图标（收起态）。遥控器点选/按 OK 才展开输入框，
+  /// 焦点路过图标不会触发输入法（口径同 [TvShell] 的搜索按钮）。
+  Widget _buildTvSearchIcon(ColorScheme cs) {
+    return SizedBox(
+      height: 48,
+      width: 48,
+      child: DpadFocusable(
+        debugLabel: 'library_search_icon',
+        tapToSelect: false,
+        onSelect: _expandTvSearch,
+        child: IconButton(
+          visualDensity: const VisualDensity(horizontal: -3, vertical: -2),
+          constraints: const BoxConstraints.tightFor(width: 48, height: 48),
+          icon: const Icon(Icons.search, size: 22),
+          tooltip: '搜索本地音乐',
+          onPressed: _expandTvSearch,
+        ),
+      ),
+    );
+  }
+
   Widget _buildSearchField(LibraryProvider library, ColorScheme cs) {
     final field = SizedBox(
     height: 48,
@@ -370,6 +427,11 @@ class _LibraryPageState extends State<LibraryPage>
   Widget _buildCategoryRow(TextTheme textTheme, ColorScheme colorScheme,
       {required bool showScan, bool centered = false}) => Row(
     children: [
+      // tv: 搜索图标并入分类行首，不再单独占一整行（收起态避免多出一段空白）。
+      if (_tvSearchCollapsed) ...[
+        _buildTvSearchIcon(colorScheme),
+        const Gap(AppSpacing.sm),
+      ],
       Expanded(child: _buildCategoryTabs(textTheme, centered: centered)),
       if (showScan) ...[
         const Gap(AppSpacing.sm),

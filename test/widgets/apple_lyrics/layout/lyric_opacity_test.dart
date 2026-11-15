@@ -56,6 +56,40 @@ void main() {
     });
   });
 
+  group('当前行未播字与未播行同色', () {
+    test('默认偏好：字内渐变未播端 == 未播行 SOLID alpha（0.2）', () {
+      final WordRenderer active = WordRenderer();
+      active.setLineState(isActive: true, scale: LyricLayout.activeScale);
+      final LineRenderer below = LineRenderer();
+      below.setLineState(
+        isActive: false,
+        scale: LyricLayout.inactiveScale,
+        blurActive: false,
+      );
+      expect(active.sweepDarkAlpha, closeTo(0.2, 1e-9));
+      expect(active.sweepDarkAlpha, closeTo(below.targetAlpha, 1e-9),
+          reason: '当前行"还没唱到的部分"必须与下方未播歌词同色；'
+              '旧实现随 factor 放大到 unplayedOpacity(0.4)，切到当前行时'
+              '整行未唱部分会突然亮半档（用户 2026-11-13 反馈）');
+      // 已播端仍走亮档
+      expect(active.dynamicBrightAlpha, closeTo(1.0, 1e-9));
+    });
+
+    test('自定义未播透明度：两者同步跟随（base = U × 0.5）', () async {
+      await prefs.setUnplayedOpacity(0.2);
+      final WordRenderer active = WordRenderer();
+      active.setLineState(isActive: true, scale: LyricLayout.activeScale);
+      final LineRenderer below = LineRenderer();
+      below.setLineState(
+        isActive: false,
+        scale: LyricLayout.inactiveScale,
+        blurActive: false,
+      );
+      expect(active.sweepDarkAlpha, closeTo(0.1, 1e-9));
+      expect(active.sweepDarkAlpha, closeTo(below.targetAlpha, 1e-9));
+    });
+  });
+
   group('非默认值生效', () {
     test('WordRenderer 亮/暗档跟随偏好且保留 factor 线性联动', () async {
       await prefs.setPlayedOpacity(0.5);
@@ -127,16 +161,39 @@ void main() {
   });
 
   group('高斯模糊层系数', () {
-    test('默认偏好恒为 1.0（零回归），调低生效、调高不叠加', () async {
+    test('模糊层有效 alpha == 同行清晰层 alpha（默认偏好）', () {
+      // 上方已播行：目标 = aboveLineAlpha = playedOpacity × 0.5 = 0.5
+      expect(
+        LyricLayout.blurOpacityScaleFor(isAbove: true) *
+            LyricLayout.blurBakedAlpha,
+        closeTo(LyricLayout.aboveLineAlpha, 1e-9),
+      );
+      // 下方未播行：目标 = alphaBase = unplayedOpacity × 0.5 = 0.2
+      // （旧口径按 U/0.4 缩放 → 有效 0.5，比清晰层亮 2.5 倍，模糊层发白）
+      expect(
+        LyricLayout.blurOpacityScaleFor(isAbove: false) *
+            LyricLayout.blurBakedAlpha,
+        closeTo(LyricLayout.alphaBase, 1e-9),
+      );
       expect(LyricLayout.blurOpacityScaleFor(isAbove: true), 1.0);
-      expect(LyricLayout.blurOpacityScaleFor(isAbove: false), 1.0);
+      expect(LyricLayout.blurOpacityScaleFor(isAbove: false), closeTo(0.4, 1e-9));
+    });
+
+    test('跟随偏好：U=0 全隐藏，U=1 到顶不叠加', () async {
       await prefs.setPlayedOpacity(0.0);
       await prefs.setUnplayedOpacity(0.0);
       expect(LyricLayout.blurOpacityScaleFor(isAbove: true), 0.0);
       expect(LyricLayout.blurOpacityScaleFor(isAbove: false), 0.0);
       await prefs.setUnplayedOpacity(1.0);
       expect(LyricLayout.blurOpacityScaleFor(isAbove: false), 1.0,
-          reason: 'Opacity 上限 1.0，调高不叠加');
+          reason: '目标 α = 0.5 = 烘焙 α，系数到顶；再调高由清晰层生效，'
+              '模糊层不叠加（Opacity 上限 1.0）');
+      expect(
+        LyricLayout.blurOpacityScaleFor(isAbove: false) *
+            LyricLayout.blurBakedAlpha,
+        closeTo(LyricLayout.alphaBase, 1e-9),
+        reason: '系数 × 烘焙 alpha 必须始终等于 alphaBase（含钳到 1.0 的区间）',
+      );
     });
   });
 

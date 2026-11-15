@@ -236,6 +236,8 @@ class _SettingsPageState extends State<SettingsPage>
   bool _useGlowEffect = false;
   // 辉光字符缩放：关闭后强调字不再放大与左右外扩，只留上浮与辉光呼吸
   bool _lyricGlowCharScale = true;
+  // 歌词字体柔边抗锯齿（默认关闭）
+  bool _lyricSoftEdge = false;
   bool _useFlowingBackground = false;
   bool _useDuetLayout = false;
   bool _lyricEcoMode = false;
@@ -1049,6 +1051,7 @@ class _SettingsPageState extends State<SettingsPage>
       _useGaussianBlur = LyricPreferences.instance.useGaussianBlur;
       _useGlowEffect = LyricPreferences.instance.useGlowEffect;
       _lyricGlowCharScale = LyricPreferences.instance.useGlowCharScale;
+      _lyricSoftEdge = LyricPreferences.instance.softEdgeAntiAlias;
       _useFlowingBackground = LyricPreferences.instance.useFlowingBackground;
       _useDuetLayout = LyricPreferences.instance.useDuetLayout;
       _lyricEcoMode = LyricPreferences.instance.ecoMode;
@@ -3899,6 +3902,10 @@ class _SettingsPageState extends State<SettingsPage>
         // 必须挂在非 tile 节点上：生成器遇到 search-item 注释所在的 tile 会
         // 走手写分支、跳过该 tile 的标题自动收集（丢「歌词动画」自身条目）。
         // search-item: 歌词模糊强度 | 歌词 模糊 强度 程度 高斯模糊
+        // search-item: 模糊等级渐变切换 | 模糊 等级 渐变 切换 交叉淡入 淡出 透明度 硬切 过渡 crossfade
+        // search-item: 模糊等级渐变时长 | 模糊 等级 渐变 时长 过渡时间 毫秒 ms 交叉淡入 淡出 1000
+        // search-item: 提前换行 | 提前 换行 预换行 逐字完成 延迟 等待 字内渐变 缩放 模糊
+        // search-item: 模糊褪去时长 | 模糊 褪去 时长 淡出 消失 模糊图 开唱 交接 毫秒 ms 1000
         // search-item: 动态颜色混色比例 | 动态颜色 混色 比例 取色 封面 高亮 已播
         // search-item: 辉光强度 | 辉光 发光 强度 亮度
         // search-item: 辉光触发阈值 | 辉光 发光 阈值 灵敏度
@@ -4497,6 +4504,22 @@ class _SettingsPageState extends State<SettingsPage>
                   AppHaptics.lightImpact(HapticCategory.control);
                   setState(() => _lyricGlowCharScale = v);
                   LyricPreferences.instance.setUseGlowCharScale(v);
+                }
+              : null,
+        ),
+        // search: 字幕 柔边 抗锯齿 字体 边缘 柔滑 平滑 锯齿 font smooth antialias
+        SwitchListTile(
+          title: const Text('歌词字体柔边'),
+          subtitle: const Text(
+            '给歌词与翻译的字形边缘做轻微柔化，观感更柔滑'
+            '（默认关闭，开启后轻微增加绘制开销）',
+          ),
+          value: _lyricSoftEdge,
+          onChanged: _useAmStylePlayer
+              ? (v) {
+                  AppHaptics.lightImpact(HapticCategory.control);
+                  setState(() => _lyricSoftEdge = v);
+                  LyricPreferences.instance.setSoftEdgeAntiAlias(v);
                 }
               : null,
         ),

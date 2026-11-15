@@ -210,6 +210,36 @@ void main() {
     });
   });
 
+  group('无开关规则入口（供辉光判定等复用）', () {
+    test('matchesCreditText 不看开关：命中名单行', () {
+      expect(LyricCreditFilter.enabled, isFalse, reason: '前置：开关默认关闭');
+      for (final text in <String>[
+        '作词：林夕',
+        'Lyrics by: John',
+        '【某某工作室】',
+        '未经著作权人许可，不得翻唱',
+      ]) {
+        expect(LyricCreditFilter.matchesCreditText(text), isTrue,
+            reason: '「$text」应命中名单规则（与开关无关）');
+        expect(LyricCreditFilter.isFilteredLine(text), isFalse,
+            reason: '显示口径仍需开关门控');
+      }
+    });
+
+    test('matchesCreditText 不误伤正常歌词', () {
+      for (final text in <String>['月亮代表我的心', '他说：我们走吧', 'I love you']) {
+        expect(LyricCreditFilter.matchesCreditText(text), isFalse,
+            reason: '「$text」是正常歌词');
+      }
+    });
+
+    test('matchesArtistTitleForm 只认「作者 - 歌名」形态', () {
+      expect(LyricCreditFilter.matchesArtistTitleForm('周杰伦 - 晴天'), isTrue);
+      expect(LyricCreditFilter.matchesArtistTitleForm('月亮代表我的心'), isFalse);
+      expect(LyricCreditFilter.matchesArtistTitleForm(''), isFalse);
+    });
+  });
+
   group('自定义正则', () {
     test('自定义 pattern 覆盖默认规则', () async {
       await LyricPreferences.instance.setHideLyricCredits(true);
