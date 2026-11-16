@@ -23,8 +23,9 @@ import '../song_ranking_sheet.dart';
 import 'yt_lyrics_drawer.dart';
 import 'yt_more_menu.dart';
 
-/// 1:1 复刻歌词与评论抽屉展开动画的全屏内嵌「歌曲百科 / 详细信息」抽屉
-/// （点击播放页歌名打开，展示年份、语种、曲风/标签、制作名单、高潮副歌、榜单成绩、专辑简介与相似歌曲）
+/// 1:1 复刻歌词与评论抽屉展开动画的全屏内嵌「相关内容 / 歌曲百科」双 Tab 抽屉
+/// （点击播放页歌名打开：Tab 1 为原版 YT Music 风格「相关内容」，含你可能还喜欢、其他表演、
+/// 同类音乐人大圆头像、歌手更多正方形大专辑；Tab 2 为网易云风格「歌曲百科」完整档案）
 class YtSongInfoDrawer extends StatefulWidget {
   final Animation<double> expansion;
   final Song song;
@@ -171,6 +172,22 @@ class _YtSongInfoDrawerState extends State<YtSongInfoDrawer> {
   }
 }
 
+enum _YtSongDrawerTab { related, wiki }
+
+class _SimilarArtistCardData {
+  final String id;
+  final String name;
+  final String? avatarUrl;
+  final String subtitle;
+
+  const _SimilarArtistCardData({
+    required this.id,
+    required this.name,
+    this.avatarUrl,
+    required this.subtitle,
+  });
+}
+
 class _YtSongInfoData {
   final String? albumId;
   final String? albumName;
@@ -188,7 +205,12 @@ class _YtSongInfoData {
   final List<String> qualityBadges;
   final List<({String role, String value})> credits;
   final KugouSongRanking? ranking;
-  final List<Song> relatedSongs;
+  final List<Song> youMayLikeSongs;
+  final List<Song> otherPerformances;
+  final List<_SimilarArtistCardData> similarArtists;
+  final String? primaryArtistName;
+  final String? primaryArtistAvatar;
+  final List<KugouAlbumBrief> artistAlbums;
 
   const _YtSongInfoData({
     this.albumId,
@@ -207,7 +229,12 @@ class _YtSongInfoData {
     this.qualityBadges = const [],
     this.credits = const [],
     this.ranking,
-    this.relatedSongs = const [],
+    this.youMayLikeSongs = const [],
+    this.otherPerformances = const [],
+    this.similarArtists = const [],
+    this.primaryArtistName,
+    this.primaryArtistAvatar,
+    this.artistAlbums = const [],
   });
 }
 
@@ -241,6 +268,7 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
   bool _capturingPullDown = false;
   double _lastStepDy = 0.0;
 
+  _YtSongDrawerTab _tab = _YtSongDrawerTab.related;
   int _requestToken = 0;
   bool _loading = true;
   bool _introExpanded = false;
@@ -268,6 +296,56 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
     super.dispose();
   }
 
+  static String _stripSongVersionTitle(String raw) {
+    final cleaned = raw
+        .replaceAll(RegExp(r'\s*[\(\[（【].*?[\)\]）】]'), '')
+        .split(' - ')
+        .first
+        .trim();
+    return cleaned.isNotEmpty ? cleaned : raw.trim();
+  }
+
+  static String? _detectPerformanceBadge(Song candidate, Song current) {
+    final raw = '${candidate.title} ${candidate.album}'.toLowerCase();
+    if (raw.contains('live') ||
+        raw.contains('现场') ||
+        raw.contains('演唱会') ||
+        raw.contains('音乐节')) {
+      return '现场';
+    }
+    if (raw.contains('cover') ||
+        raw.contains('翻唱') ||
+        raw.contains('女声版') ||
+        raw.contains('男声版') ||
+        raw.contains('粤语版') ||
+        raw.contains('日文版') ||
+        raw.contains('英文版')) {
+      return '翻唱';
+    }
+    if (raw.contains('piano') ||
+        raw.contains('钢琴') ||
+        raw.contains('吉他') ||
+        raw.contains('acoustic') ||
+        raw.contains('不插电') ||
+        raw.contains('纯音乐') ||
+        raw.contains('伴奏') ||
+        raw.contains('inst')) {
+      return '演奏';
+    }
+    if (raw.contains('remix') ||
+        raw.contains('dj') ||
+        raw.contains('混音') ||
+        raw.contains('慢摇') ||
+        raw.contains('降调')) {
+      return '混音';
+    }
+    if (candidate.artist.trim().toLowerCase() !=
+        current.artist.trim().toLowerCase()) {
+      return '翻唱';
+    }
+    return '版本';
+  }
+
   Future<void> _loadSongInfo({
     bool forceRefreshLyrics = false,
     bool notify = true,
@@ -290,14 +368,17 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
     String? albumId = song.albumId;
     String? albumName = !isUnknownAlbum(song.album) ? song.album : null;
     String? albumAudioId = song.albumAudioId;
+    String? artistId = song.artistId;
     final qualityBadges = <String>[];
 
-    // 1. 先加载制作名单（歌词缓存优先，毫秒级命中）与歌曲基础详情
+    // 1. 先加载制作名单与歌曲基础详情
     final lyricFuture = YtLyricsCache.load(
       song,
       kugouProvider,
       force: forceRefreshLyrics,
-    ).catchError((_) => const YtCachedLyricsEntry(parsedLines: [], rawLyricText: ''));
+    ).catchError(
+      (_) => const YtCachedLyricsEntry(parsedLines: [], rawLyricText: ''),
+    );
 
     final detailFuture = song.isOnline && song.id.isNotEmpty
         ? api.getSongDetail(song.id).catchError((_) => null)
@@ -326,6 +407,11 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
           songDetail.albumAudioId!.isNotEmpty) {
         albumAudioId = songDetail.albumAudioId;
       }
+      if ((artistId == null || artistId.isEmpty) &&
+          songDetail.artistId != null &&
+          songDetail.artistId!.isNotEmpty) {
+        artistId = songDetail.artistId;
+      }
       if (songDetail.sqHash != null && songDetail.sqHash!.isNotEmpty) {
         qualityBadges.add('SQ 无损');
       }
@@ -339,7 +425,12 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
       qualityBadges.add(song.quality!);
     }
 
-    // 2. 并行拉取专辑百科、/krm/audio 曲风标签、高潮副歌、榜单成绩、相似歌曲
+    final splitArtists = splitSongArtistNames(song.artist);
+    final primaryArtistName = splitArtists.isNotEmpty
+        ? splitArtists.first
+        : (!isUnknownArtist(song.artist) ? song.artist.trim() : null);
+
+    // 2. 并行拉取：专辑百科、/krm/audio、高潮副歌、榜单成绩、AI 风格推荐 + 相似歌曲、其他表演版本、主歌手专辑
     final albumRawFuture = (albumId != null && albumId.isNotEmpty)
         ? _fetchAlbumRaw(api, albumId)
         : Future<Map<String, dynamic>?>.value(null);
@@ -351,35 +442,56 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
     final climaxFuture = (song.climaxStart != null && song.climaxEnd != null)
         ? Future<KugouSongClimax?>.value(null)
         : (song.isOnline && song.id.isNotEmpty)
-            ? api
-                .getSongClimax(song.id, albumAudioId: albumAudioId)
-                .catchError((_) => null)
-            : Future<KugouSongClimax?>.value(null);
+        ? api
+              .getSongClimax(song.id, albumAudioId: albumAudioId)
+              .catchError((_) => null)
+        : Future<KugouSongClimax?>.value(null);
 
     final rankingFuture = (albumAudioId != null && albumAudioId.isNotEmpty)
         ? api.getSongRanking(albumAudioId).catchError((_) => null)
         : Future<KugouSongRanking?>.value(null);
 
+    final aiRecommendFuture = (albumAudioId != null && albumAudioId.isNotEmpty)
+        ? api
+              .getAiRecommend(albumAudioId)
+              .then(
+                (list) => (list ?? const <KugouSongDetail>[])
+                    .map((e) => e.toSong())
+                    .toList(),
+              )
+              .catchError((_) => const <Song>[])
+        : Future<List<Song>>.value(const <Song>[]);
+
     final relatedFuture = (albumAudioId != null && albumAudioId.isNotEmpty)
         ? _fetchRelatedSongs(api, albumAudioId, song.id)
         : (song.isOnline && song.id.isNotEmpty)
-            ? api
-                .getAudioRelated(song.id)
-                .then(
-                  (list) =>
-                      (list ?? const <KugouSongDetail>[])
-                          .map((e) => e.toSong())
-                          .toList(),
-                )
-                .catchError((_) => const <Song>[])
-            : Future<List<Song>>.value(const <Song>[]);
+        ? api
+              .getAudioRelated(song.id)
+              .then(
+                (list) => (list ?? const <KugouSongDetail>[])
+                    .map((e) => e.toSong())
+                    .toList(),
+              )
+              .catchError((_) => const <Song>[])
+        : Future<List<Song>>.value(const <Song>[]);
+
+    final otherPerfFuture = _fetchOtherPerformances(api, song);
+
+    final artistBundleFuture = _fetchPrimaryArtistBundle(
+      api,
+      artistId: artistId,
+      artistName: primaryArtistName,
+    );
 
     final allResults = await Future.wait([
       albumRawFuture,
       krmRawFuture,
       climaxFuture,
       rankingFuture,
+      aiRecommendFuture,
       relatedFuture,
+      otherPerfFuture,
+      artistBundleFuture,
     ]);
     if (!mounted || token != _requestToken) return;
 
@@ -387,9 +499,25 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
     final krmMap = allResults[1] as Map<String, dynamic>?;
     final climax = allResults[2] as KugouSongClimax?;
     final ranking = allResults[3] as KugouSongRanking?;
-    final relatedSongs = allResults[4] as List<Song>;
+    final aiSongs = allResults[4] as List<Song>;
+    final relatedSongs = allResults[5] as List<Song>;
+    final otherPerformances = allResults[6] as List<Song>;
+    final artistBundle =
+        allResults[7]
+            as ({String? avatarUrl, List<KugouAlbumBrief> albums});
 
-    // 解析专辑详情字段（publish_date, language, heat, type, intro, exclusive）
+    // 合并去重「你可能还喜欢」（优先 /ai/recommend 曲风推荐，其次 /audio/related）
+    final seenHashes = <String>{song.id.toLowerCase()};
+    final youMayLike = <Song>[];
+    for (final s in [...aiSongs, ...relatedSongs]) {
+      final key = s.id.trim().toLowerCase();
+      if (key.isEmpty || seenHashes.contains(key)) continue;
+      seenHashes.add(key);
+      youMayLike.add(s);
+      if (youMayLike.length >= 16) break;
+    }
+
+    // 解析专辑详情字段
     String? publishDate = _cleanDate(
       albumMap?['publish_date'] ??
           albumMap?['publishtime'] ??
@@ -462,7 +590,6 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
       _collectTagNames(base?['style'], tags);
     }
 
-    // 解析高潮时间段（秒）
     double? climaxStartSec = song.climaxStart;
     double? climaxEndSec = song.climaxEnd;
     if ((climaxStartSec == null || climaxEndSec == null) && climax != null) {
@@ -474,6 +601,7 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
       }
     }
 
+    // 先渲染首屏数据（不等同类歌手头像二次查询）
     setState(() {
       _data = _YtSongInfoData(
         albumId: albumId,
@@ -492,10 +620,223 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
         qualityBadges: qualityBadges,
         credits: credits,
         ranking: ranking,
-        relatedSongs: relatedSongs,
+        youMayLikeSongs: youMayLike,
+        otherPerformances: otherPerformances,
+        similarArtists: const [],
+        primaryArtistName: primaryArtistName,
+        primaryArtistAvatar: artistBundle.avatarUrl,
+        artistAlbums: artistBundle.albums,
       );
       _loading = false;
     });
+
+    // 3. 异步解析「同类音乐人」高清圆头像与作品数（基于曲风推荐里的关联音乐人）
+    final similarArtists = await _resolveSimilarArtists(
+      api,
+      recommendPool: [...youMayLike, ...otherPerformances],
+      excludeNames: splitArtists,
+    );
+    if (!mounted || token != _requestToken || similarArtists.isEmpty) return;
+    setState(() {
+      final prev = _data;
+      if (prev != null) {
+        _data = _YtSongInfoData(
+          albumId: prev.albumId,
+          albumName: prev.albumName,
+          publishDate: prev.publishDate,
+          language: prev.language,
+          albumType: prev.albumType,
+          company: prev.company,
+          heat: prev.heat,
+          exclusive: prev.exclusive,
+          albumIntro: prev.albumIntro,
+          tags: prev.tags,
+          bpm: prev.bpm,
+          climaxStartSec: prev.climaxStartSec,
+          climaxEndSec: prev.climaxEndSec,
+          qualityBadges: prev.qualityBadges,
+          credits: prev.credits,
+          ranking: prev.ranking,
+          youMayLikeSongs: prev.youMayLikeSongs,
+          otherPerformances: prev.otherPerformances,
+          similarArtists: similarArtists,
+          primaryArtistName: prev.primaryArtistName,
+          primaryArtistAvatar: prev.primaryArtistAvatar,
+          artistAlbums: prev.artistAlbums,
+        );
+      }
+    });
+  }
+
+  Future<List<Song>> _fetchOtherPerformances(
+    KugouApiClient api,
+    Song currentSong,
+  ) async {
+    final baseTitle = _stripSongVersionTitle(currentSong.displayName);
+    if (baseTitle.isEmpty) return const <Song>[];
+    try {
+      final res = await api.search(baseTitle, page: 1, pagesize: 24);
+      final songs = res?.songs ?? const <KugouSongDetail>[];
+      if (songs.isEmpty) return const <Song>[];
+      final lowerBase = baseTitle.toLowerCase();
+      final currentHash = currentSong.id.toLowerCase();
+      final seen = <String>{currentHash};
+      final out = <Song>[];
+      for (final d in songs) {
+        final s = d.toSong();
+        final h = s.id.trim().toLowerCase();
+        if (h.isEmpty || seen.contains(h)) continue;
+        final candidateClean = _stripSongVersionTitle(
+          s.displayName,
+        ).toLowerCase();
+        final titleMatches =
+            candidateClean == lowerBase ||
+            s.displayName.toLowerCase().contains(lowerBase);
+        if (!titleMatches) continue;
+        // 避免和当前歌曲完全同名同歌手且毫无版本差异的重复条目
+        final sameArtist =
+            s.artist.trim().toLowerCase() ==
+            currentSong.artist.trim().toLowerCase();
+        final sameRawTitle =
+            s.displayName.trim().toLowerCase() ==
+            currentSong.displayName.trim().toLowerCase();
+        if (sameArtist && sameRawTitle && s.album == currentSong.album) {
+          continue;
+        }
+        seen.add(h);
+        out.add(s);
+        if (out.length >= 8) break;
+      }
+      return out;
+    } catch (_) {
+      return const <Song>[];
+    }
+  }
+
+  Future<({String? avatarUrl, List<KugouAlbumBrief> albums})>
+  _fetchPrimaryArtistBundle(
+    KugouApiClient api, {
+    required String? artistId,
+    required String? artistName,
+  }) async {
+    try {
+      String? resolvedId = artistId;
+      String? fallbackAvatar;
+      if ((resolvedId == null || resolvedId.isEmpty) &&
+          artistName != null &&
+          artistName.isNotEmpty) {
+        final hits = await api.searchArtists(artistName, pagesize: 5);
+        if (hits != null && hits.isNotEmpty) {
+          KugouArtistBrief picked = hits.first;
+          final lower = artistName.toLowerCase();
+          for (final h in hits) {
+            if (h.name.trim().toLowerCase() == lower) {
+              picked = h;
+              break;
+            }
+          }
+          resolvedId = picked.id;
+          fallbackAvatar = picked.avatarUrl;
+        }
+      }
+      if (resolvedId == null || resolvedId.isEmpty) {
+        return (avatarUrl: fallbackAvatar, albums: const <KugouAlbumBrief>[]);
+      }
+      final res = await Future.wait([
+        api.getArtistDetail(resolvedId).catchError((_) => null),
+        api
+            .getArtistAlbums(resolvedId, page: 1, pagesize: 14, sort: 'hot')
+            .catchError((_) => null),
+      ]);
+      final detail = res[0] as KugouArtistDetail?;
+      final albumsRes = res[1] as KugouArtistAlbums?;
+      final avatar = YtMoreMenu.upgradeArtworkUri(
+        (detail?.avatarUrl != null && detail!.avatarUrl!.isNotEmpty)
+            ? detail.avatarUrl
+            : fallbackAvatar,
+      );
+      return (
+        avatarUrl: avatar,
+        albums: albumsRes?.albums ?? const <KugouAlbumBrief>[],
+      );
+    } catch (_) {
+      return (avatarUrl: null, albums: const <KugouAlbumBrief>[]);
+    }
+  }
+
+  Future<List<_SimilarArtistCardData>> _resolveSimilarArtists(
+    KugouApiClient api, {
+    required List<Song> recommendPool,
+    required List<String> excludeNames,
+  }) async {
+    final excluded = excludeNames.map((e) => e.trim().toLowerCase()).toSet();
+    final candidateNames = <String>[];
+    final fallbackCovers = <String, String?>{};
+    for (final s in recommendPool) {
+      for (final name in splitSongArtistNames(s.artist)) {
+        final clean = name.trim();
+        final lower = clean.toLowerCase();
+        if (clean.isEmpty ||
+            isUnknownArtist(clean) ||
+            excluded.contains(lower)) {
+          continue;
+        }
+        excluded.add(lower);
+        candidateNames.add(clean);
+        fallbackCovers[clean] = s.artworkUri;
+        if (candidateNames.length >= 6) break;
+      }
+      if (candidateNames.length >= 6) break;
+    }
+    if (candidateNames.isEmpty) return const [];
+
+    final futures = candidateNames.map((name) async {
+      try {
+        final hits = await api.searchArtists(name, pagesize: 3);
+        if (hits != null && hits.isNotEmpty) {
+          KugouArtistBrief picked = hits.first;
+          final lower = name.toLowerCase();
+          for (final h in hits) {
+            if (h.name.trim().toLowerCase() == lower) {
+              picked = h;
+              break;
+            }
+          }
+          KugouArtistDetail? detail;
+          if (picked.id.isNotEmpty) {
+            detail = await api
+                .getArtistDetail(picked.id)
+                .catchError((_) => null);
+          }
+          final avatar = YtMoreMenu.upgradeArtworkUri(
+            (detail?.avatarUrl != null && detail!.avatarUrl!.isNotEmpty)
+                ? detail.avatarUrl
+                : (picked.avatarUrl ?? fallbackCovers[name]),
+          );
+          final statsParts = <String>[
+            if ((detail?.songCount ?? 0) > 0) '${detail!.songCount} 首单曲',
+            if ((detail?.albumCount ?? 0) > 0) '${detail!.albumCount} 张专辑',
+          ];
+          return _SimilarArtistCardData(
+            id: picked.id,
+            name: picked.name.isNotEmpty ? picked.name : name,
+            avatarUrl: avatar,
+            subtitle: statsParts.isNotEmpty
+                ? statsParts.join(' · ')
+                : '相似风格音乐人',
+          );
+        }
+      } catch (_) {}
+      return _SimilarArtistCardData(
+        id: '',
+        name: name,
+        avatarUrl: YtMoreMenu.upgradeArtworkUri(fallbackCovers[name]),
+        subtitle: '相似风格音乐人',
+      );
+    });
+
+    final resolved = await Future.wait(futures);
+    return resolved;
   }
 
   Future<Map<String, dynamic>?> _fetchAlbumRaw(
@@ -563,7 +904,6 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
     String songHash,
   ) async {
     try {
-      // Rust 路由 /audio/related 实际读取 album_audio_id + show_detail=1
       final resp = await api.dio.get<dynamic>(
         KugouEndpoints.audioRelated,
         queryParameters: {
@@ -591,7 +931,11 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
                   Map<String, dynamic>.from(e),
                 ).toSong(),
               )
-              .where((s) => s.id.isNotEmpty && s.id.toLowerCase() != songHash.toLowerCase())
+              .where(
+                (s) =>
+                    s.id.isNotEmpty &&
+                    s.id.toLowerCase() != songHash.toLowerCase(),
+              )
               .toList();
           if (parsed.isNotEmpty) return parsed;
         }
@@ -603,7 +947,11 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
       if (fallback != null && fallback.isNotEmpty) {
         return fallback
             .map((e) => e.toSong())
-            .where((s) => s.id.isNotEmpty && s.id.toLowerCase() != songHash.toLowerCase())
+            .where(
+              (s) =>
+                  s.id.isNotEmpty &&
+                  s.id.toLowerCase() != songHash.toLowerCase(),
+            )
             .toList();
       }
     }
@@ -730,6 +1078,15 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
     );
   }
 
+  void _openBriefAlbum(KugouAlbumBrief albumBrief) {
+    final push = widget.onPushPage ?? Navigator.of(context).push;
+    push(
+      MaterialPageRoute(
+        builder: (_) => AlbumDetailPage(album: albumBrief.toAlbum()),
+      ),
+    );
+  }
+
   void _openTechnicalSongInfo() {
     final push = widget.onPushPage ?? Navigator.of(context).push;
     push(MaterialPageRoute(builder: (_) => const SongInfoPage()));
@@ -745,8 +1102,8 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
             colors: [
-              Colors.black.withValues(alpha: 0.34),
-              Colors.black.withValues(alpha: 0.68),
+              Colors.black.withValues(alpha: 0.36),
+              Colors.black.withValues(alpha: 0.72),
             ],
           ),
           borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
@@ -760,6 +1117,7 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
         child: Column(
           children: [
             _buildTopBar(),
+            _buildDualTabSwitcher(),
             Expanded(
               child: Listener(
                 behavior: HitTestBehavior.translucent,
@@ -831,7 +1189,7 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
       onVerticalDragUpdate: widget.onVerticalDragUpdate,
       onVerticalDragEnd: widget.onVerticalDragEnd,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+        padding: const EdgeInsets.fromLTRB(16, 8, 12, 4),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -846,56 +1204,132 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
             const SizedBox(height: 6),
             Row(
               children: [
+                Expanded(
+                  child: Text(
+                    _tab == _YtSongDrawerTab.related ? '相关内容' : '歌曲百科',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.2,
+                    ),
+                  ),
+                ),
+                if (_tab == _YtSongDrawerTab.wiki)
+                  TextButton.icon(
+                    style: TextButton.styleFrom(
+                      foregroundColor: Colors.white70,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
+                      minimumSize: const Size(0, 32),
+                    ),
+                    onPressed: _openTechnicalSongInfo,
+                    icon: const Icon(Icons.graphic_eq_rounded, size: 15),
+                    label: const Text('音频参数', style: TextStyle(fontSize: 12.5)),
+                  ),
                 IconButton(
                   visualDensity: VisualDensity.compact,
                   icon: const Icon(
-                    Icons.keyboard_arrow_down,
+                    Icons.close_rounded,
                     color: Colors.white70,
-                    size: 26,
+                    size: 24,
                   ),
                   onPressed: widget.onClose,
                 ),
-                const SizedBox(width: 4),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Text(
-                        '歌曲百科 · 详细信息',
-                        style: TextStyle(
-                          color: Colors.white60,
-                          fontSize: 11.5,
-                        ),
-                      ),
-                      const SizedBox(height: 1),
-                      Text(
-                        widget.song.displayName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 15,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                TextButton.icon(
-                  style: TextButton.styleFrom(
-                    foregroundColor: Colors.white70,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 4,
-                    ),
-                    minimumSize: const Size(0, 34),
-                  ),
-                  onPressed: _openTechnicalSongInfo,
-                  icon: const Icon(Icons.graphic_eq_rounded, size: 15),
-                  label: const Text('音频参数', style: TextStyle(fontSize: 12.5)),
-                ),
               ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDualTabSwitcher() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 2, 16, 10),
+      child: Container(
+        height: 38,
+        padding: const EdgeInsets.all(3),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: Colors.white.withValues(alpha: 0.10),
+            width: 0.6,
+          ),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: _buildTabItem(
+                label: '相关内容',
+                icon: Icons.explore_outlined,
+                selected: _tab == _YtSongDrawerTab.related,
+                onTap: () {
+                  if (_tab != _YtSongDrawerTab.related) {
+                    AppHaptics.lightImpact(HapticCategory.control);
+                    setState(() => _tab = _YtSongDrawerTab.related);
+                  }
+                },
+              ),
+            ),
+            Expanded(
+              child: _buildTabItem(
+                label: '歌曲百科',
+                icon: Icons.menu_book_outlined,
+                selected: _tab == _YtSongDrawerTab.wiki,
+                onTap: () {
+                  if (_tab != _YtSongDrawerTab.wiki) {
+                    AppHaptics.lightImpact(HapticCategory.control);
+                    setState(() => _tab = _YtSongDrawerTab.wiki);
+                  }
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTabItem({
+    required String label,
+    required IconData icon,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
+        decoration: BoxDecoration(
+          color: selected
+              ? Colors.white.withValues(alpha: 0.22)
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(17),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              icon,
+              size: 15,
+              color: selected ? Colors.white : Colors.white60,
+            ),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                color: selected ? Colors.white : Colors.white60,
+                fontSize: 13,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+              ),
             ),
           ],
         ),
@@ -911,6 +1345,574 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
     }
 
     final info = _data ?? const _YtSongInfoData();
+    if (_tab == _YtSongDrawerTab.related) {
+      return _buildRelatedTabBody(info);
+    }
+    return _buildWikiTabBody(info);
+  }
+
+  /// Tab 1：1:1 原版 YT Music「相关内容」视图（图 1 & 图 4）
+  Widget _buildRelatedTabBody(_YtSongInfoData info) {
+    final hasYouMayLike = info.youMayLikeSongs.isNotEmpty;
+    final hasOtherPerf = info.otherPerformances.isNotEmpty;
+    final hasSimilarArtists = info.similarArtists.isNotEmpty;
+    final hasArtistAlbums = info.artistAlbums.isNotEmpty;
+
+    if (!hasYouMayLike &&
+        !hasOtherPerf &&
+        !hasSimilarArtists &&
+        !hasArtistAlbums) {
+      return ListView(
+        controller: _scrollController,
+        physics: const BouncingScrollPhysics(
+          parent: AlwaysScrollableScrollPhysics(),
+        ),
+        padding: EdgeInsets.fromLTRB(16, 48, 16, widget.safeBottom + 28),
+        children: [
+          const Icon(
+            Icons.library_music_outlined,
+            color: Colors.white38,
+            size: 44,
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            '暂未找到当前曲目的线上相关推荐',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.white70, fontSize: 14),
+          ),
+          const SizedBox(height: 14),
+          Center(
+            child: OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.white,
+                side: const BorderSide(color: Colors.white30),
+              ),
+              onPressed: () => setState(() => _tab = _YtSongDrawerTab.wiki),
+              icon: const Icon(Icons.menu_book_rounded, size: 16),
+              label: const Text('查看歌曲百科'),
+            ),
+          ),
+        ],
+      );
+    }
+
+    return ListView(
+      controller: _scrollController,
+      physics: const BouncingScrollPhysics(
+        parent: AlwaysScrollableScrollPhysics(),
+      ),
+      padding: EdgeInsets.fromLTRB(0, 6, 0, widget.safeBottom + 32),
+      children: [
+        if (hasYouMayLike) ...[
+          _buildYouMayLikeSection(info.youMayLikeSongs),
+          const SizedBox(height: 26),
+        ],
+        if (hasOtherPerf) ...[
+          _buildOtherPerformancesSection(info.otherPerformances),
+          const SizedBox(height: 26),
+        ],
+        if (hasSimilarArtists) ...[
+          _buildSimilarArtistsSection(info.similarArtists),
+          const SizedBox(height: 28),
+        ],
+        if (hasArtistAlbums) ...[
+          _buildMoreFromArtistAlbumsSection(info),
+        ],
+      ],
+    );
+  }
+
+  /// 1. 「你可能还喜欢」—— 4 行一列横向分页滑动（复刻图 4 顶部效果）
+  Widget _buildYouMayLikeSection(List<Song> songs) {
+    final columns = <List<Song>>[];
+    for (int i = 0; i < songs.length; i += 4) {
+      columns.add(songs.sublist(i, math.min(i + 4, songs.length)));
+    }
+    final screenW = MediaQuery.sizeOf(context).width;
+    final colWidth = columns.length > 1 ? screenW - 44.0 : screenW - 32.0;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 16),
+          child: Text(
+            '你可能还喜欢',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 20,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -0.3,
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        SizedBox(
+          height: math.min(4, songs.length) * 66.0,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            physics: const BouncingScrollPhysics(),
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            itemCount: columns.length,
+            separatorBuilder: (_, _) => const SizedBox(width: 14),
+            itemBuilder: (context, colIndex) {
+              final colSongs = columns[colIndex];
+              return SizedBox(
+                width: colWidth,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    for (int r = 0; r < colSongs.length; r++)
+                      _buildYtSongRow(
+                        song: colSongs[r],
+                        playlist: songs,
+                        indexInPlaylist: colIndex * 4 + r,
+                      ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 2. 「其他表演」—— 同曲目不同版本 / 翻唱 / Live（复刻图 1 & 图 4 中部效果，带「翻唱 / 现场」小角标）
+  Widget _buildOtherPerformancesSection(List<Song> songs) {
+    final visible = songs.take(6).toList();
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            '其他表演',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 20,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -0.3,
+            ),
+          ),
+          const SizedBox(height: 10),
+          for (int i = 0; i < visible.length; i++)
+            _buildYtSongRow(
+              song: visible[i],
+              playlist: visible,
+              indexInPlaylist: i,
+              badge: _detectPerformanceBadge(visible[i], widget.song),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildYtSongRow({
+    required Song song,
+    required List<Song> playlist,
+    required int indexInPlaylist,
+    String? badge,
+  }) {
+    final cover = YtMoreMenu.upgradeArtworkUri(song.artworkUri);
+    final subtitleParts = <String>[
+      if (!isUnknownArtist(song.artist)) song.artist,
+      if (!isUnknownAlbum(song.album) && song.album != song.displayName)
+        song.album,
+    ];
+
+    return InkWell(
+      onTap: () {
+        AppHaptics.click(HapticCategory.transport);
+        context.read<PlayerProvider>().playOnlinePlaylist(
+          playlist,
+          indexInPlaylist,
+        );
+      },
+      borderRadius: BorderRadius.circular(10),
+      child: SizedBox(
+        height: 66,
+        child: Row(
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: Container(
+                width: 50,
+                height: 50,
+                color: Colors.white.withValues(alpha: 0.08),
+                child: (cover != null && cover.isNotEmpty)
+                    ? CachedNetworkImage(
+                        imageUrl: cover,
+                        memCacheWidth: 160,
+                        memCacheHeight: 160,
+                        fit: BoxFit.cover,
+                        errorWidget: (_, _, _) => const Icon(
+                          Icons.music_note_rounded,
+                          color: Colors.white38,
+                          size: 22,
+                        ),
+                      )
+                    : const Icon(
+                        Icons.music_note_rounded,
+                        color: Colors.white38,
+                        size: 22,
+                      ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    song.displayName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 14.5,
+                      fontWeight: FontWeight.w600,
+                      height: 1.2,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      if (badge != null && badge.isNotEmpty) ...[
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 5,
+                            vertical: 1.2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.20),
+                            borderRadius: BorderRadius.circular(3.5),
+                          ),
+                          child: Text(
+                            badge,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                              height: 1.1,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                      ],
+                      Expanded(
+                        child: Text(
+                          subtitleParts.join(' • '),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white60,
+                            fontSize: 12.5,
+                            height: 1.2,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            IconButton(
+              visualDensity: VisualDensity.compact,
+              tooltip: '插入下一首播放',
+              icon: const Icon(
+                Icons.playlist_play_rounded,
+                color: Colors.white70,
+                size: 24,
+              ),
+              onPressed: () {
+                AppHaptics.lightImpact(HapticCategory.control);
+                context.read<PlayerProvider>().insertAfterCurrent([song]);
+                showToast('已加入下一首播放');
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 3. 「同类音乐人」—— 大号圆形头像横向画廊（1:1 复刻图 1 中部效果）
+  Widget _buildSimilarArtistsSection(List<_SimilarArtistCardData> artists) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 16),
+          child: Text(
+            '同类音乐人',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 20,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -0.3,
+            ),
+          ),
+        ),
+        const SizedBox(height: 14),
+        SizedBox(
+          height: 196,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            physics: const BouncingScrollPhysics(),
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            itemCount: artists.length,
+            separatorBuilder: (_, _) => const SizedBox(width: 16),
+            itemBuilder: (context, index) {
+              final item = artists[index];
+              return GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () {
+                  AppHaptics.lightImpact(HapticCategory.control);
+                  widget.onOpenArtist?.call(item.name);
+                },
+                child: SizedBox(
+                  width: 144,
+                  child: Column(
+                    children: [
+                      ClipOval(
+                        child: Container(
+                          width: 138,
+                          height: 138,
+                          color: Colors.white.withValues(alpha: 0.08),
+                          child: (item.avatarUrl != null &&
+                                  item.avatarUrl!.isNotEmpty)
+                              ? CachedNetworkImage(
+                                  imageUrl: item.avatarUrl!,
+                                  memCacheWidth: 380,
+                                  memCacheHeight: 380,
+                                  fit: BoxFit.cover,
+                                  errorWidget: (_, _, _) => const Center(
+                                    child: Icon(
+                                      Icons.person_rounded,
+                                      color: Colors.white38,
+                                      size: 46,
+                                    ),
+                                  ),
+                                )
+                              : const Center(
+                                  child: Icon(
+                                    Icons.person_rounded,
+                                    color: Colors.white38,
+                                    size: 46,
+                                  ),
+                                ),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        item.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 14.5,
+                          fontWeight: FontWeight.w700,
+                          height: 1.2,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        item.subtitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Colors.white60,
+                          fontSize: 12.2,
+                          height: 1.2,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 4. 「更多曲目 - <歌手名>」—— 顶部歌手小圆头像 + 底部大号 1:1 正方形专辑卡片（1:1 复刻图 1 底部效果）
+  Widget _buildMoreFromArtistAlbumsSection(_YtSongInfoData info) {
+    final artistName = info.primaryArtistName ?? widget.song.artist;
+    final avatar = info.primaryArtistAvatar;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () {
+              AppHaptics.lightImpact(HapticCategory.control);
+              widget.onOpenArtist?.call(artistName);
+            },
+            child: Row(
+              children: [
+                ClipOval(
+                  child: Container(
+                    width: 40,
+                    height: 40,
+                    color: Colors.white.withValues(alpha: 0.10),
+                    child: (avatar != null && avatar.isNotEmpty)
+                        ? CachedNetworkImage(
+                            imageUrl: avatar,
+                            memCacheWidth: 140,
+                            memCacheHeight: 140,
+                            fit: BoxFit.cover,
+                            errorWidget: (_, _, _) => const Icon(
+                              Icons.person_rounded,
+                              color: Colors.white54,
+                              size: 22,
+                            ),
+                          )
+                        : const Icon(
+                            Icons.person_rounded,
+                            color: Colors.white54,
+                            size: 22,
+                          ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        '更多曲目 -',
+                        style: TextStyle(
+                          color: Colors.white60,
+                          fontSize: 12,
+                          height: 1.15,
+                        ),
+                      ),
+                      const SizedBox(height: 1),
+                      Text(
+                        artistName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 19,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -0.2,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Icon(
+                  Icons.chevron_right_rounded,
+                  color: Colors.white54,
+                  size: 22,
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 14),
+        SizedBox(
+          height: 216,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            physics: const BouncingScrollPhysics(),
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            itemCount: info.artistAlbums.length,
+            separatorBuilder: (_, _) => const SizedBox(width: 14),
+            itemBuilder: (context, index) {
+              final albumBrief = info.artistAlbums[index];
+              final cover = YtMoreMenu.upgradeArtworkUri(albumBrief.coverUrl);
+              final subtitleParts = <String>[
+                '专辑',
+                if (albumBrief.year != null && albumBrief.year! > 0)
+                  '${albumBrief.year}年',
+              ];
+              return GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () {
+                  AppHaptics.lightImpact(HapticCategory.control);
+                  _openBriefAlbum(albumBrief);
+                },
+                child: SizedBox(
+                  width: 158,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(10),
+                        child: Container(
+                          width: 158,
+                          height: 158,
+                          color: Colors.white.withValues(alpha: 0.08),
+                          child: (cover != null && cover.isNotEmpty)
+                              ? CachedNetworkImage(
+                                  imageUrl: cover,
+                                  memCacheWidth: 420,
+                                  memCacheHeight: 420,
+                                  fit: BoxFit.cover,
+                                  errorWidget: (_, _, _) => const Center(
+                                    child: Icon(
+                                      Icons.album_rounded,
+                                      color: Colors.white38,
+                                      size: 38,
+                                    ),
+                                  ),
+                                )
+                              : const Center(
+                                  child: Icon(
+                                    Icons.album_rounded,
+                                    color: Colors.white38,
+                                    size: 38,
+                                  ),
+                                ),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        albumBrief.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          height: 1.2,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        subtitleParts.join(' • '),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white60,
+                          fontSize: 12.5,
+                          height: 1.2,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Tab 2：网易云风格「歌曲百科」完整档案视图
+  Widget _buildWikiTabBody(_YtSongInfoData info) {
     final hasAnyArchive =
         info.publishDate != null ||
         info.language != null ||
@@ -927,10 +1929,11 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
       physics: const BouncingScrollPhysics(
         parent: AlwaysScrollableScrollPhysics(),
       ),
-      padding: EdgeInsets.fromLTRB(16, 8, 16, widget.safeBottom + 28),
+      padding: EdgeInsets.fromLTRB(16, 4, 16, widget.safeBottom + 28),
       children: [
         _buildSongHeaderCard(info),
-        if (!widget.song.isOnline && (info.albumId == null || info.albumId!.isEmpty)) ...[
+        if (!widget.song.isOnline &&
+            (info.albumId == null || info.albumId!.isEmpty)) ...[
           const SizedBox(height: 10),
           _buildLocalMatchBanner(),
         ],
@@ -952,10 +1955,6 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
         if (info.albumIntro != null && info.albumIntro!.isNotEmpty) ...[
           const SizedBox(height: 12),
           _buildAlbumIntroCard(info.albumIntro!),
-        ],
-        if (info.relatedSongs.isNotEmpty) ...[
-          const SizedBox(height: 12),
-          _buildRelatedCard(info.relatedSongs),
         ],
       ],
     );
@@ -1053,12 +2052,20 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
     return _glassCard(
       child: Row(
         children: [
-          const Icon(Icons.auto_awesome_outlined, color: Colors.white70, size: 20),
+          const Icon(
+            Icons.auto_awesome_outlined,
+            color: Colors.white70,
+            size: 20,
+          ),
           const SizedBox(width: 10),
           const Expanded(
             child: Text(
               '本地曲目暂未关联线上百科，可搜索匹配线上专辑、发行日期与榜单记录',
-              style: TextStyle(color: Colors.white70, fontSize: 12.5, height: 1.4),
+              style: TextStyle(
+                color: Colors.white70,
+                fontSize: 12.5,
+                height: 1.4,
+              ),
             ),
           ),
           const SizedBox(width: 8),
@@ -1430,98 +2437,6 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _buildRelatedCard(List<Song> songs) {
-    return _glassCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _sectionTitle(Icons.queue_music_rounded, '相似歌曲推荐'),
-          const SizedBox(height: 8),
-          for (int i = 0; i < math.min(songs.length, 10); i++) ...[
-            if (i > 0)
-              Divider(height: 1, color: Colors.white.withValues(alpha: 0.06)),
-            InkWell(
-              onTap: () {
-                AppHaptics.click(HapticCategory.transport);
-                context.read<PlayerProvider>().playOnlinePlaylist(songs, i);
-              },
-              borderRadius: BorderRadius.circular(10),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                child: Row(
-                  children: [
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(7),
-                      child: Container(
-                        width: 42,
-                        height: 42,
-                        color: Colors.white12,
-                        child: (songs[i].artworkUri != null &&
-                                songs[i].artworkUri!.isNotEmpty)
-                            ? CachedNetworkImage(
-                                imageUrl: YtMoreMenu.upgradeArtworkUri(
-                                      songs[i].artworkUri,
-                                    ) ??
-                                    songs[i].artworkUri!,
-                                memCacheWidth: 140,
-                                memCacheHeight: 140,
-                                fit: BoxFit.cover,
-                                errorWidget: (_, _, _) => const Icon(
-                                  Icons.music_note_rounded,
-                                  color: Colors.white38,
-                                  size: 20,
-                                ),
-                              )
-                            : const Icon(
-                                Icons.music_note_rounded,
-                                color: Colors.white38,
-                                size: 20,
-                              ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            songs[i].displayName,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 14,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            songs[i].artist,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: Colors.white60,
-                              fontSize: 12,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const Icon(
-                      Icons.play_circle_outline_rounded,
-                      color: Colors.white54,
-                      size: 20,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ],
       ),
     );
   }

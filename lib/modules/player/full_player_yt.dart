@@ -20,6 +20,7 @@ import '../../utils/landscape_immersive.dart';
 import 'full_player_route.dart';
 import 'player_cover_morph.dart';
 import 'player_page_role.dart';
+import 'yt/yt_action_drawer.dart';
 import 'yt/yt_artist_drawer.dart';
 import 'yt/yt_background.dart';
 import 'yt/yt_lyrics_drawer.dart';
@@ -46,9 +47,11 @@ class _FullPlayerYtState extends State<FullPlayerYt>
   late final AnimationController _commentsController;
   late final AnimationController _artistController;
   late final AnimationController _songInfoController;
+  late final AnimationController _actionController;
   late final Listenable _overlayExpansion;
   late final YtDrawerFadeAnimation _mainFadeAnim;
   String? _artistDrawerTargetName;
+  YtActionDrawerType _actionDrawerType = YtActionDrawerType.save;
   final PlaylistScrollAnchor _playlistScrollAnchor = PlaylistScrollAnchor();
   final GlobalKey<PlayerPlaylistViewState> _playlistKey =
       GlobalKey<PlayerPlaylistViewState>();
@@ -97,12 +100,18 @@ class _FullPlayerYtState extends State<FullPlayerYt>
       duration: const Duration(milliseconds: 340),
       reverseDuration: const Duration(milliseconds: 280),
     )..addListener(_syncCoverMorphVisibility);
+    _actionController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 340),
+      reverseDuration: const Duration(milliseconds: 280),
+    )..addListener(_syncCoverMorphVisibility);
     _overlayExpansion = Listenable.merge([
       _lyricsController,
       _queueController,
       _commentsController,
       _artistController,
       _songInfoController,
+      _actionController,
     ]);
     _mainFadeAnim = YtDrawerFadeAnimation(
       parent: _overlayExpansion,
@@ -116,6 +125,7 @@ class _FullPlayerYtState extends State<FullPlayerYt>
     if (_commentsController.value > m) m = _commentsController.value;
     if (_artistController.value > m) m = _artistController.value;
     if (_songInfoController.value > m) m = _songInfoController.value;
+    if (_actionController.value > m) m = _actionController.value;
     return m.clamp(0.0, 1.0);
   }
 
@@ -180,6 +190,7 @@ class _FullPlayerYtState extends State<FullPlayerYt>
     _commentsController.dispose();
     _artistController.dispose();
     _songInfoController.dispose();
+    _actionController.dispose();
     _playlistScrollAnchor.dispose();
     MusicHapticsService.instance.setPlayerPageActive(false);
     super.dispose();
@@ -196,6 +207,7 @@ class _FullPlayerYtState extends State<FullPlayerYt>
       _commentsController,
       _artistController,
       _songInfoController,
+      _actionController,
     ]) {
       if (identical(ctrl, keep)) continue;
       if (ctrl.value > 0.0 || ctrl.isAnimating) {
@@ -422,6 +434,58 @@ class _FullPlayerYtState extends State<FullPlayerYt>
     }
   }
 
+  void _openActionDrawer(YtActionDrawerType type) {
+    AppHaptics.lightImpact(HapticCategory.control);
+    if (_actionDrawerType != type) {
+      setState(() => _actionDrawerType = type);
+    }
+    _closeOtherDrawersExcept(_actionController);
+    _actionController.animateTo(
+      1.0,
+      duration: const Duration(milliseconds: 340),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  void _openSave() => _openActionDrawer(YtActionDrawerType.save);
+
+  void _openSheet() => _openActionDrawer(YtActionDrawerType.sheet);
+
+  void _openSound() => _openActionDrawer(YtActionDrawerType.sound);
+
+  void _closeActionDrawer() {
+    AppHaptics.lightImpact(HapticCategory.control);
+    _actionController.animateBack(
+      0.0,
+      duration: const Duration(milliseconds: 280),
+      curve: Curves.easeInCubic,
+    );
+  }
+
+  void _onActionDragUpdate(DragUpdateDetails details) {
+    final screenHeight = MediaQuery.sizeOf(context).height;
+    final dragRange = (screenHeight * 0.72).clamp(200.0, 900.0);
+    final dy = toDisplaySpaceDelta(context, details.delta).dy;
+    _actionController.stop();
+    _actionController.value = (_actionController.value - dy / dragRange).clamp(
+      0.0,
+      1.0,
+    );
+  }
+
+  void _onActionDragEnd(DragEndDetails details) {
+    final v = details.primaryVelocity ?? 0.0;
+    if (v < -400.0) {
+      _openActionDrawer(_actionDrawerType);
+    } else if (v > 400.0) {
+      _closeActionDrawer();
+    } else if (_actionController.value >= 0.5) {
+      _openActionDrawer(_actionDrawerType);
+    } else {
+      _closeActionDrawer();
+    }
+  }
+
   void _onTopBarDragStart(DragStartDetails details) {
     _isDismissing = false;
     final route = ModalRoute.of(context);
@@ -536,6 +600,10 @@ class _FullPlayerYtState extends State<FullPlayerYt>
     }
     if (_songInfoController.value > 0.01 || _songInfoController.isAnimating) {
       _closeSongInfo();
+      return true;
+    }
+    if (_actionController.value > 0.01 || _actionController.isAnimating) {
+      _closeActionDrawer();
       return true;
     }
     if (widget.dockMode) return false;
@@ -701,11 +769,15 @@ class _FullPlayerYtState extends State<FullPlayerYt>
                 commentsExpansion: _commentsController,
                 artistExpansion: _artistController,
                 songInfoExpansion: _songInfoController,
+                actionExpansion: _actionController,
                 onCollapse: _collapseByButton,
                 onOpenLyrics: _openLyrics,
                 onOpenComments: _openComments,
                 onOpenArtist: _openArtist,
                 onOpenSongInfo: _openSongInfo,
+                onOpenSave: _openSave,
+                onOpenSheet: _openSheet,
+                onOpenSound: _openSound,
                 onCoverRectMeasured: (rect) {
                   _measuredCoverRect = rect;
                 },
@@ -764,6 +836,7 @@ class _FullPlayerYtState extends State<FullPlayerYt>
                 scrollAnchor: _playlistScrollAnchor,
                 playlistKey: _playlistKey,
                 onClose: _closeQueue,
+                onOpenSave: _openSave,
                 onVerticalDragUpdate: _onQueueDragUpdate,
                 onVerticalDragEnd: _onQueueDragEnd,
               ),
@@ -794,7 +867,7 @@ class _FullPlayerYtState extends State<FullPlayerYt>
                 onVerticalDragEnd: _onArtistDragEnd,
               ),
             ),
-            // 歌曲百科/详情抽屉层（点击歌名弹出，展示年份/语种/曲风标签/制作名单/高潮副歌/榜单/相似歌曲）
+            // 歌曲百科/相关内容双 Tab 抽屉层（点击歌名弹出）
             Positioned.fill(
               child: YtSongInfoDrawer(
                 expansion: _songInfoController,
@@ -806,6 +879,19 @@ class _FullPlayerYtState extends State<FullPlayerYt>
                 onPushPage: _pushOverPlayer,
                 onVerticalDragUpdate: _onSongInfoDragUpdate,
                 onVerticalDragEnd: _onSongInfoDragEnd,
+              ),
+            ),
+            // 保存到歌单 / 曲谱 / 音效 全屏内嵌抽屉层（1:1 复刻歌词/评论抽屉展开动画）
+            Positioned.fill(
+              child: YtActionDrawer(
+                expansion: _actionController,
+                song: resolvedSong,
+                type: _actionDrawerType,
+                isVideoMode: _isVideoMode,
+                videoController: _mvVideoController,
+                onClose: _closeActionDrawer,
+                onVerticalDragUpdate: _onActionDragUpdate,
+                onVerticalDragEnd: _onActionDragEnd,
               ),
             ),
           ],

@@ -20,7 +20,7 @@ import 'yt_lyrics_drawer.dart';
 import 'yt_more_menu.dart';
 
 /// 1:1 复刻歌词与评论抽屉展开动画的全屏内嵌「歌手信息」抽屉
-/// （共用顶部 MiniBar + 悬浮封面飞行缩放 + 顶部下拉关闭手势）
+/// （共用顶部 MiniBar + 悬浮封面飞行缩放 + 顶部下拉关闭手势 + 正方形大专辑卡片）
 class YtArtistDrawer extends StatefulWidget {
   final Animation<double> expansion;
   final Song song;
@@ -212,6 +212,7 @@ class _YtArtistDrawerContentState extends State<_YtArtistDrawerContent> {
   bool _isFollowing = false;
   bool _followSubmitting = false;
   bool _bioExpanded = false;
+  bool _expandAllHotSongs = false;
 
   _ArtistDrawerTab _tab = _ArtistDrawerTab.hotSongs;
   bool _albumsLoading = false;
@@ -242,13 +243,20 @@ class _YtArtistDrawerContentState extends State<_YtArtistDrawerContent> {
 
   void _initArtistSelection({bool notify = true}) {
     final split = splitSongArtistNames(widget.song.artist);
-    _artistNames = split.isNotEmpty
-        ? split
-        : (isUnknownArtist(widget.song.artist)
-              ? const <String>[]
-              : <String>[widget.song.artist.trim()]);
+    final wantRaw = widget.initialArtistName?.trim();
+    if (wantRaw != null &&
+        wantRaw.isNotEmpty &&
+        !split.any((a) => a.toLowerCase() == wantRaw.toLowerCase())) {
+      _artistNames = <String>[wantRaw, ...split];
+    } else {
+      _artistNames = split.isNotEmpty
+          ? split
+          : (isUnknownArtist(widget.song.artist)
+                ? const <String>[]
+                : <String>[widget.song.artist.trim()]);
+    }
     int targetIdx = 0;
-    final want = widget.initialArtistName?.trim().toLowerCase();
+    final want = wantRaw?.toLowerCase();
     if (want != null && want.isNotEmpty && _artistNames.isNotEmpty) {
       final found = _artistNames.indexWhere((a) => a.toLowerCase() == want);
       if (found >= 0) targetIdx = found;
@@ -292,6 +300,7 @@ class _YtArtistDrawerContentState extends State<_YtArtistDrawerContent> {
       _albumsLoading = false;
       _tab = _ArtistDrawerTab.hotSongs;
       _bioExpanded = false;
+      _expandAllHotSongs = false;
     }
     if (notify) {
       setState(applyReset);
@@ -301,8 +310,12 @@ class _YtArtistDrawerContentState extends State<_YtArtistDrawerContent> {
 
     try {
       final api = KugouApiClient();
+      final primarySongArtist = splitSongArtistNames(widget.song.artist);
+      final isSongPrimaryArtist =
+          primarySongArtist.isNotEmpty &&
+          primarySongArtist.first.toLowerCase() == artistName.toLowerCase();
       String? artistId =
-          (_selectedArtistIndex == 0 &&
+          (isSongPrimaryArtist &&
               widget.song.artistId != null &&
               widget.song.artistId!.isNotEmpty)
           ? widget.song.artistId
@@ -337,16 +350,23 @@ class _YtArtistDrawerContentState extends State<_YtArtistDrawerContent> {
       _resolvedArtistId = artistId;
 
       final results = await Future.wait([
-        api.getArtistDetail(artistId),
-        api.getArtistAudios(artistId, page: 1, pagesize: 30, sort: 'hot'),
+        api.getArtistDetail(artistId).catchError((_) => null),
+        api
+            .getArtistAudios(artistId, page: 1, pagesize: 30, sort: 'hot')
+            .catchError((_) => null),
+        api
+            .getArtistAlbums(artistId, page: 1, pagesize: 30, sort: 'hot')
+            .catchError((_) => null),
       ]);
       if (!mounted || token != _requestToken) return;
 
       final detail = results[0] as KugouArtistDetail?;
       final audios = results[1] as KugouArtistAudios?;
+      final albumsRes = results[2] as KugouArtistAlbums?;
       final hotSongs = (audios?.songs ?? const <KugouSongDetail>[])
           .map((e) => e.toSong().copyWith(artistId: e.artistId ?? artistId))
           .toList();
+      final albums = albumsRes?.albums ?? const <KugouAlbumBrief>[];
 
       // 如接口缺头像则保留搜索头像
       final effectiveAvatar = YtMoreMenu.upgradeArtworkUri(
@@ -369,7 +389,9 @@ class _YtArtistDrawerContentState extends State<_YtArtistDrawerContent> {
           avatarUrl: effectiveAvatar,
           description: updatedDetail.description,
           songCount: updatedDetail.songCount,
-          albumCount: updatedDetail.albumCount,
+          albumCount: updatedDetail.albumCount > 0
+              ? updatedDetail.albumCount
+              : albums.length,
           isFollowed: updatedDetail.isFollowed,
           hasFollowStatus: updatedDetail.hasFollowStatus,
         );
@@ -379,6 +401,8 @@ class _YtArtistDrawerContentState extends State<_YtArtistDrawerContent> {
           _isFollowing = false;
         }
         _hotSongs = hotSongs;
+        _albums = albums;
+        _albumsLoaded = true;
         _loading = false;
       });
 
@@ -501,6 +525,15 @@ class _YtArtistDrawerContentState extends State<_YtArtistDrawerContent> {
           avatarUrl: _detail?.avatarUrl,
           initialIsFollowed: _isFollowing,
         ),
+      ),
+    );
+  }
+
+  void _openAlbum(KugouAlbumBrief albumBrief) {
+    final push = widget.onPushPage ?? Navigator.of(context).push;
+    push(
+      MaterialPageRoute(
+        builder: (_) => AlbumDetailPage(album: albumBrief.toAlbum()),
       ),
     );
   }
@@ -746,7 +779,11 @@ class _YtArtistDrawerContentState extends State<_YtArtistDrawerContent> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.person_off_outlined, color: Colors.white38, size: 42),
+              const Icon(
+                Icons.person_off_outlined,
+                color: Colors.white38,
+                size: 42,
+              ),
               const SizedBox(height: 12),
               Text(
                 _error!,
@@ -794,7 +831,8 @@ class _YtArtistDrawerContentState extends State<_YtArtistDrawerContent> {
     final bgImage = _photoUrls.isNotEmpty
         ? _photoUrls.first
         : _detail?.avatarUrl;
-    final avatar = _detail?.avatarUrl ?? (_photoUrls.isNotEmpty ? _photoUrls.first : null);
+    final avatar =
+        _detail?.avatarUrl ?? (_photoUrls.isNotEmpty ? _photoUrls.first : null);
     final stats = <String>[
       if ((_detail?.songCount ?? 0) > 0) '${_detail!.songCount} 首单曲',
       if ((_detail?.albumCount ?? 0) > 0) '${_detail!.albumCount} 张专辑',
@@ -935,7 +973,9 @@ class _YtArtistDrawerContentState extends State<_YtArtistDrawerContent> {
                             Text(
                               _isFollowing ? '已关注' : '关注',
                               style: TextStyle(
-                                color: _isFollowing ? Colors.white : Colors.black,
+                                color: _isFollowing
+                                    ? Colors.white
+                                    : Colors.black,
                                 fontSize: 13,
                                 fontWeight: FontWeight.w600,
                               ),
@@ -1019,7 +1059,8 @@ class _YtArtistDrawerContentState extends State<_YtArtistDrawerContent> {
       child: Row(
         children: [
           _buildTabPill(
-            label: '热门歌曲${_hotSongs.isNotEmpty ? ' · ${_hotSongs.length}' : ''}',
+            label:
+                '热门歌曲${_hotSongs.isNotEmpty ? ' · ${_hotSongs.length}' : ''}',
             selected: _tab == _ArtistDrawerTab.hotSongs,
             onTap: () {
               if (_tab != _ArtistDrawerTab.hotSongs) {
@@ -1029,7 +1070,8 @@ class _YtArtistDrawerContentState extends State<_YtArtistDrawerContent> {
           ),
           const SizedBox(width: 8),
           _buildTabPill(
-            label: '专辑${_albumsLoaded && _albums.isNotEmpty ? ' · ${_albums.length}' : ''}',
+            label:
+                '专辑${_albumsLoaded && _albums.isNotEmpty ? ' · ${_albums.length}' : ''}',
             selected: _tab == _ArtistDrawerTab.albums,
             onTap: () {
               if (_tab != _ArtistDrawerTab.albums) {
@@ -1058,7 +1100,11 @@ class _YtArtistDrawerContentState extends State<_YtArtistDrawerContent> {
                 child: const Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.play_arrow_rounded, color: Colors.white, size: 17),
+                    Icon(
+                      Icons.play_arrow_rounded,
+                      color: Colors.white,
+                      size: 17,
+                    ),
                     SizedBox(width: 4),
                     Text(
                       '播放全部',
@@ -1113,7 +1159,7 @@ class _YtArtistDrawerContentState extends State<_YtArtistDrawerContent> {
   }
 
   List<Widget> _buildHotSongsSlivers(String? currentSongId) {
-    if (_hotSongs.isEmpty) {
+    if (_hotSongs.isEmpty && _albums.isEmpty) {
       return [
         const SliverToBoxAdapter(
           child: Padding(
@@ -1129,122 +1175,273 @@ class _YtArtistDrawerContentState extends State<_YtArtistDrawerContent> {
       ];
     }
 
-    return [
-      SliverList.builder(
-        itemCount: _hotSongs.length,
-        itemBuilder: (context, index) {
-          final song = _hotSongs[index];
-          final playing =
-              currentSongId != null &&
-              currentSongId.toLowerCase() == song.id.toLowerCase();
-          final cover = YtMoreMenu.upgradeArtworkUri(song.artworkUri);
-          final subtitleParts = <String>[
-            if (!isUnknownArtist(song.artist)) song.artist,
-            if (!isUnknownAlbum(song.album)) song.album,
-          ];
+    final shouldCollapseSongs =
+        _albums.isNotEmpty && !_expandAllHotSongs && _hotSongs.length > 6;
+    final visibleSongCount = shouldCollapseSongs ? 6 : _hotSongs.length;
 
-          return InkWell(
-            onTap: () {
-              AppHaptics.click(HapticCategory.transport);
-              context.read<PlayerProvider>().playOnlinePlaylist(
-                _hotSongs,
-                index,
-              );
-            },
-            child: Container(
-              margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-              decoration: BoxDecoration(
-                color: playing
-                    ? Colors.white.withValues(alpha: 0.14)
-                    : Colors.transparent,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Row(
-                children: [
-                  SizedBox(
-                    width: 26,
-                    child: Text(
-                      '${index + 1}',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: playing ? Colors.white : Colors.white54,
-                        fontSize: 13,
-                        fontWeight: playing ? FontWeight.w700 : FontWeight.w500,
+    return [
+      if (_hotSongs.isNotEmpty)
+        SliverList.builder(
+          itemCount: visibleSongCount,
+          itemBuilder: (context, index) {
+            final song = _hotSongs[index];
+            final playing =
+                currentSongId != null &&
+                currentSongId.toLowerCase() == song.id.toLowerCase();
+            final cover = YtMoreMenu.upgradeArtworkUri(song.artworkUri);
+            final subtitleParts = <String>[
+              if (!isUnknownArtist(song.artist)) song.artist,
+              if (!isUnknownAlbum(song.album)) song.album,
+            ];
+
+            return InkWell(
+              onTap: () {
+                AppHaptics.click(HapticCategory.transport);
+                context.read<PlayerProvider>().playOnlinePlaylist(
+                  _hotSongs,
+                  index,
+                );
+              },
+              child: Container(
+                margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                decoration: BoxDecoration(
+                  color: playing
+                      ? Colors.white.withValues(alpha: 0.14)
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: 26,
+                      child: Text(
+                        '${index + 1}',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: playing ? Colors.white : Colors.white54,
+                          fontSize: 13,
+                          fontWeight: playing
+                              ? FontWeight.w700
+                              : FontWeight.w500,
+                        ),
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: Container(
-                      width: 46,
-                      height: 46,
-                      color: Colors.white12,
-                      child: (cover != null && cover.isNotEmpty)
-                          ? CachedNetworkImage(
-                              imageUrl: cover,
-                              memCacheWidth: 160,
-                              memCacheHeight: 160,
-                              fit: BoxFit.cover,
-                              errorWidget: (_, _, _) => const Icon(
+                    const SizedBox(width: 8),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: Container(
+                        width: 48,
+                        height: 48,
+                        color: Colors.white12,
+                        child: (cover != null && cover.isNotEmpty)
+                            ? CachedNetworkImage(
+                                imageUrl: cover,
+                                memCacheWidth: 160,
+                                memCacheHeight: 160,
+                                fit: BoxFit.cover,
+                                errorWidget: (_, _, _) => const Icon(
+                                  Icons.music_note_rounded,
+                                  color: Colors.white38,
+                                  size: 22,
+                                ),
+                              )
+                            : const Icon(
                                 Icons.music_note_rounded,
                                 color: Colors.white38,
                                 size: 22,
                               ),
-                            )
-                          : const Icon(
-                              Icons.music_note_rounded,
-                              color: Colors.white38,
-                              size: 22,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            song.displayName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 14.5,
+                              fontWeight: playing
+                                  ? FontWeight.w700
+                                  : FontWeight.w500,
                             ),
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            subtitleParts.join(' · '),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white60,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton(
+                      visualDensity: VisualDensity.compact,
+                      tooltip: '下一首播放',
+                      icon: const Icon(
+                        Icons.playlist_play_rounded,
+                        color: Colors.white60,
+                        size: 22,
+                      ),
+                      onPressed: () {
+                        AppHaptics.lightImpact(HapticCategory.control);
+                        context.read<PlayerProvider>().insertAfterCurrent([
+                          song,
+                        ]);
+                        showToast('已加入下一首播放');
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        ),
+      if (_albums.isNotEmpty && _hotSongs.length > 6)
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 6, 16, 4),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: InkWell(
+                onTap: () {
+                  AppHaptics.lightImpact(HapticCategory.control);
+                  setState(() => _expandAllHotSongs = !_expandAllHotSongs);
+                },
+                borderRadius: BorderRadius.circular(18),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 7,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.14),
+                      width: 0.6,
                     ),
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        _expandAllHotSongs
+                            ? '收起热门歌曲'
+                            : '展开全部 ${_hotSongs.length} 首热门歌曲',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Icon(
+                        _expandAllHotSongs
+                            ? Icons.keyboard_arrow_up_rounded
+                            : Icons.keyboard_arrow_down_rounded,
+                        color: Colors.white70,
+                        size: 16,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      if (_albums.isNotEmpty)
+        SliverToBoxAdapter(child: _buildSquareAlbumCarouselSection()),
+    ];
+  }
+
+  /// YT Music 风格「专辑」大号正方形横向画廊（1:1 复刻图 3 效果）
+  Widget _buildSquareAlbumCarouselSection() {
+    return Padding(
+      padding: const EdgeInsets.only(top: 18, bottom: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    '专辑',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 19,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.2,
+                    ),
+                  ),
+                ),
+                InkWell(
+                  onTap: () {
+                    AppHaptics.lightImpact(HapticCategory.control);
+                    setState(() => _tab = _ArtistDrawerTab.albums);
+                  },
+                  borderRadius: BorderRadius.circular(16),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
                         Text(
-                          song.displayName,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 14.5,
-                            fontWeight: playing
-                                ? FontWeight.w700
-                                : FontWeight.w500,
+                          '全部 ${_albums.length} 张',
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w500,
                           ),
                         ),
-                        const SizedBox(height: 3),
-                        Text(
-                          subtitleParts.join(' · '),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Colors.white60,
-                            fontSize: 12,
-                          ),
+                        const SizedBox(width: 2),
+                        const Icon(
+                          Icons.chevron_right_rounded,
+                          color: Colors.white60,
+                          size: 18,
                         ),
                       ],
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  Text(
-                    song.displayDuration,
-                    style: const TextStyle(
-                      color: Colors.white38,
-                      fontSize: 12,
-                    ),
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
-          );
-        },
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            height: 214,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              physics: const BouncingScrollPhysics(),
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              itemCount: _albums.length,
+              separatorBuilder: (_, _) => const SizedBox(width: 14),
+              itemBuilder: (context, index) {
+                final albumBrief = _albums[index];
+                return SizedBox(
+                  width: 156,
+                  child: _buildSquareAlbumTile(albumBrief),
+                );
+              },
+            ),
+          ),
+        ],
       ),
-    ];
+    );
   }
 
   List<Widget> _buildAlbumsSlivers() {
@@ -1280,91 +1477,96 @@ class _YtArtistDrawerContentState extends State<_YtArtistDrawerContent> {
     }
 
     return [
-      SliverList.builder(
-        itemCount: _albums.length,
-        itemBuilder: (context, index) {
-          final albumBrief = _albums[index];
-          final cover = YtMoreMenu.upgradeArtworkUri(albumBrief.coverUrl);
-          return InkWell(
-            onTap: () {
-              final push = widget.onPushPage ?? Navigator.of(context).push;
-              push(
-                MaterialPageRoute(
-                  builder: (_) => AlbumDetailPage(album: albumBrief.toAlbum()),
-                ),
-              );
-            },
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Row(
-                children: [
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(10),
-                    child: Container(
-                      width: 56,
-                      height: 56,
-                      color: Colors.white12,
-                      child: (cover != null && cover.isNotEmpty)
-                          ? CachedNetworkImage(
-                              imageUrl: cover,
-                              memCacheWidth: 200,
-                              memCacheHeight: 200,
-                              fit: BoxFit.cover,
-                              errorWidget: (_, _, _) => const Icon(
-                                Icons.album_rounded,
-                                color: Colors.white38,
-                                size: 24,
-                              ),
-                            )
-                          : const Icon(
-                              Icons.album_rounded,
-                              color: Colors.white38,
-                              size: 24,
-                            ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          albumBrief.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 14.5,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          [
-                            if (albumBrief.artist.isNotEmpty) albumBrief.artist,
-                            if (albumBrief.year != null) '${albumBrief.year}',
-                          ].join(' · '),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Colors.white60,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const Icon(
-                    Icons.chevron_right_rounded,
-                    color: Colors.white38,
-                    size: 20,
-                  ),
-                ],
-              ),
-            ),
-          );
-        },
+      SliverPadding(
+        padding: const EdgeInsets.fromLTRB(16, 6, 16, 12),
+        sliver: SliverGrid(
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 2,
+            mainAxisSpacing: 18,
+            crossAxisSpacing: 14,
+            childAspectRatio: 0.74,
+          ),
+          delegate: SliverChildBuilderDelegate(
+            (context, index) => _buildSquareAlbumTile(_albums[index]),
+            childCount: _albums.length,
+          ),
+        ),
       ),
     ];
+  }
+
+  Widget _buildSquareAlbumTile(KugouAlbumBrief albumBrief) {
+    final cover = YtMoreMenu.upgradeArtworkUri(albumBrief.coverUrl);
+    final subtitleParts = <String>[
+      '专辑',
+      if (albumBrief.year != null && albumBrief.year! > 0)
+        '${albumBrief.year}年',
+    ];
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () {
+        AppHaptics.lightImpact(HapticCategory.control);
+        _openAlbum(albumBrief);
+      },
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          AspectRatio(
+            aspectRatio: 1.0,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: Container(
+                color: Colors.white.withValues(alpha: 0.08),
+                child: (cover != null && cover.isNotEmpty)
+                    ? CachedNetworkImage(
+                        imageUrl: cover,
+                        memCacheWidth: 420,
+                        memCacheHeight: 420,
+                        fit: BoxFit.cover,
+                        errorWidget: (_, _, _) => const Center(
+                          child: Icon(
+                            Icons.album_rounded,
+                            color: Colors.white38,
+                            size: 38,
+                          ),
+                        ),
+                      )
+                    : const Center(
+                        child: Icon(
+                          Icons.album_rounded,
+                          color: Colors.white38,
+                          size: 38,
+                        ),
+                      ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            albumBrief.name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+              height: 1.2,
+            ),
+          ),
+          const SizedBox(height: 3),
+          Text(
+            subtitleParts.join(' • '),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Colors.white60,
+              fontSize: 12.5,
+              height: 1.2,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }

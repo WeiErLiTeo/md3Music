@@ -1068,6 +1068,7 @@ class YtQueueDrawer extends StatefulWidget {
   final PlaylistScrollAnchor scrollAnchor;
   final GlobalKey<PlayerPlaylistViewState>? playlistKey;
   final VoidCallback onClose;
+  final VoidCallback? onOpenSave;
   final GestureDragUpdateCallback? onVerticalDragUpdate;
   final GestureDragEndCallback? onVerticalDragEnd;
 
@@ -1080,6 +1081,7 @@ class YtQueueDrawer extends StatefulWidget {
     required this.scrollAnchor,
     this.playlistKey,
     required this.onClose,
+    this.onOpenSave,
     this.onVerticalDragUpdate,
     this.onVerticalDragEnd,
   });
@@ -1642,8 +1644,13 @@ class _YtQueueDrawerState extends State<YtQueueDrawer> {
                         ),
                         const SizedBox(width: 12),
                         InkWell(
-                          onTap: () =>
-                              showAddToPlaylistDialog(context, currentSong),
+                          onTap: () {
+                            if (widget.onOpenSave != null) {
+                              widget.onOpenSave!();
+                            } else {
+                              showAddToPlaylistDialog(context, currentSong);
+                            }
+                          },
                           borderRadius: BorderRadius.circular(20),
                           child: Container(
                             padding: const EdgeInsets.symmetric(

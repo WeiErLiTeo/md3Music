@@ -43,6 +43,7 @@ import '../player_cover_morph_layer.dart';
 import '../player_cover_shadow.dart';
 import '../player_page_role.dart';
 import '../player_video_active.dart';
+import '../sleep_timer_sheet.dart';
 import '../widgets/cover_flip_crossfade.dart';
 import '../widgets/cover_switch_pager.dart';
 import '../widgets/play_pause_morph_icon.dart';
@@ -69,11 +70,15 @@ class YtMainView extends StatefulWidget {
   final Animation<double>? commentsExpansion;
   final Animation<double>? artistExpansion;
   final Animation<double>? songInfoExpansion;
+  final Animation<double>? actionExpansion;
   final VoidCallback onCollapse;
   final VoidCallback onOpenLyrics;
   final VoidCallback? onOpenComments;
   final VoidCallback? onOpenArtist;
   final VoidCallback? onOpenSongInfo;
+  final VoidCallback? onOpenSave;
+  final VoidCallback? onOpenSheet;
+  final VoidCallback? onOpenSound;
   final ValueChanged<Rect>? onCoverRectMeasured;
   final void Function(Route<dynamic>)? onPushPage;
   final void Function(Route<dynamic>)? onDismissAndPush;
@@ -93,11 +98,15 @@ class YtMainView extends StatefulWidget {
     this.commentsExpansion,
     this.artistExpansion,
     this.songInfoExpansion,
+    this.actionExpansion,
     required this.onCollapse,
     required this.onOpenLyrics,
     this.onOpenComments,
     this.onOpenArtist,
     this.onOpenSongInfo,
+    this.onOpenSave,
+    this.onOpenSheet,
+    this.onOpenSound,
     this.onCoverRectMeasured,
     this.onPushPage,
     this.onDismissAndPush,
@@ -149,6 +158,8 @@ class _YtMainViewState extends State<YtMainView>
       widget.artistExpansion ?? const AlwaysStoppedAnimation<double>(0.0);
   Animation<double> get _songInfoAnim =>
       widget.songInfoExpansion ?? const AlwaysStoppedAnimation<double>(0.0);
+  Animation<double> get _actionAnim =>
+      widget.actionExpansion ?? const AlwaysStoppedAnimation<double>(0.0);
 
   // ============== 顶栏「音频 / 视频」原地 MV 切换状态 ==============
   String? _probedAlbumAudioId;
@@ -1607,7 +1618,8 @@ class _YtMainViewState extends State<YtMainView>
                 _queueCtrl.value <= 0.001 &&
                 _commentsAnim.value <= 0.001 &&
                 _artistAnim.value <= 0.001 &&
-                _songInfoAnim.value <= 0.001,
+                _songInfoAnim.value <= 0.001 &&
+                _actionAnim.value <= 0.001,
             settledScale: 1.0,
             settledAnchor: Alignment.center,
             child: SongDanmakuHost(
@@ -1646,6 +1658,7 @@ class _YtMainViewState extends State<YtMainView>
           _commentsAnim,
           _artistAnim,
           _songInfoAnim,
+          _actionAnim,
         ]),
         child: coverContent,
         builder: (context, child) {
@@ -1654,7 +1667,8 @@ class _YtMainViewState extends State<YtMainView>
               _queueCtrl.value > 0.001 ||
               _commentsAnim.value > 0.001 ||
               _artistAnim.value > 0.001 ||
-              _songInfoAnim.value > 0.001;
+              _songInfoAnim.value > 0.001 ||
+              _actionAnim.value > 0.001;
           return Opacity(
             opacity: drawerActive ? 0.0 : 1.0,
             child: IgnorePointer(ignoring: drawerActive, child: child),
@@ -1746,7 +1760,8 @@ class _YtMainViewState extends State<YtMainView>
           _queueCtrl.value <= 0.001 &&
           _commentsAnim.value <= 0.001 &&
           _artistAnim.value <= 0.001 &&
-          _songInfoAnim.value <= 0.001,
+          _songInfoAnim.value <= 0.001 &&
+          _actionAnim.value <= 0.001,
       child: TitleSwitchFade(
         version: song.id,
         align: Alignment.centerLeft,
@@ -1828,8 +1843,8 @@ class _YtMainViewState extends State<YtMainView>
   }
 
   /// 胶囊栏：
-  /// - 音频模式：`[ ♥ 喜欢 | ⭐ 收藏 ]`、`[ 歌词 ]`、`[ 保存 ]`、`[ 评论 ]`、`[ 曲谱 ]`、`[ 音效 ]`
-  /// - MV 视频模式：`[ ♥ 喜欢 | ⭐ 收藏 ]`、`[ 投屏 ]`、`[ 清晰度 ]`、`[ 全屏 ]`、`[ 保存 ]`、`[ 评论 ]`
+  /// - 音频模式：`[ ♥ 喜欢 | ⭐ 收藏 ]`、(激活时自动跳到此处的 `[ ⏱ 倒计时 ]`)、`[ 歌词 ]`、`[ 保存 ]`、`[ 评论 ]`、`[ 曲谱 ]`、`[ 音效 ]`、(未开启时排在末尾的 `[ ⏱ 定时 ]`)
+  /// - MV 视频模式：`[ ♥ 喜欢 | ⭐ 收藏 ]`、(激活时 `[ ⏱ 倒计时 ]`)、`[ 投屏 ]`、`[ 清晰度 ]`、`[ 全屏 ]`、`[ 保存 ]`、`[ 评论 ]`、(未开启时 `[ ⏱ 定时 ]`)
   Widget _buildCapsuleRow(
     BuildContext context,
     Song song,
@@ -1838,6 +1853,9 @@ class _YtMainViewState extends State<YtMainView>
     double horizontalPadding = 24.0,
   }) {
     final hasSheet = song.albumAudioId != null && song.albumAudioId!.isNotEmpty;
+    final sleepActive = context.select<PlayerProvider, bool>(
+      (p) => p.isSleepTimerActive,
+    );
     final currentQualityLabel =
         (_mvQualities.isNotEmpty &&
             _mvQualityIndex >= 0 &&
@@ -1858,6 +1876,11 @@ class _YtMainViewState extends State<YtMainView>
             isFavorited: isFavorited,
             isOnline: isOnline,
           ),
+          // 定时开启后自动跳到「音乐收藏」的后面并实时显示倒计时
+          if (sleepActive) ...[
+            const SizedBox(width: 10),
+            _buildSleepTimerCapsule(context, active: true),
+          ],
           if (_isVideoMode) ...[
             const SizedBox(width: 10),
             _buildCapsuleButton(
@@ -1901,7 +1924,13 @@ class _YtMainViewState extends State<YtMainView>
             _buildCapsuleButton(
               icon: Icons.playlist_add,
               label: '保存',
-              onTap: () => showAddToPlaylistDialog(context, song),
+              onTap: () {
+                if (widget.onOpenSave != null) {
+                  widget.onOpenSave!();
+                } else {
+                  showAddToPlaylistDialog(context, song);
+                }
+              },
             ),
             const SizedBox(width: 10),
             _buildCapsuleButton(
@@ -1926,7 +1955,13 @@ class _YtMainViewState extends State<YtMainView>
             _buildCapsuleButton(
               icon: Icons.playlist_add,
               label: '保存',
-              onTap: () => showAddToPlaylistDialog(context, song),
+              onTap: () {
+                if (widget.onOpenSave != null) {
+                  widget.onOpenSave!();
+                } else {
+                  showAddToPlaylistDialog(context, song);
+                }
+              },
             ),
             const SizedBox(width: 10),
             _buildCapsuleButton(
@@ -1945,7 +1980,13 @@ class _YtMainViewState extends State<YtMainView>
               _buildCapsuleButton(
                 icon: Icons.library_music_outlined,
                 label: '曲谱',
-                onTap: () => showSongSheetSheet(context, song),
+                onTap: () {
+                  if (widget.onOpenSheet != null) {
+                    widget.onOpenSheet!();
+                  } else {
+                    showSongSheetSheet(context, song);
+                  }
+                },
               ),
             ],
             const SizedBox(width: 10),
@@ -1953,17 +1994,97 @@ class _YtMainViewState extends State<YtMainView>
               icon: Icons.graphic_eq,
               label: '音效',
               onTap: () {
-                final push = widget.onPushPage ?? Navigator.of(context).push;
-                push(
-                  MaterialPageRoute(
-                    builder: (_) => const SoundsPage(),
-                  ),
-                );
+                if (widget.onOpenSound != null) {
+                  widget.onOpenSound!();
+                } else {
+                  final push = widget.onPushPage ?? Navigator.of(context).push;
+                  push(
+                    MaterialPageRoute(
+                      builder: (_) => const SoundsPage(),
+                    ),
+                  );
+                }
               },
             ),
           ],
+          // 未开启定时时排在胶囊行最后面
+          if (!sleepActive) ...[
+            const SizedBox(width: 10),
+            _buildSleepTimerCapsule(context, active: false),
+          ],
         ],
       ),
+    );
+  }
+
+  Widget _buildSleepTimerCapsule(BuildContext context, {required bool active}) {
+    final playerProvider = context.read<PlayerProvider>();
+    if (!active) {
+      return _buildCapsuleButton(
+        icon: Icons.timer_outlined,
+        label: '定时',
+        onTap: () => showSleepTimerSheet(
+          context: context,
+          player: playerProvider,
+        ),
+      );
+    }
+
+    return ValueListenableBuilder<Duration?>(
+      valueListenable: playerProvider.sleepTimerRemainingNotifier,
+      builder: (context, remaining, _) {
+        final mode = playerProvider.sleepTimerMode;
+        String label;
+        if (mode == SleepTimerMode.endOfTrack) {
+          label = '播完本曲';
+        } else if (remaining != null) {
+          label = formatSleepTimerRemaining(remaining);
+        } else {
+          label = '定时中';
+        }
+
+        return InkWell(
+          onTap: () => showSleepTimerSheet(
+            context: context,
+            player: playerProvider,
+          ),
+          borderRadius: BorderRadius.circular(22),
+          child: Container(
+            padding: const EdgeInsets.symmetric(
+              horizontal: 14.5,
+              vertical: 8.5,
+            ),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.22),
+              borderRadius: BorderRadius.circular(22),
+              border: Border.all(
+                color: const Color(0xFFFFD54F).withValues(alpha: 0.45),
+                width: 0.8,
+              ),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(
+                  Icons.timer_rounded,
+                  size: 19,
+                  color: Color(0xFFFFD54F),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  label,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w700,
+                    fontFeatures: [FontFeature.tabularFigures()],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
