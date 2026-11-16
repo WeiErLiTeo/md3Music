@@ -15,6 +15,7 @@ import '../../../core/utils/artwork_color_extractor.dart';
 import '../../../data/models/mv_models.dart';
 import '../../../data/models/song.dart';
 import '../../../providers/favorites_provider.dart';
+import '../../../providers/kugou_provider.dart';
 import '../../../providers/local_favorites_provider.dart';
 import '../../../providers/player_provider.dart';
 import '../../../services/kugou_api/kugou_api_client.dart';
@@ -36,15 +37,18 @@ import '../../sound/sounds_page.dart';
 import '../comments_view.dart';
 import '../cover_switch_physics.dart';
 import '../dlna_cast_sheet.dart';
+import '../lyric_flight_batcher.dart';
 import '../mv_player_page.dart';
 import '../player_cover_morph_layer.dart';
 import '../player_cover_shadow.dart';
+import '../player_page_role.dart';
 import '../player_video_active.dart';
 import '../widgets/cover_flip_crossfade.dart';
 import '../widgets/cover_switch_pager.dart';
 import '../widgets/play_pause_morph_icon.dart';
 import '../widgets/song_danmaku_host.dart';
 import '../widgets/title_switch_fade.dart';
+import 'yt_lyrics_drawer.dart' show YtLyricsCache;
 import 'yt_more_menu.dart';
 
 class YtMainView extends StatefulWidget {
@@ -63,9 +67,13 @@ class YtMainView extends StatefulWidget {
   final Animation<double> lyricsExpansion;
   final AnimationController? queueController;
   final Animation<double>? commentsExpansion;
+  final Animation<double>? artistExpansion;
+  final Animation<double>? songInfoExpansion;
   final VoidCallback onCollapse;
   final VoidCallback onOpenLyrics;
   final VoidCallback? onOpenComments;
+  final VoidCallback? onOpenArtist;
+  final VoidCallback? onOpenSongInfo;
   final ValueChanged<Rect>? onCoverRectMeasured;
   final void Function(Route<dynamic>)? onPushPage;
   final void Function(Route<dynamic>)? onDismissAndPush;
@@ -83,9 +91,13 @@ class YtMainView extends StatefulWidget {
     required this.lyricsExpansion,
     this.queueController,
     this.commentsExpansion,
+    this.artistExpansion,
+    this.songInfoExpansion,
     required this.onCollapse,
     required this.onOpenLyrics,
     this.onOpenComments,
+    this.onOpenArtist,
+    this.onOpenSongInfo,
     this.onCoverRectMeasured,
     this.onPushPage,
     this.onDismissAndPush,
@@ -110,6 +122,10 @@ class _YtMainViewState extends State<YtMainView>
   int _coverFlipDirection = 1;
   bool _suppressCoverFlip = false;
   Timer? _neighborPrewarmTimer;
+  Timer? _initPostFlightTimer;
+  late final LyricFlightBatcher _flightBatcher;
+  bool _isDragOverlay = false;
+  bool _initialWorkScheduled = false;
   double _lastMeasuredCoverSide = 300.0;
   double _lastDpr = 2.75;
 
@@ -129,6 +145,10 @@ class _YtMainViewState extends State<YtMainView>
       widget.queueController ?? _internalQueueController!;
   Animation<double> get _commentsAnim =>
       widget.commentsExpansion ?? const AlwaysStoppedAnimation<double>(0.0);
+  Animation<double> get _artistAnim =>
+      widget.artistExpansion ?? const AlwaysStoppedAnimation<double>(0.0);
+  Animation<double> get _songInfoAnim =>
+      widget.songInfoExpansion ?? const AlwaysStoppedAnimation<double>(0.0);
 
   // ============== 顶栏「音频 / 视频」原地 MV 切换状态 ==============
   String? _probedAlbumAudioId;
@@ -166,13 +186,13 @@ class _YtMainViewState extends State<YtMainView>
         reverseDuration: const Duration(milliseconds: 280),
       );
     }
-    _syncSongCapabilities(widget.song);
-    _scheduleNeighborPrewarm(delay: const Duration(milliseconds: 360));
+    _flightBatcher = LyricFlightBatcher(isHostMounted: () => mounted);
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    _isDragOverlay = PlayerPageRole.of(context) == PlayerPageRole.dragOverlay;
     final player = context.read<PlayerProvider>();
     if (_playerProvider != player) {
       _playerProvider?.removeListener(_onPlayerChanged);
@@ -180,6 +200,24 @@ class _YtMainViewState extends State<YtMainView>
       _lastSongId = player.currentSong?.id;
       _lastPagerIndex = player.currentIndex;
       _playerProvider?.addListener(_onPlayerChanged);
+    }
+    if (!_isDragOverlay && !_initialWorkScheduled) {
+      _initialWorkScheduled = true;
+      final initialSong = widget.song;
+      // 延迟过转场启动与落位帧，避免点开或拖开播放页收尾阶段与网络探测/图片解码争抢主线程
+      _initPostFlightTimer = Timer(const Duration(milliseconds: 80), () {
+        if (!mounted) return;
+        _flightBatcher.schedule(() {
+          if (!mounted) return;
+          _initPostFlightTimer = Timer(const Duration(milliseconds: 120), () {
+            if (!mounted) return;
+            _syncSongCapabilities(initialSong);
+            final kugouProvider = context.read<KugouProvider>();
+            unawaited(YtLyricsCache.prewarm(initialSong, kugouProvider));
+          });
+          _scheduleNeighborPrewarm(delay: const Duration(milliseconds: 560));
+        });
+      });
     }
   }
 
@@ -191,19 +229,26 @@ class _YtMainViewState extends State<YtMainView>
         widget.song.artworkUri != oldWidget.song.artworkUri) {
       final resolved = YtMoreMenu.resolveMatchedSong(widget.song);
       _defaultStarred = _isSongInDefaultCollection(widget.song, resolved);
-      if (widget.song.albumAudioId != oldWidget.song.albumAudioId) {
-        _syncSongCapabilities(
-          widget.song,
-          autoEnterVideoIfAvailable: _isVideoMode,
-        );
+      if (!_isDragOverlay &&
+          widget.song.albumAudioId != oldWidget.song.albumAudioId) {
+        final nextSong = widget.song;
+        _flightBatcher.schedule(() {
+          if (!mounted) return;
+          _syncSongCapabilities(
+            nextSong,
+            autoEnterVideoIfAvailable: _isVideoMode,
+          );
+        });
       }
     }
   }
 
   @override
   void dispose() {
+    _initPostFlightTimer?.cancel();
     _neighborPrewarmTimer?.cancel();
     _songSwitchDeferTimer?.cancel();
+    _flightBatcher.dispose();
     _disposeVideoController(resumeAudio: false);
     _bufferingPulseController.dispose();
     _internalQueueController?.dispose();
@@ -237,7 +282,7 @@ class _YtMainViewState extends State<YtMainView>
     }
 
     if (albumAudioId == null || albumAudioId.isEmpty) {
-      if (mounted) {
+      if (mounted && _currentMvInfo != null) {
         setState(() => _currentMvInfo = null);
       }
       if (autoEnterVideoIfAvailable) {
@@ -249,7 +294,9 @@ class _YtMainViewState extends State<YtMainView>
     if (YtMainView._mvInfoCache.containsKey(albumAudioId)) {
       final cachedInfo = YtMainView._mvInfoCache[albumAudioId];
       if (mounted) {
-        setState(() => _currentMvInfo = cachedInfo);
+        if (_currentMvInfo != cachedInfo) {
+          setState(() => _currentMvInfo = cachedInfo);
+        }
         if (autoEnterVideoIfAvailable) {
           if (cachedInfo != null && cachedInfo.hasMv) {
             unawaited(_enterVideoMode(resolved, forceReload: true));
@@ -268,9 +315,11 @@ class _YtMainViewState extends State<YtMainView>
           final validInfo = (info != null && info.hasMv) ? info : null;
           YtMainView._mvInfoCache[albumAudioId] = validInfo;
           if (!mounted || _probedAlbumAudioId != albumAudioId) return;
-          setState(() {
-            _currentMvInfo = validInfo;
-          });
+          if (_currentMvInfo != validInfo) {
+            setState(() {
+              _currentMvInfo = validInfo;
+            });
+          }
           if (autoEnterVideoIfAvailable) {
             if (validInfo != null) {
               unawaited(_enterVideoMode(resolved, forceReload: true));
@@ -576,7 +625,12 @@ class _YtMainViewState extends State<YtMainView>
         _songSwitchDeferTimer = Timer(const Duration(milliseconds: 280), () {
           if (!mounted) return;
           setState(() => _dynamicCoverReady = true);
-          _syncSongCapabilities(song, autoEnterVideoIfAvailable: false);
+          if (!_isDragOverlay) {
+            _syncSongCapabilities(song, autoEnterVideoIfAvailable: false);
+            unawaited(
+              YtLyricsCache.prewarm(song, context.read<KugouProvider>()),
+            );
+          }
         });
       }
       if (slideDirection != 0) {
@@ -616,6 +670,7 @@ class _YtMainViewState extends State<YtMainView>
   void _scheduleNeighborPrewarm({
     Duration delay = const Duration(milliseconds: 520),
   }) {
+    if (_isDragOverlay) return;
     _neighborPrewarmTimer?.cancel();
     _neighborPrewarmTimer = Timer(delay, () {
       if (!mounted) return;
@@ -1550,7 +1605,9 @@ class _YtMainViewState extends State<YtMainView>
                 !_isVideoMode &&
                 widget.lyricsExpansion.value <= 0.001 &&
                 _queueCtrl.value <= 0.001 &&
-                _commentsAnim.value <= 0.001,
+                _commentsAnim.value <= 0.001 &&
+                _artistAnim.value <= 0.001 &&
+                _songInfoAnim.value <= 0.001,
             settledScale: 1.0,
             settledAnchor: Alignment.center,
             child: SongDanmakuHost(
@@ -1587,13 +1644,17 @@ class _YtMainViewState extends State<YtMainView>
           widget.lyricsExpansion,
           _queueCtrl,
           _commentsAnim,
+          _artistAnim,
+          _songInfoAnim,
         ]),
         child: coverContent,
         builder: (context, child) {
           final drawerActive =
               widget.lyricsExpansion.value > 0.001 ||
               _queueCtrl.value > 0.001 ||
-              _commentsAnim.value > 0.001;
+              _commentsAnim.value > 0.001 ||
+              _artistAnim.value > 0.001 ||
+              _songInfoAnim.value > 0.001;
           return Opacity(
             opacity: drawerActive ? 0.0 : 1.0,
             child: IgnorePointer(ignoring: drawerActive, child: child),
@@ -1626,6 +1687,10 @@ class _YtMainViewState extends State<YtMainView>
         children: [
           GestureDetector(
             onTap: () {
+              if (widget.onOpenSongInfo != null) {
+                widget.onOpenSongInfo!();
+                return;
+              }
               final push =
                   widget.onDismissAndPush ??
                   widget.onPushPage ??
@@ -1648,6 +1713,10 @@ class _YtMainViewState extends State<YtMainView>
           const SizedBox(height: 2),
           GestureDetector(
             onTap: () {
+              if (widget.onOpenArtist != null) {
+                widget.onOpenArtist!();
+                return;
+              }
               final push =
                   widget.onDismissAndPush ??
                   widget.onPushPage ??
@@ -1675,7 +1744,9 @@ class _YtMainViewState extends State<YtMainView>
           !widget.dockMode &&
           widget.lyricsExpansion.value <= 0.001 &&
           _queueCtrl.value <= 0.001 &&
-          _commentsAnim.value <= 0.001,
+          _commentsAnim.value <= 0.001 &&
+          _artistAnim.value <= 0.001 &&
+          _songInfoAnim.value <= 0.001,
       child: TitleSwitchFade(
         version: song.id,
         align: Alignment.centerLeft,

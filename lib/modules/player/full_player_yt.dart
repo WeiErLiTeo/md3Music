@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
+import 'package:flutter/scheduler.dart' show SchedulerBinding;
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 import 'package:video_player/video_player.dart';
@@ -19,10 +20,12 @@ import '../../utils/landscape_immersive.dart';
 import 'full_player_route.dart';
 import 'player_cover_morph.dart';
 import 'player_page_role.dart';
+import 'yt/yt_artist_drawer.dart';
 import 'yt/yt_background.dart';
 import 'yt/yt_lyrics_drawer.dart';
 import 'yt/yt_main_view.dart';
 import 'yt/yt_more_menu.dart';
+import 'yt/yt_song_info_drawer.dart';
 
 /// YouTube Music 风格的播放页界面
 class FullPlayerYt extends StatefulWidget {
@@ -41,6 +44,11 @@ class _FullPlayerYtState extends State<FullPlayerYt>
   late final AnimationController _lyricsController;
   late final AnimationController _queueController;
   late final AnimationController _commentsController;
+  late final AnimationController _artistController;
+  late final AnimationController _songInfoController;
+  late final Listenable _overlayExpansion;
+  late final YtDrawerFadeAnimation _mainFadeAnim;
+  String? _artistDrawerTargetName;
   final PlaylistScrollAnchor _playlistScrollAnchor = PlaylistScrollAnchor();
   final GlobalKey<PlayerPlaylistViewState> _playlistKey =
       GlobalKey<PlayerPlaylistViewState>();
@@ -79,14 +87,41 @@ class _FullPlayerYtState extends State<FullPlayerYt>
       duration: const Duration(milliseconds: 340),
       reverseDuration: const Duration(milliseconds: 280),
     )..addListener(_syncCoverMorphVisibility);
+    _artistController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 340),
+      reverseDuration: const Duration(milliseconds: 280),
+    )..addListener(_syncCoverMorphVisibility);
+    _songInfoController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 340),
+      reverseDuration: const Duration(milliseconds: 280),
+    )..addListener(_syncCoverMorphVisibility);
+    _overlayExpansion = Listenable.merge([
+      _lyricsController,
+      _queueController,
+      _commentsController,
+      _artistController,
+      _songInfoController,
+    ]);
+    _mainFadeAnim = YtDrawerFadeAnimation(
+      parent: _overlayExpansion,
+      compute: () => 1.0 - _maxDrawerValue() * 1.6,
+    );
+  }
+
+  double _maxDrawerValue() {
+    var m = _lyricsController.value;
+    if (_queueController.value > m) m = _queueController.value;
+    if (_commentsController.value > m) m = _commentsController.value;
+    if (_artistController.value > m) m = _artistController.value;
+    if (_songInfoController.value > m) m = _songInfoController.value;
+    return m.clamp(0.0, 1.0);
   }
 
   void _syncCoverMorphVisibility() {
     if (!mounted || _isDragOverlay) return;
-    final drawerOpen =
-        _lyricsController.value > 0.001 ||
-        _queueController.value > 0.001 ||
-        _commentsController.value > 0.001;
+    final drawerOpen = _maxDrawerValue() > 0.001;
     PlayerCoverMorphBus.instance
       ..coverSuppressed = _isVideoMode
       ..coverSuppressOwner = this;
@@ -114,11 +149,14 @@ class _FullPlayerYtState extends State<FullPlayerYt>
 
   void _onDragRouteStatus(AnimationStatus status) {
     if (status == AnimationStatus.completed) {
-      applyImmersiveForOrientation();
-      _systemUiModified = true;
       _dragRoute?.controller.removeStatusListener(_onDragRouteStatus);
       _dragRoute = null;
-      if (mounted) setState(() {});
+      // 延后一帧切换沉浸式系统栏，避免展开落位帧与系统栏内边距重排/全页重建相撞
+      SchedulerBinding.instance.scheduleFrameCallback((_) {
+        if (!mounted || _isDismissing) return;
+        applyImmersiveForOrientation();
+        _systemUiModified = true;
+      });
     } else if (status == AnimationStatus.dismissed) {
       _dragRoute?.controller.removeStatusListener(_onDragRouteStatus);
       _dragRoute = null;
@@ -140,6 +178,8 @@ class _FullPlayerYtState extends State<FullPlayerYt>
     _lyricsController.dispose();
     _queueController.dispose();
     _commentsController.dispose();
+    _artistController.dispose();
+    _songInfoController.dispose();
     _playlistScrollAnchor.dispose();
     MusicHapticsService.instance.setPlayerPageActive(false);
     super.dispose();
@@ -149,22 +189,28 @@ class _FullPlayerYtState extends State<FullPlayerYt>
 
   bool get _isDragOverlay => _pageRole == PlayerPageRole.dragOverlay;
 
+  void _closeOtherDrawersExcept(AnimationController? keep) {
+    for (final ctrl in <AnimationController>[
+      _lyricsController,
+      _queueController,
+      _commentsController,
+      _artistController,
+      _songInfoController,
+    ]) {
+      if (identical(ctrl, keep)) continue;
+      if (ctrl.value > 0.0 || ctrl.isAnimating) {
+        ctrl.animateBack(
+          0.0,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeInCubic,
+        );
+      }
+    }
+  }
+
   void _openLyrics() {
     AppHaptics.lightImpact(HapticCategory.control);
-    if (_queueController.value > 0.0) {
-      _queueController.animateBack(
-        0.0,
-        duration: const Duration(milliseconds: 220),
-        curve: Curves.easeInCubic,
-      );
-    }
-    if (_commentsController.value > 0.0) {
-      _commentsController.animateBack(
-        0.0,
-        duration: const Duration(milliseconds: 220),
-        curve: Curves.easeInCubic,
-      );
-    }
+    _closeOtherDrawersExcept(_lyricsController);
     _lyricsController.animateTo(
       1.0,
       duration: const Duration(milliseconds: 340),
@@ -207,20 +253,7 @@ class _FullPlayerYtState extends State<FullPlayerYt>
 
   void _openQueue() {
     AppHaptics.lightImpact(HapticCategory.control);
-    if (_lyricsController.value > 0.0) {
-      _lyricsController.animateBack(
-        0.0,
-        duration: const Duration(milliseconds: 220),
-        curve: Curves.easeInCubic,
-      );
-    }
-    if (_commentsController.value > 0.0) {
-      _commentsController.animateBack(
-        0.0,
-        duration: const Duration(milliseconds: 220),
-        curve: Curves.easeInCubic,
-      );
-    }
+    _closeOtherDrawersExcept(_queueController);
     _queueController.animateTo(
       1.0,
       duration: const Duration(milliseconds: 340),
@@ -263,20 +296,7 @@ class _FullPlayerYtState extends State<FullPlayerYt>
 
   void _openComments() {
     AppHaptics.lightImpact(HapticCategory.control);
-    if (_lyricsController.value > 0.0) {
-      _lyricsController.animateBack(
-        0.0,
-        duration: const Duration(milliseconds: 220),
-        curve: Curves.easeInCubic,
-      );
-    }
-    if (_queueController.value > 0.0) {
-      _queueController.animateBack(
-        0.0,
-        duration: const Duration(milliseconds: 220),
-        curve: Curves.easeInCubic,
-      );
-    }
+    _closeOtherDrawersExcept(_commentsController);
     _commentsController.animateTo(
       1.0,
       duration: const Duration(milliseconds: 340),
@@ -312,6 +332,93 @@ class _FullPlayerYtState extends State<FullPlayerYt>
       _openComments();
     } else {
       _closeComments();
+    }
+  }
+
+  void _openArtist([String? artistName]) {
+    AppHaptics.lightImpact(HapticCategory.control);
+    if (_artistDrawerTargetName != artistName) {
+      setState(() => _artistDrawerTargetName = artistName);
+    }
+    _closeOtherDrawersExcept(_artistController);
+    _artistController.animateTo(
+      1.0,
+      duration: const Duration(milliseconds: 340),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  void _closeArtist() {
+    AppHaptics.lightImpact(HapticCategory.control);
+    _artistController.animateBack(
+      0.0,
+      duration: const Duration(milliseconds: 280),
+      curve: Curves.easeInCubic,
+    );
+  }
+
+  void _onArtistDragUpdate(DragUpdateDetails details) {
+    final screenHeight = MediaQuery.sizeOf(context).height;
+    final dragRange = (screenHeight * 0.72).clamp(200.0, 900.0);
+    final dy = toDisplaySpaceDelta(context, details.delta).dy;
+    _artistController.stop();
+    _artistController.value = (_artistController.value - dy / dragRange).clamp(
+      0.0,
+      1.0,
+    );
+  }
+
+  void _onArtistDragEnd(DragEndDetails details) {
+    final v = details.primaryVelocity ?? 0.0;
+    if (v < -400.0) {
+      _openArtist(_artistDrawerTargetName);
+    } else if (v > 400.0) {
+      _closeArtist();
+    } else if (_artistController.value >= 0.5) {
+      _openArtist(_artistDrawerTargetName);
+    } else {
+      _closeArtist();
+    }
+  }
+
+  void _openSongInfo() {
+    AppHaptics.lightImpact(HapticCategory.control);
+    _closeOtherDrawersExcept(_songInfoController);
+    _songInfoController.animateTo(
+      1.0,
+      duration: const Duration(milliseconds: 340),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  void _closeSongInfo() {
+    AppHaptics.lightImpact(HapticCategory.control);
+    _songInfoController.animateBack(
+      0.0,
+      duration: const Duration(milliseconds: 280),
+      curve: Curves.easeInCubic,
+    );
+  }
+
+  void _onSongInfoDragUpdate(DragUpdateDetails details) {
+    final screenHeight = MediaQuery.sizeOf(context).height;
+    final dragRange = (screenHeight * 0.72).clamp(200.0, 900.0);
+    final dy = toDisplaySpaceDelta(context, details.delta).dy;
+    _songInfoController.stop();
+    _songInfoController.value = (_songInfoController.value - dy / dragRange)
+        .clamp(0.0, 1.0);
+  }
+
+  void _onSongInfoDragEnd(DragEndDetails details) {
+    final v = details.primaryVelocity ?? 0.0;
+    if (v < -400.0) {
+      _openSongInfo();
+    } else if (v > 400.0) {
+      _closeSongInfo();
+    } else if (_songInfoController.value >= 0.5) {
+      _openSongInfo();
+    } else {
+      _closeSongInfo();
     }
   }
 
@@ -421,6 +528,14 @@ class _FullPlayerYtState extends State<FullPlayerYt>
     }
     if (_commentsController.value > 0.01 || _commentsController.isAnimating) {
       _closeComments();
+      return true;
+    }
+    if (_artistController.value > 0.01 || _artistController.isAnimating) {
+      _closeArtist();
+      return true;
+    }
+    if (_songInfoController.value > 0.01 || _songInfoController.isAnimating) {
+      _closeSongInfo();
       return true;
     }
     if (widget.dockMode) return false;
@@ -545,11 +660,7 @@ class _FullPlayerYtState extends State<FullPlayerYt>
     final safeLeft = mediaPadding.left;
     final screenSize = MediaQuery.sizeOf(context);
 
-    final Listenable overlayExpansion = Listenable.merge([
-      _lyricsController,
-      _queueController,
-      _commentsController,
-    ]);
+    final Listenable overlayExpansion = _overlayExpansion;
 
     Widget page = Scaffold(
       backgroundColor: const Color(0xFF030303),
@@ -588,9 +699,13 @@ class _FullPlayerYtState extends State<FullPlayerYt>
                 lyricsExpansion: _lyricsController,
                 queueController: _queueController,
                 commentsExpansion: _commentsController,
+                artistExpansion: _artistController,
+                songInfoExpansion: _songInfoController,
                 onCollapse: _collapseByButton,
                 onOpenLyrics: _openLyrics,
                 onOpenComments: _openComments,
+                onOpenArtist: _openArtist,
+                onOpenSongInfo: _openSongInfo,
                 onCoverRectMeasured: (rect) {
                   _measuredCoverRect = rect;
                 },
@@ -613,20 +728,11 @@ class _FullPlayerYtState extends State<FullPlayerYt>
               ),
             ),
             builder: (context, mainViewChild) {
-              final t = math
-                  .max(
-                    _lyricsController.value,
-                    math.max(
-                      _queueController.value,
-                      _commentsController.value,
-                    ),
-                  )
-                  .clamp(0.0, 1.0);
-              final mainOpacity = (1.0 - t * 1.6).clamp(0.0, 1.0);
+              final t = _maxDrawerValue();
               return IgnorePointer(
                 ignoring: t > 0.05,
-                child: Opacity(
-                  opacity: mainOpacity,
+                child: FadeTransition(
+                  opacity: _mainFadeAnim,
                   child: Transform.translate(
                     offset: Offset(0, -24.0 * t),
                     child: mainViewChild,
@@ -674,6 +780,34 @@ class _FullPlayerYtState extends State<FullPlayerYt>
                 onVerticalDragEnd: _onCommentsDragEnd,
               ),
             ),
+            // 歌手信息抽屉层（点击歌手名弹出，1:1 复刻歌词/评论抽屉展开动画）
+            Positioned.fill(
+              child: YtArtistDrawer(
+                expansion: _artistController,
+                song: resolvedSong,
+                initialArtistName: _artistDrawerTargetName,
+                isVideoMode: _isVideoMode,
+                videoController: _mvVideoController,
+                onClose: _closeArtist,
+                onPushPage: _pushOverPlayer,
+                onVerticalDragUpdate: _onArtistDragUpdate,
+                onVerticalDragEnd: _onArtistDragEnd,
+              ),
+            ),
+            // 歌曲百科/详情抽屉层（点击歌名弹出，展示年份/语种/曲风标签/制作名单/高潮副歌/榜单/相似歌曲）
+            Positioned.fill(
+              child: YtSongInfoDrawer(
+                expansion: _songInfoController,
+                song: resolvedSong,
+                isVideoMode: _isVideoMode,
+                videoController: _mvVideoController,
+                onClose: _closeSongInfo,
+                onOpenArtist: _openArtist,
+                onPushPage: _pushOverPlayer,
+                onVerticalDragUpdate: _onSongInfoDragUpdate,
+                onVerticalDragEnd: _onSongInfoDragEnd,
+              ),
+            ),
           ],
           // 悬浮封面层：仅在歌词/播放列表/评论抽屉拉开（t > 0.001）且非视频模式时挂载，
           // 与主封面共享同一份 1080p PlayerArtworkImage 解码档位与 GPU 纹理，
@@ -702,15 +836,7 @@ class _FullPlayerYtState extends State<FullPlayerYt>
               return AnimatedBuilder(
                 animation: overlayExpansion,
                 builder: (context, _) {
-                  final t = math
-                      .max(
-                        _lyricsController.value,
-                        math.max(
-                          _queueController.value,
-                          _commentsController.value,
-                        ),
-                      )
-                      .clamp(0.0, 1.0);
+                  final t = _maxDrawerValue();
                   final active = t > 0.001 && !_isVideoMode;
                   if (!active) return const SizedBox.shrink();
 

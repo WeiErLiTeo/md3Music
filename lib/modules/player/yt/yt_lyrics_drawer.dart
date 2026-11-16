@@ -28,6 +28,314 @@ import '../../library/song_match_sheet.dart';
 import '../comments_view.dart';
 import '../widgets/play_pause_morph_icon.dart';
 
+/// 拆分 KRC 中将整句或多歌手名（含内部空格或 `/`、`\`）打包为单个 [LyricWord] 的复合词，
+/// 避免单词超宽无法换行或行高预留不足导致重叠。
+List<LyricLine> _normalizeCompoundWords(List<LyricLine> lines) {
+  List<LyricLine>? out;
+  for (int i = 0; i < lines.length; i++) {
+    final line = lines[i];
+    if (line.words.isEmpty) continue;
+    bool needsSplit = false;
+    for (final w in line.words) {
+      final trimmed = w.text.trim();
+      if (trimmed.length >= 4 &&
+          (trimmed.contains(' ') ||
+              trimmed.contains('/') ||
+              trimmed.contains('\\'))) {
+        needsSplit = true;
+        break;
+      }
+    }
+    if (!needsSplit) continue;
+
+    final newWords = <LyricWord>[];
+    for (final w in line.words) {
+      final trimmed = w.text.trim();
+      if (trimmed.length < 4 ||
+          (!trimmed.contains(' ') &&
+              !trimmed.contains('/') &&
+              !trimmed.contains('\\'))) {
+        newWords.add(w);
+        continue;
+      }
+      final rawUnits = segmentLyricUnits(
+        w.text.replaceAll('/', '/ ').replaceAll('\\', '\\ '),
+      );
+      final mergedUnits = <String>[];
+      for (final u in rawUnits) {
+        final restored = u.replaceAll('/ ', '/').replaceAll('\\ ', '\\');
+        if (restored.trim().isEmpty && mergedUnits.isNotEmpty) {
+          mergedUnits[mergedUnits.length - 1] = mergedUnits.last + restored;
+        } else if (restored.isNotEmpty) {
+          mergedUnits.add(restored);
+        }
+      }
+      if (mergedUnits.length <= 1) {
+        newWords.add(w);
+        continue;
+      }
+      final totalLen = w.text.length;
+      int offsetChars = 0;
+      for (int idx = 0; idx < mergedUnits.length; idx++) {
+        final piece = mergedUnits[idx];
+        final startRatio = offsetChars / totalLen;
+        final endRatio = (offsetChars + piece.length) / totalLen;
+        final pieceStart = w.startTime + (w.duration * startRatio).round();
+        final pieceEnd = idx == mergedUnits.length - 1
+            ? w.startTime + w.duration
+            : w.startTime + (w.duration * endRatio).round();
+        newWords.add(
+          LyricWord(
+            startTime: pieceStart,
+            duration: (pieceEnd - pieceStart).clamp(0, w.duration),
+            text: piece,
+          ),
+        );
+        offsetChars += piece.length;
+      }
+    }
+    out ??= List<LyricLine>.of(lines);
+    out[i] = line.copyWith(words: newWords);
+  }
+  return out ?? lines;
+}
+
+/// 轻量级派生淡入动画：配合 [FadeTransition] 直接更新 GPU OpacityLayer，
+/// 避免动画 `Opacity` 在每帧重分配离屏 `saveLayer` 造成掉帧。
+class YtDrawerFadeAnimation extends Animation<double> {
+  final Listenable _parent;
+  final double Function() _compute;
+
+  const YtDrawerFadeAnimation({
+    required Listenable parent,
+    required double Function() compute,
+  }) : _parent = parent,
+       _compute = compute;
+
+  @override
+  void addListener(VoidCallback listener) => _parent.addListener(listener);
+
+  @override
+  void removeListener(VoidCallback listener) =>
+      _parent.removeListener(listener);
+
+  @override
+  void addStatusListener(AnimationStatusListener listener) {}
+
+  @override
+  void removeStatusListener(AnimationStatusListener listener) {}
+
+  @override
+  AnimationStatus get status {
+    final v = value;
+    if (v <= 0.0) return AnimationStatus.dismissed;
+    if (v >= 1.0) return AnimationStatus.completed;
+    return AnimationStatus.forward;
+  }
+
+  @override
+  double get value => _compute().clamp(0.0, 1.0);
+}
+
+class YtCachedLyricsEntry {
+  final List<LyricLine> parsedLines;
+  final String rawLyricText;
+
+  const YtCachedLyricsEntry({
+    required this.parsedLines,
+    required this.rawLyricText,
+  });
+}
+
+/// YT 抽屉歌词内存缓存与预热池：
+/// - 播放页打开平稳后在后台预取并解析，点击「歌词」瞬间首帧直出，无加载菊花或解析卡顿；
+/// - 同时保留原始歌词文本，供歌曲百科抽屉提取作词/作曲/编曲等制作人员名单。
+class YtLyricsCache {
+  YtLyricsCache._();
+
+  static const int _maxEntries = 24;
+  static final Map<String, YtCachedLyricsEntry> _entries =
+      <String, YtCachedLyricsEntry>{};
+  static final Map<String, Future<YtCachedLyricsEntry>> _inflight =
+      <String, Future<YtCachedLyricsEntry>>{};
+
+  static YtCachedLyricsEntry? get(String songId) {
+    final hit = _entries.remove(songId);
+    if (hit != null) {
+      _entries[songId] = hit;
+    }
+    return hit;
+  }
+
+  static void invalidate(String songId) {
+    _entries.remove(songId);
+  }
+
+  static void _put(String songId, YtCachedLyricsEntry entry) {
+    _entries.remove(songId);
+    _entries[songId] = entry;
+    while (_entries.length > _maxEntries) {
+      _entries.remove(_entries.keys.first);
+    }
+  }
+
+  static Future<YtCachedLyricsEntry> load(
+    Song song,
+    KugouProvider kugouProvider, {
+    bool force = false,
+  }) {
+    if (!force) {
+      final cached = get(song.id);
+      if (cached != null) {
+        return Future<YtCachedLyricsEntry>.value(cached);
+      }
+      final pending = _inflight[song.id];
+      if (pending != null) return pending;
+    } else {
+      invalidate(song.id);
+    }
+
+    final future = _fetchAndParse(song, kugouProvider).whenComplete(() {
+      _inflight.remove(song.id);
+    });
+    _inflight[song.id] = future;
+    return future;
+  }
+
+  static Future<void> prewarm(Song song, KugouProvider kugouProvider) async {
+    if (get(song.id) != null || _inflight.containsKey(song.id)) return;
+    try {
+      await load(song, kugouProvider);
+    } catch (_) {}
+  }
+
+  static Future<YtCachedLyricsEntry> _fetchAndParse(
+    Song song,
+    KugouProvider kugouProvider,
+  ) async {
+    String lyricText = '';
+    String? translationText;
+    String? romaText;
+
+    if (!song.isOnline) {
+      final localPath = song.localPath;
+      if (localPath != null && localPath.isNotEmpty) {
+        final embedded = await LocalLyricLoader.loadForAudioAsync(localPath);
+        if (embedded != null && embedded.isNotEmpty) {
+          lyricText = embedded;
+        }
+      }
+    }
+
+    if (lyricText.isEmpty) {
+      try {
+        await SongMatchRepository().ensureLoaded();
+        final matchInfo = !song.isOnline
+            ? SongMatchRepository().get(song.id)
+            : null;
+        final matchedHash = (matchInfo != null && matchInfo.isMatched)
+            ? matchInfo.hash
+            : null;
+        final lyricHash = matchedHash ?? (!song.isOnline ? '' : song.id);
+        final searchName = song.artist != '未知艺术家'
+            ? '${song.displayName} ${song.artist}'
+            : song.displayName;
+        final lyric = await kugouProvider.getLyric(
+          lyricHash,
+          songName: searchName,
+        );
+        lyricText =
+            lyric?.displayKrcLyric ??
+            lyric?.displayLrcLyric ??
+            lyric?.displayLyric ??
+            '';
+        translationText = lyric?.translatedContent;
+        romaText = lyric?.romaContent;
+      } catch (_) {}
+    }
+
+    if (lyricText.isEmpty) {
+      return const YtCachedLyricsEntry(parsedLines: [], rawLyricText: '');
+    }
+
+    final parsed = _normalizeCompoundWords(
+      LyricParserChain.parse(
+        lyricText,
+        translationText: translationText,
+        romaText: romaText,
+      ),
+    );
+    final entry = YtCachedLyricsEntry(
+      parsedLines: parsed,
+      rawLyricText: lyricText,
+    );
+    _put(song.id, entry);
+    return entry;
+  }
+
+  static final RegExp _krcPrefixRe = RegExp(r'^\[\d+,\d+\]');
+  static final RegExp _krcWordTagRe = RegExp(r'<[^>]*>');
+  static final RegExp _lrcTimeRe = RegExp(r'^\[\d{2}:\d{2}(?:\.\d{2,3})?\]');
+  static final RegExp _metaTagRe = RegExp(r'^\[[A-Za-z][A-Za-z0-9]*:.*\]$');
+  static final RegExp _creditPairRe = RegExp(
+    r'^(作词|作曲|编曲|制作人|监制|词|曲|编|混音|母带|录音|人声录音|人声编辑|和声|和音|配唱|吉他|贝斯|鼓|键盘|弦乐|弦乐编写|制作|统筹|企划|出品|发行|唱片|OP|SP|Lyrics\s+by|Composed\s+by|Produced\s+by|Written\s+by|Arranged\s+by|Mixed\s+by|Mastered\s+by|Recorded\s+by)\s*[：:]\s*(.+)$',
+    caseSensitive: false,
+  );
+
+  /// 从原始歌词头部提取制作名单（作词/作曲/编曲/制作人等），用于歌曲百科卡片展示。
+  static List<({String role, String value})> extractCredits(
+    String rawLyricText,
+  ) {
+    if (rawLyricText.isEmpty) return const [];
+    final results = <({String role, String value})>[];
+    final seen = <String>{};
+    final lines = rawLyricText.split(RegExp(r'\r?\n'));
+    final scanLimit = math.min(lines.length, 40);
+    for (int i = 0; i < scanLimit; i++) {
+      var clean = lines[i].trim();
+      if (clean.isEmpty) continue;
+      if (_metaTagRe.hasMatch(clean)) continue;
+      clean = clean
+          .replaceFirst(_krcPrefixRe, '')
+          .replaceAll(_krcWordTagRe, '')
+          .replaceFirst(_lrcTimeRe, '')
+          .trim();
+      if (clean.isEmpty) continue;
+      final m = _creditPairRe.firstMatch(clean);
+      if (m == null) {
+        if (results.isNotEmpty && i > 18) break;
+        continue;
+      }
+      final rawRole = m.group(1)!.trim();
+      final val = m.group(2)!.trim();
+      if (val.isEmpty) continue;
+      final role = _normalizeRole(rawRole);
+      final key = '$role:$val';
+      if (seen.add(key)) {
+        results.add((role: role, value: val));
+      }
+    }
+    return results;
+  }
+
+  static String _normalizeRole(String raw) {
+    final lower = raw.toLowerCase();
+    return switch (lower) {
+      '词' || 'lyrics by' => '作词',
+      '曲' || 'composed by' => '作曲',
+      '编' || 'arranged by' => '编曲',
+      'produced by' => '制作人',
+      'mixed by' => '混音',
+      'mastered by' => '母带',
+      'recorded by' => '录音',
+      'written by' => '词曲',
+      'op' => 'OP',
+      'sp' => 'SP',
+      _ => raw,
+    };
+  }
+}
+
 /// YouTube Music 风格的内联歌词抽屉（配合悬浮封面缩放与跟手滑动）
 class YtLyricsDrawer extends StatefulWidget {
   final Animation<double> expansion;
@@ -56,6 +364,35 @@ class YtLyricsDrawer extends StatefulWidget {
 class _YtLyricsDrawerState extends State<YtLyricsDrawer> {
   Widget? _cachedContent;
   String? _cachedSongId;
+  Widget? _cachedMiniBar;
+  String? _cachedMiniKey;
+  late Animation<double> _miniFadeAnim;
+  late Animation<double> _sheetFadeAnim;
+
+  @override
+  void initState() {
+    super.initState();
+    _initFadeAnims();
+  }
+
+  @override
+  void didUpdateWidget(covariant YtLyricsDrawer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.expansion != widget.expansion) {
+      _initFadeAnims();
+    }
+  }
+
+  void _initFadeAnims() {
+    _miniFadeAnim = YtDrawerFadeAnimation(
+      parent: widget.expansion,
+      compute: () => (widget.expansion.value - 0.25) / 0.75,
+    );
+    _sheetFadeAnim = YtDrawerFadeAnimation(
+      parent: widget.expansion,
+      compute: () => widget.expansion.value * 1.4,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -84,8 +421,22 @@ class _YtLyricsDrawerState extends State<YtLyricsDrawer> {
             ),
           );
         }
-        final miniBarOpacity = ((t - 0.25) / 0.75).clamp(0.0, 1.0);
-        final sheetOpacity = (t * 1.4).clamp(0.0, 1.0);
+        final miniKey =
+            '${widget.song.id}_${widget.song.artworkUri}_${widget.isVideoMode}_${identityHashCode(widget.videoController)}';
+        if (_cachedMiniBar == null || _cachedMiniKey != miniKey) {
+          _cachedMiniKey = miniKey;
+          _cachedMiniBar = RepaintBoundary(
+            child: YtMiniBar(
+              song: widget.song,
+              onTap: widget.onClose,
+              showCover: false,
+              hideCoverSlot: widget.isVideoMode,
+              videoController: widget.videoController,
+              onVerticalDragUpdate: widget.onVerticalDragUpdate,
+              onVerticalDragEnd: widget.onVerticalDragEnd,
+            ),
+          );
+        }
 
         return IgnorePointer(
           ignoring: t < 0.05,
@@ -96,25 +447,17 @@ class _YtLyricsDrawerState extends State<YtLyricsDrawer> {
               children: [
                 SizedBox(
                   height: 56,
-                  child: Opacity(
-                    opacity: miniBarOpacity,
+                  child: FadeTransition(
+                    opacity: _miniFadeAnim,
                     child: Transform.translate(
                       offset: Offset(0, -10.0 * (1.0 - t)),
-                      child: YtMiniBar(
-                        song: widget.song,
-                        onTap: widget.onClose,
-                        showCover: false,
-                        hideCoverSlot: widget.isVideoMode,
-                        videoController: widget.videoController,
-                        onVerticalDragUpdate: widget.onVerticalDragUpdate,
-                        onVerticalDragEnd: widget.onVerticalDragEnd,
-                      ),
+                      child: _cachedMiniBar,
                     ),
                   ),
                 ),
                 Expanded(
-                  child: Opacity(
-                    opacity: sheetOpacity,
+                  child: FadeTransition(
+                    opacity: _sheetFadeAnim,
                     child: Transform.translate(
                       offset: Offset(0, (1.0 - t) * drawerSlideDistance),
                       child: _cachedContent,
@@ -328,7 +671,14 @@ class _YtLyricsDrawerContentState extends State<YtLyricsDrawerContent> {
   @override
   void initState() {
     super.initState();
-    _loadLyricsFor(widget.song);
+    final cached = YtLyricsCache.get(widget.song.id);
+    if (cached != null) {
+      _loadedSongId = widget.song.id;
+      _loading = false;
+      _parsedLines = cached.parsedLines;
+    } else {
+      _loadLyricsFor(widget.song, notify: false);
+    }
   }
 
   @override
@@ -339,151 +689,58 @@ class _YtLyricsDrawerContentState extends State<YtLyricsDrawerContent> {
     }
   }
 
-  Future<void> _loadLyricsFor(Song song, {bool force = false}) async {
+  Future<void> _loadLyricsFor(
+    Song song, {
+    bool force = false,
+    bool notify = true,
+  }) async {
     if (!force && _loadedSongId == song.id) return;
     _loadedSongId = song.id;
 
-    setState(() {
-      _loading = true;
-      _parsedLines = const [];
-    });
-
-    String lyricText = '';
-    String? translationText;
-    String? romaText;
-
-    if (!song.isOnline) {
-      final localPath = song.localPath;
-      if (localPath != null && localPath.isNotEmpty) {
-        final embedded = await LocalLyricLoader.loadForAudioAsync(localPath);
-        if (embedded != null && embedded.isNotEmpty) {
-          lyricText = embedded;
-        }
-      }
-    }
-
-    if (lyricText.isEmpty) {
-      try {
-        await SongMatchRepository().ensureLoaded();
-        if (!mounted) return;
-        final matchInfo = !song.isOnline
-            ? SongMatchRepository().get(song.id)
-            : null;
-        final kugouProvider = context.read<KugouProvider>();
-        final matchedHash = (matchInfo != null && matchInfo.isMatched)
-            ? matchInfo.hash
-            : null;
-        final lyricHash = matchedHash ?? (!song.isOnline ? '' : song.id);
-        final searchName = song.artist != '未知艺术家'
-            ? '${song.displayName} ${song.artist}'
-            : song.displayName;
-        final lyric = await kugouProvider.getLyric(
-          lyricHash,
-          songName: searchName,
-        );
-        lyricText =
-            lyric?.displayKrcLyric ??
-            lyric?.displayLrcLyric ??
-            lyric?.displayLyric ??
-            '';
-        translationText = lyric?.translatedContent;
-        romaText = lyric?.romaContent;
-      } catch (_) {}
-    }
-
-    if (!mounted || _loadedSongId != song.id) return;
-
-    if (lyricText.isNotEmpty) {
-      final parsed = _normalizeCompoundWords(
-        LyricParserChain.parse(
-          lyricText,
-          translationText: translationText,
-          romaText: romaText,
-        ),
-      );
-      setState(() {
-        _loading = false;
-        _parsedLines = parsed;
-      });
-    } else {
-      setState(() {
-        _loading = false;
-        _parsedLines = const [];
-      });
-    }
-  }
-
-  /// 拆分 KRC 中将整句或多歌手名（含内部空格或 `/`、`\`）打包为单个 [LyricWord] 的复合词，
-  /// 避免单词超宽无法换行或行高预留不足导致重叠。
-  static List<LyricLine> _normalizeCompoundWords(List<LyricLine> lines) {
-    List<LyricLine>? out;
-    for (int i = 0; i < lines.length; i++) {
-      final line = lines[i];
-      if (line.words.isEmpty) continue;
-      bool needsSplit = false;
-      for (final w in line.words) {
-        final trimmed = w.text.trim();
-        if (trimmed.length >= 4 &&
-            (trimmed.contains(' ') ||
-                trimmed.contains('/') ||
-                trimmed.contains('\\'))) {
-          needsSplit = true;
-          break;
-        }
-      }
-      if (!needsSplit) continue;
-
-      final newWords = <LyricWord>[];
-      for (final w in line.words) {
-        final trimmed = w.text.trim();
-        if (trimmed.length < 4 ||
-            (!trimmed.contains(' ') &&
-                !trimmed.contains('/') &&
-                !trimmed.contains('\\'))) {
-          newWords.add(w);
-          continue;
-        }
-        final rawUnits = segmentLyricUnits(
-          w.text.replaceAll('/', '/ ').replaceAll('\\', '\\ '),
-        );
-        final mergedUnits = <String>[];
-        for (final u in rawUnits) {
-          final restored = u.replaceAll('/ ', '/').replaceAll('\\ ', '\\');
-          if (restored.trim().isEmpty && mergedUnits.isNotEmpty) {
-            mergedUnits[mergedUnits.length - 1] = mergedUnits.last + restored;
-          } else if (restored.isNotEmpty) {
-            mergedUnits.add(restored);
+    if (!force) {
+      final cached = YtLyricsCache.get(song.id);
+      if (cached != null) {
+        if (mounted) {
+          if (notify) {
+            setState(() {
+              _loading = false;
+              _parsedLines = cached.parsedLines;
+            });
+          } else {
+            _loading = false;
+            _parsedLines = cached.parsedLines;
           }
         }
-        if (mergedUnits.length <= 1) {
-          newWords.add(w);
-          continue;
-        }
-        final totalLen = w.text.length;
-        int offsetChars = 0;
-        for (int idx = 0; idx < mergedUnits.length; idx++) {
-          final piece = mergedUnits[idx];
-          final startRatio = offsetChars / totalLen;
-          final endRatio = (offsetChars + piece.length) / totalLen;
-          final pieceStart = w.startTime + (w.duration * startRatio).round();
-          final pieceEnd = idx == mergedUnits.length - 1
-              ? w.startTime + w.duration
-              : w.startTime + (w.duration * endRatio).round();
-          newWords.add(
-            LyricWord(
-              startTime: pieceStart,
-              duration: (pieceEnd - pieceStart).clamp(0, w.duration),
-              text: piece,
-            ),
-          );
-          offsetChars += piece.length;
-        }
+        return;
       }
-      out ??= List<LyricLine>.of(lines);
-      out[i] = line.copyWith(words: newWords);
     }
-    return out ?? lines;
+
+    if (mounted) {
+      if (notify) {
+        setState(() {
+          _loading = true;
+          _parsedLines = const [];
+        });
+      } else {
+        _loading = true;
+        _parsedLines = const [];
+      }
+    }
+
+    final kugouProvider = context.read<KugouProvider>();
+    final entry = await YtLyricsCache.load(
+      song,
+      kugouProvider,
+      force: force,
+    );
+    if (!mounted || _loadedSongId != song.id) return;
+
+    setState(() {
+      _loading = false;
+      _parsedLines = entry.parsedLines;
+    });
   }
+
 
   bool get _hasTranslation {
     return _parsedLines.any(
@@ -734,7 +991,7 @@ class _YtLyricsDrawerContentState extends State<YtLyricsDrawerContent> {
   }
 }
 
-/// 精致重绘的「罗马音（あa）」矢量图标，笔触粗细与左侧 `Icons.translate_rounded`（文A）1:1 对仗
+/// 清晰高锐度的「罗马音（あa）」图标，使用原生字形光栅化渲染以对齐 `Icons.translate_rounded`
 class _RomanizationGlyphIcon extends StatelessWidget {
   final Color color;
   final double size;
@@ -758,45 +1015,43 @@ class _RomanizationGlyphPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final s = size.width / 24.0;
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.85 * s
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
+    final kanaPainter = TextPainter(
+      text: TextSpan(
+        text: 'あ',
+        style: TextStyle(
+          color: color,
+          fontSize: size.width * 0.56,
+          fontWeight: FontWeight.w700,
+          height: 1.0,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
 
-    // 1. 左上角：日文假名「あ」的精炼几何特征（上横 + 微弯中轴 + 回环弧线）
-    final hLine = Path()
-      ..moveTo(3.2 * s, 5.5 * s)
-      ..quadraticBezierTo(7.5 * s, 5.2 * s, 11.4 * s, 5.0 * s);
-    canvas.drawPath(hLine, paint);
+    final latinPainter = TextPainter(
+      text: TextSpan(
+        text: 'a',
+        style: TextStyle(
+          color: color,
+          fontSize: size.width * 0.58,
+          fontWeight: FontWeight.w800,
+          height: 1.0,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
 
-    final vStem = Path()
-      ..moveTo(7.3 * s, 2.8 * s)
-      ..quadraticBezierTo(6.9 * s, 8.2 * s, 7.6 * s, 13.8 * s);
-    canvas.drawPath(vStem, paint);
-
-    final kanaLoop = Path()
-      ..moveTo(10.5 * s, 7.6 * s)
-      ..cubicTo(9.0 * s, 12.2 * s, 4.2 * s, 14.2 * s, 3.3 * s, 11.4 * s)
-      ..cubicTo(2.6 * s, 9.1 * s, 6.2 * s, 7.3 * s, 9.8 * s, 8.3 * s)
-      ..cubicTo(12.2 * s, 9.0 * s, 12.5 * s, 12.1 * s, 10.2 * s, 13.8 * s);
-    canvas.drawPath(kanaLoop, paint);
-
-    // 2. 右下角：精致小写拉丁字母「a」（圆腹 + 顶部微挑弧 + 右侧收笔竖钩）
-    final latinTop = Path()
-      ..moveTo(14.2 * s, 13.6 * s)
-      ..cubicTo(15.2 * s, 12.0 * s, 19.6 * s, 11.9 * s, 19.8 * s, 14.8 * s)
-      ..lineTo(19.8 * s, 19.6 * s)
-      ..quadraticBezierTo(19.8 * s, 20.8 * s, 21.0 * s, 20.8 * s);
-    canvas.drawPath(latinTop, paint);
-
-    final latinBowl = Path()
-      ..moveTo(19.7 * s, 16.2 * s)
-      ..cubicTo(16.2 * s, 15.8 * s, 13.4 * s, 16.9 * s, 13.6 * s, 19.1 * s)
-      ..cubicTo(13.8 * s, 21.1 * s, 17.8 * s, 21.2 * s, 19.7 * s, 19.2 * s);
-    canvas.drawPath(latinBowl, paint);
+    kanaPainter.paint(
+      canvas,
+      Offset(size.width * 0.02, size.height * 0.02),
+    );
+    latinPainter.paint(
+      canvas,
+      Offset(
+        size.width - latinPainter.width - size.width * 0.04,
+        size.height - latinPainter.height - size.height * 0.02,
+      ),
+    );
   }
 
   @override
@@ -842,6 +1097,37 @@ class _YtQueueDrawerState extends State<YtQueueDrawer> {
   bool _sortAscending = true;
   final List<String> _originalQueueIds = <String>[];
   final GlobalKey _sortAnchorKey = GlobalKey();
+  Widget? _cachedMiniBar;
+  String? _cachedMiniKey;
+  Widget? _cachedSheet;
+  String? _cachedSheetKey;
+  late Animation<double> _miniFadeAnim;
+  late Animation<double> _sheetFadeAnim;
+
+  @override
+  void initState() {
+    super.initState();
+    _initFadeAnims();
+  }
+
+  @override
+  void didUpdateWidget(covariant YtQueueDrawer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.expansion != widget.expansion) {
+      _initFadeAnims();
+    }
+  }
+
+  void _initFadeAnims() {
+    _miniFadeAnim = YtDrawerFadeAnimation(
+      parent: widget.expansion,
+      compute: () => (widget.expansion.value - 0.25) / 0.75,
+    );
+    _sheetFadeAnim = YtDrawerFadeAnimation(
+      parent: widget.expansion,
+      compute: () => widget.expansion.value * 1.4,
+    );
+  }
 
   void _syncOriginalQueueSnapshot(List<Song> currentPlaylist) {
     if (currentPlaylist.isEmpty) {
@@ -1209,8 +1495,30 @@ class _YtQueueDrawerState extends State<YtQueueDrawer> {
         if (t <= 0.001) {
           return const SizedBox.shrink();
         }
-        final miniBarOpacity = ((t - 0.25) / 0.75).clamp(0.0, 1.0);
-        final sheetOpacity = (t * 1.4).clamp(0.0, 1.0);
+        final miniKey =
+            '${widget.song.id}_${widget.song.artworkUri}_${widget.isVideoMode}_${identityHashCode(widget.videoController)}';
+        if (_cachedMiniBar == null || _cachedMiniKey != miniKey) {
+          _cachedMiniKey = miniKey;
+          _cachedMiniBar = RepaintBoundary(
+            child: YtMiniBar(
+              song: widget.song,
+              onTap: widget.onClose,
+              showCover: false,
+              hideCoverSlot: widget.isVideoMode,
+              videoController: widget.videoController,
+              onVerticalDragUpdate: widget.onVerticalDragUpdate,
+              onVerticalDragEnd: widget.onVerticalDragEnd,
+            ),
+          );
+        }
+        final sheetKey =
+            '${widget.song.id}_${widget.song.album}_${safeBottom.toStringAsFixed(1)}';
+        if (_cachedSheet == null || _cachedSheetKey != sheetKey) {
+          _cachedSheetKey = sheetKey;
+          _cachedSheet = RepaintBoundary(
+            child: _buildSheetContent(context, safeBottom),
+          );
+        }
 
         return IgnorePointer(
           ignoring: t < 0.05,
@@ -1221,30 +1529,20 @@ class _YtQueueDrawerState extends State<YtQueueDrawer> {
               children: [
                 SizedBox(
                   height: 56,
-                  child: Opacity(
-                    opacity: miniBarOpacity,
+                  child: FadeTransition(
+                    opacity: _miniFadeAnim,
                     child: Transform.translate(
                       offset: Offset(0, -10.0 * (1.0 - t)),
-                      child: YtMiniBar(
-                        song: widget.song,
-                        onTap: widget.onClose,
-                        showCover: false,
-                        hideCoverSlot: widget.isVideoMode,
-                        videoController: widget.videoController,
-                        onVerticalDragUpdate: widget.onVerticalDragUpdate,
-                        onVerticalDragEnd: widget.onVerticalDragEnd,
-                      ),
+                      child: _cachedMiniBar,
                     ),
                   ),
                 ),
                 Expanded(
-                  child: Opacity(
-                    opacity: sheetOpacity,
+                  child: FadeTransition(
+                    opacity: _sheetFadeAnim,
                     child: Transform.translate(
                       offset: Offset(0, (1.0 - t) * drawerSlideDistance),
-                      child: RepaintBoundary(
-                        child: _buildSheetContent(context, safeBottom),
-                      ),
+                      child: _cachedSheet,
                     ),
                   ),
                 ),
@@ -1553,6 +1851,37 @@ class _YtCommentsDrawerState extends State<YtCommentsDrawer> {
   double? _pointerStartY;
   bool _capturingPullDown = false;
   double _lastStepDy = 0.0;
+  Widget? _cachedMiniBar;
+  String? _cachedMiniKey;
+  Widget? _cachedSheet;
+  String? _cachedSheetKey;
+  late Animation<double> _miniFadeAnim;
+  late Animation<double> _sheetFadeAnim;
+
+  @override
+  void initState() {
+    super.initState();
+    _initFadeAnims();
+  }
+
+  @override
+  void didUpdateWidget(covariant YtCommentsDrawer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.expansion != widget.expansion) {
+      _initFadeAnims();
+    }
+  }
+
+  void _initFadeAnims() {
+    _miniFadeAnim = YtDrawerFadeAnimation(
+      parent: widget.expansion,
+      compute: () => (widget.expansion.value - 0.25) / 0.75,
+    );
+    _sheetFadeAnim = YtDrawerFadeAnimation(
+      parent: widget.expansion,
+      compute: () => widget.expansion.value * 1.4,
+    );
+  }
 
   @override
   void dispose() {
@@ -1577,8 +1906,30 @@ class _YtCommentsDrawerState extends State<YtCommentsDrawer> {
         if (t <= 0.001) {
           return const SizedBox.shrink();
         }
-        final miniBarOpacity = ((t - 0.25) / 0.75).clamp(0.0, 1.0);
-        final sheetOpacity = (t * 1.4).clamp(0.0, 1.0);
+        final miniKey =
+            '${widget.song.id}_${widget.song.artworkUri}_${widget.isVideoMode}_${identityHashCode(widget.videoController)}';
+        if (_cachedMiniBar == null || _cachedMiniKey != miniKey) {
+          _cachedMiniKey = miniKey;
+          _cachedMiniBar = RepaintBoundary(
+            child: YtMiniBar(
+              song: widget.song,
+              onTap: widget.onClose,
+              showCover: false,
+              hideCoverSlot: widget.isVideoMode,
+              videoController: widget.videoController,
+              onVerticalDragUpdate: widget.onVerticalDragUpdate,
+              onVerticalDragEnd: widget.onVerticalDragEnd,
+            ),
+          );
+        }
+        final sheetKey =
+            '${widget.song.id}_${widget.song.albumAudioId}_${widget.song.artworkUri}_${safeBottom.toStringAsFixed(1)}';
+        if (_cachedSheet == null || _cachedSheetKey != sheetKey) {
+          _cachedSheetKey = sheetKey;
+          _cachedSheet = RepaintBoundary(
+            child: _buildSheetContent(context, safeBottom),
+          );
+        }
 
         return IgnorePointer(
           ignoring: t < 0.05,
@@ -1589,30 +1940,20 @@ class _YtCommentsDrawerState extends State<YtCommentsDrawer> {
               children: [
                 SizedBox(
                   height: 56,
-                  child: Opacity(
-                    opacity: miniBarOpacity,
+                  child: FadeTransition(
+                    opacity: _miniFadeAnim,
                     child: Transform.translate(
                       offset: Offset(0, -10.0 * (1.0 - t)),
-                      child: YtMiniBar(
-                        song: widget.song,
-                        onTap: widget.onClose,
-                        showCover: false,
-                        hideCoverSlot: widget.isVideoMode,
-                        videoController: widget.videoController,
-                        onVerticalDragUpdate: widget.onVerticalDragUpdate,
-                        onVerticalDragEnd: widget.onVerticalDragEnd,
-                      ),
+                      child: _cachedMiniBar,
                     ),
                   ),
                 ),
                 Expanded(
-                  child: Opacity(
-                    opacity: sheetOpacity,
+                  child: FadeTransition(
+                    opacity: _sheetFadeAnim,
                     child: Transform.translate(
                       offset: Offset(0, (1.0 - t) * drawerSlideDistance),
-                      child: RepaintBoundary(
-                        child: _buildSheetContent(context, safeBottom),
-                      ),
+                      child: _cachedSheet,
                     ),
                   ),
                 ),
