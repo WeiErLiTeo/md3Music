@@ -3892,6 +3892,8 @@ class _SettingsPageState extends State<SettingsPage>
           ),
           child: _buildStyleCards(colorScheme),
         ),
+        if (context.watch<ThemeProvider>().playerStyle == PlayerStyle.ytMusic)
+          const YtPlayerBackgroundSettingsCard(),
         // tv: 两张风格卡是 GestureDetector 手写卡片，不自带焦点停点，遥控器
         // 落不上去（真机反馈「这里遥控器点不到」）。TV 构建在卡片下方补一个
         // 普通开关作为唯一可达入口：关 = MD3Music、开 = Apple Music。
@@ -4653,12 +4655,21 @@ class _SettingsPageState extends State<SettingsPage>
         Builder(
           builder: (context) {
             final theme = context.watch<ThemeProvider>();
-            return PlayerBackgroundPreview(
-              photoEnabled: theme.useArtistPhotoBackground,
-              photoIntervalSeconds: theme.artistPhotoInterval,
-              photoMaskOpacity: theme.artistPhotoOpacity,
-              blurSigma: _amPlayerBlur,
-              flowingEnabled: _useFlowingBackground,
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (theme.playerStyle == PlayerStyle.ytMusic) ...[
+                  const YtPlayerBackgroundSettingsCard(),
+                  const Gap(AppSpacing.sm),
+                ],
+                PlayerBackgroundPreview(
+                  photoEnabled: theme.useArtistPhotoBackground,
+                  photoIntervalSeconds: theme.artistPhotoInterval,
+                  photoMaskOpacity: theme.artistPhotoOpacity,
+                  blurSigma: _amPlayerBlur,
+                  flowingEnabled: _useFlowingBackground,
+                ),
+              ],
             );
           },
         ),

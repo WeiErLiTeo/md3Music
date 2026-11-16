@@ -27,6 +27,7 @@ import '../../../widgets/player_playlist_view.dart';
 import '../../library/song_match_sheet.dart';
 import '../comments_view.dart';
 import '../widgets/play_pause_morph_icon.dart';
+import 'yt_background.dart';
 
 /// 拆分 KRC 中将整句或多歌手名（含内部空格或 `/`、`\`）打包为单个 [LyricWord] 的复合词，
 /// 避免单词超宽无法换行或行高预留不足导致重叠。
@@ -768,44 +769,33 @@ class _YtLyricsDrawerContentState extends State<YtLyricsDrawerContent> {
       });
     }
 
-    return ClipRRect(
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-      child: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              Colors.black.withValues(alpha: 0.28),
-              Colors.black.withValues(alpha: 0.54),
-            ],
-          ),
+    return ListenableBuilder(
+      listenable: YtPaletteTheme.instance,
+      builder: (context, _) {
+        return ClipRRect(
           borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-          border: Border(
-            top: BorderSide(
-              color: Colors.white.withValues(alpha: 0.10),
-              width: 0.5,
+          child: Container(
+            decoration: YtPaletteTheme.drawerDecoration(),
+            child: Column(
+              children: [
+                _buildHandleBar(context, currentSong),
+                Expanded(
+                  child: _loading
+                      ? const Center(
+                          child: CircularProgressIndicator(
+                            color: Colors.white70,
+                            strokeWidth: 2,
+                          ),
+                        )
+                      : _parsedLines.isEmpty
+                      ? _buildEmptyState(context, currentSong)
+                      : _buildLyricsView(context),
+                ),
+              ],
             ),
           ),
-        ),
-        child: Column(
-          children: [
-            _buildHandleBar(context, currentSong),
-            Expanded(
-              child: _loading
-                  ? const Center(
-                      child: CircularProgressIndicator(
-                        color: Colors.white70,
-                        strokeWidth: 2,
-                      ),
-                    )
-                  : _parsedLines.isEmpty
-                  ? _buildEmptyState(context, currentSong)
-                  : _buildLyricsView(context),
-            ),
-          ],
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -1563,27 +1553,14 @@ class _YtQueueDrawerState extends State<YtQueueDrawer> {
         ? currentSong.album
         : currentSong.displayName;
 
-    return ClipRRect(
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-      child: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              Colors.black.withValues(alpha: 0.34),
-              Colors.black.withValues(alpha: 0.62),
-            ],
-          ),
+    return ListenableBuilder(
+      listenable: YtPaletteTheme.instance,
+      builder: (context, _) {
+        return ClipRRect(
           borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-          border: Border(
-            top: BorderSide(
-              color: Colors.white.withValues(alpha: 0.10),
-              width: 0.5,
-            ),
-          ),
-        ),
-        child: Column(
+          child: Container(
+            decoration: YtPaletteTheme.drawerDecoration(),
+            child: Column(
           children: [
             // 顶部把手与「播放的音乐来自 + 保存」头部
             GestureDetector(
@@ -1782,6 +1759,8 @@ class _YtQueueDrawerState extends State<YtQueueDrawer> {
         ),
       ),
     );
+      },
+    );
   }
 }
 
@@ -1975,27 +1954,14 @@ class _YtCommentsDrawerState extends State<YtCommentsDrawer> {
   Widget _buildSheetContent(BuildContext context, double safeBottom) {
     final currentSong = widget.song;
 
-    return ClipRRect(
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-      child: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              Colors.black.withValues(alpha: 0.34),
-              Colors.black.withValues(alpha: 0.64),
-            ],
-          ),
+    return ListenableBuilder(
+      listenable: YtPaletteTheme.instance,
+      builder: (context, _) {
+        return ClipRRect(
           borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-          border: Border(
-            top: BorderSide(
-              color: Colors.white.withValues(alpha: 0.10),
-              width: 0.5,
-            ),
-          ),
-        ),
-        child: Column(
+          child: Container(
+            decoration: YtPaletteTheme.drawerDecoration(),
+            child: Column(
           children: [
             GestureDetector(
               behavior: HitTestBehavior.opaque,
@@ -2130,6 +2096,8 @@ class _YtCommentsDrawerState extends State<YtCommentsDrawer> {
           ],
         ),
       ),
+    );
+      },
     );
   }
 }

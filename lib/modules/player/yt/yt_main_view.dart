@@ -883,7 +883,6 @@ class _YtMainViewState extends State<YtMainView>
 
   Future<void> _toggleDefaultCollection(Song resolvedSong) async {
     if (_togglingDefaultStar) return;
-    AppHaptics.lightImpact(HapticCategory.control);
     final api = KugouApiClient();
     if (!api.isLoggedIn) {
       showToast('请先登录酷狗账号以使用默认收藏歌单');
@@ -2058,7 +2057,7 @@ class _YtMainViewState extends State<YtMainView>
               color: Colors.white.withValues(alpha: 0.22),
               borderRadius: BorderRadius.circular(22),
               border: Border.all(
-                color: const Color(0xFFFFD54F).withValues(alpha: 0.45),
+                color: Colors.white.withValues(alpha: 0.38),
                 width: 0.8,
               ),
             ),
@@ -2068,7 +2067,7 @@ class _YtMainViewState extends State<YtMainView>
                 const Icon(
                   Icons.timer_rounded,
                   size: 19,
-                  color: Color(0xFFFFD54F),
+                  color: Colors.white,
                 ),
                 const SizedBox(width: 6),
                 Text(
@@ -2088,7 +2087,7 @@ class _YtMainViewState extends State<YtMainView>
     );
   }
 
-  /// 合体双联胶囊：`[ ♥ 喜欢 | ⭐ 收藏 ]`
+  /// 合体双联胶囊：`[ ♥ 喜欢 | ⭐ 收藏 ]`（纯白高亮 + 极简白光微粒扩散动效，无震动）
   Widget _buildLikeAndCollectSplitPill({
     required BuildContext context,
     required Song song,
@@ -2105,7 +2104,6 @@ class _YtMainViewState extends State<YtMainView>
         children: [
           InkWell(
             onTap: () {
-              AppHaptics.lightImpact(HapticCategory.control);
               if (isOnline) {
                 context.read<FavoritesProvider>().toggleFavorite(song);
               } else {
@@ -2120,18 +2118,22 @@ class _YtMainViewState extends State<YtMainView>
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(
-                    isFavorited ? Icons.favorite : Icons.favorite_border,
+                  _YtMinimalBurstIcon(
+                    songKey: song.id,
+                    active: isFavorited,
+                    activeIcon: Icons.favorite_rounded,
+                    inactiveIcon: Icons.favorite_border_rounded,
                     size: 19.5,
-                    color: isFavorited ? Colors.redAccent : Colors.white,
                   ),
                   const SizedBox(width: 6),
-                  const Text(
+                  Text(
                     '喜欢',
                     style: TextStyle(
                       color: Colors.white,
                       fontSize: 13.5,
-                      fontWeight: FontWeight.w500,
+                      fontWeight: isFavorited
+                          ? FontWeight.w700
+                          : FontWeight.w500,
                     ),
                   ),
                 ],
@@ -2153,22 +2155,22 @@ class _YtMainViewState extends State<YtMainView>
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(
-                    _defaultStarred
-                        ? Icons.star_rounded
-                        : Icons.star_border_rounded,
+                  _YtMinimalBurstIcon(
+                    songKey: song.id,
+                    active: _defaultStarred,
+                    activeIcon: Icons.star_rounded,
+                    inactiveIcon: Icons.star_border_rounded,
                     size: 20.5,
-                    color: _defaultStarred
-                        ? const Color(0xFFFFD54F)
-                        : Colors.white,
                   ),
                   const SizedBox(width: 5),
-                  const Text(
+                  Text(
                     '收藏',
                     style: TextStyle(
                       color: Colors.white,
                       fontSize: 13.5,
-                      fontWeight: FontWeight.w500,
+                      fontWeight: _defaultStarred
+                          ? FontWeight.w700
+                          : FontWeight.w500,
                     ),
                   ),
                 ],
@@ -2703,3 +2705,153 @@ class _YtMainViewState extends State<YtMainView>
     );
   }
 }
+
+/// 极简纯白微粒 + 细光环扩散回弹图标组件（用于 YT Music 播放页「喜欢 / 收藏」激活态，克制干净不俗气）
+class _YtMinimalBurstIcon extends StatefulWidget {
+  final String songKey;
+  final bool active;
+  final IconData activeIcon;
+  final IconData inactiveIcon;
+  final double size;
+
+  const _YtMinimalBurstIcon({
+    required this.songKey,
+    required this.active,
+    required this.activeIcon,
+    required this.inactiveIcon,
+    required this.size,
+  });
+
+  @override
+  State<_YtMinimalBurstIcon> createState() => _YtMinimalBurstIconState();
+}
+
+class _YtMinimalBurstIconState extends State<_YtMinimalBurstIcon>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 440),
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _YtMinimalBurstIcon oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 仅在同一首歌用户点击从「未激活 -> 激活」时触发极简白光微粒动效，切歌时不误触
+    if (oldWidget.songKey == widget.songKey &&
+        !oldWidget.active &&
+        widget.active) {
+      _controller.forward(from: 0.0);
+    } else if (oldWidget.songKey != widget.songKey) {
+      _controller.stop();
+      _controller.value = 0.0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  double _computeScale(double t) {
+    if (t <= 0.0 || t >= 1.0) return 1.0;
+    if (t < 0.22) {
+      // 轻收蓄力 1.0 -> 0.78
+      return 1.0 - (t / 0.22) * 0.22;
+    }
+    if (t < 0.58) {
+      // 清脆弹起 0.78 -> 1.24
+      final p = Curves.easeOutCubic.transform((t - 0.22) / 0.36);
+      return 0.78 + p * 0.46;
+    }
+    // 柔和回落 1.24 -> 1.0
+    final p = Curves.easeInOutCubic.transform((t - 0.58) / 0.42);
+    return 1.24 - p * 0.24;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: widget.size,
+      height: widget.size,
+      child: AnimatedBuilder(
+        animation: _controller,
+        builder: (context, child) {
+          final t = _controller.value;
+          final scale = _computeScale(t);
+          return CustomPaint(
+            painter: t > 0.0 && t < 1.0
+                ? _YtMinimalParticlePainter(progress: t)
+                : null,
+            child: Transform.scale(
+              scale: scale,
+              child: child,
+            ),
+          );
+        },
+        child: Icon(
+          widget.active ? widget.activeIcon : widget.inactiveIcon,
+          size: widget.size,
+          color: Colors.white,
+        ),
+      ),
+    );
+  }
+}
+
+class _YtMinimalParticlePainter extends CustomPainter {
+  final double progress;
+
+  const _YtMinimalParticlePainter({required this.progress});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final ringCurve = Curves.easeOutCubic.transform(progress);
+    final fadeOut = (1.0 - progress).clamp(0.0, 1.0);
+
+    // 1. 极细纯白光环扩散
+    final ringAlpha = (fadeOut * 0.62).clamp(0.0, 1.0);
+    if (ringAlpha > 0.01) {
+      final ringPaint = Paint()
+        ..color = Colors.white.withValues(alpha: ringAlpha)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = (1.4 * (1.0 - ringCurve * 0.65)).clamp(0.4, 1.4);
+      final ringRadius = size.width * (0.34 + ringCurve * 0.58);
+      canvas.drawCircle(center, ringRadius, ringPaint);
+    }
+
+    // 2. 7 颗错落微粒沿径向轻盈散开并消隐
+    const int count = 7;
+    final dotPaint = Paint()..style = PaintingStyle.fill;
+    for (int i = 0; i < count; i++) {
+      final baseAngle = (i * 2 * math.pi / count) - math.pi / 2;
+      final isMajor = i.isEven;
+      final startDist = size.width * 0.36;
+      final endDist = size.width * (isMajor ? 0.96 : 0.78);
+      final dist = startDist + (endDist - startDist) * ringCurve;
+      final dotRadius =
+          (isMajor ? 1.65 : 1.2) * (1.0 - progress * 0.72).clamp(0.15, 1.0);
+      final alpha = (fadeOut * (isMajor ? 0.88 : 0.65)).clamp(0.0, 1.0);
+      if (alpha <= 0.01) continue;
+      dotPaint.color = Colors.white.withValues(alpha: alpha);
+      final offset = Offset(
+        center.dx + math.cos(baseAngle) * dist,
+        center.dy + math.sin(baseAngle) * dist,
+      );
+      canvas.drawCircle(offset, dotRadius, dotPaint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _YtMinimalParticlePainter oldDelegate) {
+    return oldDelegate.progress != progress;
+  }
+}
+

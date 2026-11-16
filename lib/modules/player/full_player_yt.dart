@@ -28,6 +28,8 @@ import 'yt/yt_main_view.dart';
 import 'yt/yt_more_menu.dart';
 import 'yt/yt_song_info_drawer.dart';
 
+export 'yt/yt_background.dart' show YtPlayerBackgroundSettingsCard;
+
 /// YouTube Music 风格的播放页界面
 class FullPlayerYt extends StatefulWidget {
   final bool dockMode;

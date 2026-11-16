@@ -18,13 +18,15 @@ import '../../../services/kugou_api/kugou_models.dart';
 import '../../../widgets/player_artwork_image.dart';
 import '../../album/album_detail_page.dart';
 import '../../library/song_match_sheet.dart';
+import '../../playlist/playlist_page.dart';
 import '../song_info_page.dart';
 import '../song_ranking_sheet.dart';
+import 'yt_background.dart';
 import 'yt_lyrics_drawer.dart';
 import 'yt_more_menu.dart';
 
 /// 1:1 复刻歌词与评论抽屉展开动画的全屏内嵌「相关内容 / 歌曲百科」双 Tab 抽屉
-/// （点击播放页歌名打开：Tab 1 为原版 YT Music 风格「相关内容」，含你可能还喜欢、其他表演、
+/// （点击播放页歌名打开：Tab 1 为原版 YT Music 风格「相关内容」，含你可能还喜欢、推荐的播放列表、
 /// 同类音乐人大圆头像、歌手更多正方形大专辑；Tab 2 为网易云风格「歌曲百科」完整档案）
 class YtSongInfoDrawer extends StatefulWidget {
   final Animation<double> expansion;
@@ -206,7 +208,7 @@ class _YtSongInfoData {
   final List<({String role, String value})> credits;
   final KugouSongRanking? ranking;
   final List<Song> youMayLikeSongs;
-  final List<Song> otherPerformances;
+  final List<KugouPlaylistBrief> recommendedPlaylists;
   final List<_SimilarArtistCardData> similarArtists;
   final String? primaryArtistName;
   final String? primaryArtistAvatar;
@@ -230,7 +232,7 @@ class _YtSongInfoData {
     this.credits = const [],
     this.ranking,
     this.youMayLikeSongs = const [],
-    this.otherPerformances = const [],
+    this.recommendedPlaylists = const [],
     this.similarArtists = const [],
     this.primaryArtistName,
     this.primaryArtistAvatar,
@@ -303,47 +305,6 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
         .first
         .trim();
     return cleaned.isNotEmpty ? cleaned : raw.trim();
-  }
-
-  static String? _detectPerformanceBadge(Song candidate, Song current) {
-    final raw = '${candidate.title} ${candidate.album}'.toLowerCase();
-    if (raw.contains('live') ||
-        raw.contains('现场') ||
-        raw.contains('演唱会') ||
-        raw.contains('音乐节')) {
-      return '现场';
-    }
-    if (raw.contains('cover') ||
-        raw.contains('翻唱') ||
-        raw.contains('女声版') ||
-        raw.contains('男声版') ||
-        raw.contains('粤语版') ||
-        raw.contains('日文版') ||
-        raw.contains('英文版')) {
-      return '翻唱';
-    }
-    if (raw.contains('piano') ||
-        raw.contains('钢琴') ||
-        raw.contains('吉他') ||
-        raw.contains('acoustic') ||
-        raw.contains('不插电') ||
-        raw.contains('纯音乐') ||
-        raw.contains('伴奏') ||
-        raw.contains('inst')) {
-      return '演奏';
-    }
-    if (raw.contains('remix') ||
-        raw.contains('dj') ||
-        raw.contains('混音') ||
-        raw.contains('慢摇') ||
-        raw.contains('降调')) {
-      return '混音';
-    }
-    if (candidate.artist.trim().toLowerCase() !=
-        current.artist.trim().toLowerCase()) {
-      return '翻唱';
-    }
-    return '版本';
   }
 
   Future<void> _loadSongInfo({
@@ -430,7 +391,7 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
         ? splitArtists.first
         : (!isUnknownArtist(song.artist) ? song.artist.trim() : null);
 
-    // 2. 并行拉取：专辑百科、/krm/audio、高潮副歌、榜单成绩、AI 风格推荐 + 相似歌曲、其他表演版本、主歌手专辑
+    // 2. 并行拉取：专辑百科、/krm/audio、高潮副歌、榜单成绩、AI 风格推荐 + 相似歌曲、推荐播放列表、主歌手专辑
     final albumRawFuture = (albumId != null && albumId.isNotEmpty)
         ? _fetchAlbumRaw(api, albumId)
         : Future<Map<String, dynamic>?>.value(null);
@@ -475,7 +436,11 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
               .catchError((_) => const <Song>[])
         : Future<List<Song>>.value(const <Song>[]);
 
-    final otherPerfFuture = _fetchOtherPerformances(api, song);
+    final playlistsFuture = _fetchRecommendedPlaylists(
+      api,
+      song: song,
+      primaryArtistName: primaryArtistName,
+    );
 
     final artistBundleFuture = _fetchPrimaryArtistBundle(
       api,
@@ -490,7 +455,7 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
       rankingFuture,
       aiRecommendFuture,
       relatedFuture,
-      otherPerfFuture,
+      playlistsFuture,
       artistBundleFuture,
     ]);
     if (!mounted || token != _requestToken) return;
@@ -501,7 +466,7 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
     final ranking = allResults[3] as KugouSongRanking?;
     final aiSongs = allResults[4] as List<Song>;
     final relatedSongs = allResults[5] as List<Song>;
-    final otherPerformances = allResults[6] as List<Song>;
+    final recommendedPlaylists = allResults[6] as List<KugouPlaylistBrief>;
     final artistBundle =
         allResults[7]
             as ({String? avatarUrl, List<KugouAlbumBrief> albums});
@@ -621,7 +586,7 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
         credits: credits,
         ranking: ranking,
         youMayLikeSongs: youMayLike,
-        otherPerformances: otherPerformances,
+        recommendedPlaylists: recommendedPlaylists,
         similarArtists: const [],
         primaryArtistName: primaryArtistName,
         primaryArtistAvatar: artistBundle.avatarUrl,
@@ -633,7 +598,7 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
     // 3. 异步解析「同类音乐人」高清圆头像与作品数（基于曲风推荐里的关联音乐人）
     final similarArtists = await _resolveSimilarArtists(
       api,
-      recommendPool: [...youMayLike, ...otherPerformances],
+      recommendPool: youMayLike,
       excludeNames: splitArtists,
     );
     if (!mounted || token != _requestToken || similarArtists.isEmpty) return;
@@ -658,7 +623,7 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
           credits: prev.credits,
           ranking: prev.ranking,
           youMayLikeSongs: prev.youMayLikeSongs,
-          otherPerformances: prev.otherPerformances,
+          recommendedPlaylists: prev.recommendedPlaylists,
           similarArtists: similarArtists,
           primaryArtistName: prev.primaryArtistName,
           primaryArtistAvatar: prev.primaryArtistAvatar,
@@ -668,48 +633,45 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
     });
   }
 
-  Future<List<Song>> _fetchOtherPerformances(
-    KugouApiClient api,
-    Song currentSong,
-  ) async {
-    final baseTitle = _stripSongVersionTitle(currentSong.displayName);
-    if (baseTitle.isEmpty) return const <Song>[];
+  Future<List<KugouPlaylistBrief>> _fetchRecommendedPlaylists(
+    KugouApiClient api, {
+    required Song song,
+    required String? primaryArtistName,
+  }) async {
+    final baseTitle = _stripSongVersionTitle(song.displayName);
+    final queries = <String>[
+      if (primaryArtistName != null && primaryArtistName.isNotEmpty)
+        primaryArtistName,
+      if (baseTitle.isNotEmpty &&
+          baseTitle.toLowerCase() != (primaryArtistName ?? '').toLowerCase())
+        baseTitle,
+    ];
+    if (queries.isEmpty) return const <KugouPlaylistBrief>[];
     try {
-      final res = await api.search(baseTitle, page: 1, pagesize: 24);
-      final songs = res?.songs ?? const <KugouSongDetail>[];
-      if (songs.isEmpty) return const <Song>[];
-      final lowerBase = baseTitle.toLowerCase();
-      final currentHash = currentSong.id.toLowerCase();
-      final seen = <String>{currentHash};
-      final out = <Song>[];
-      for (final d in songs) {
-        final s = d.toSong();
-        final h = s.id.trim().toLowerCase();
-        if (h.isEmpty || seen.contains(h)) continue;
-        final candidateClean = _stripSongVersionTitle(
-          s.displayName,
-        ).toLowerCase();
-        final titleMatches =
-            candidateClean == lowerBase ||
-            s.displayName.toLowerCase().contains(lowerBase);
-        if (!titleMatches) continue;
-        // 避免和当前歌曲完全同名同歌手且毫无版本差异的重复条目
-        final sameArtist =
-            s.artist.trim().toLowerCase() ==
-            currentSong.artist.trim().toLowerCase();
-        final sameRawTitle =
-            s.displayName.trim().toLowerCase() ==
-            currentSong.displayName.trim().toLowerCase();
-        if (sameArtist && sameRawTitle && s.album == currentSong.album) {
-          continue;
+      final results = await Future.wait(
+        queries.map(
+          (q) => api
+              .searchPlaylists(q, page: 1, pagesize: 10)
+              .catchError((_) => null),
+        ),
+      );
+      final seen = <String>{};
+      final out = <KugouPlaylistBrief>[];
+      for (final list in results) {
+        if (list == null) continue;
+        for (final item in list) {
+          final key = (item.globalCollectionId ?? item.id).trim().toLowerCase();
+          if (key.isEmpty || seen.contains(key)) continue;
+          if (item.name.trim().isEmpty) continue;
+          seen.add(key);
+          out.add(item);
+          if (out.length >= 12) break;
         }
-        seen.add(h);
-        out.add(s);
-        if (out.length >= 8) break;
+        if (out.length >= 12) break;
       }
       return out;
     } catch (_) {
-      return const <Song>[];
+      return const <KugouPlaylistBrief>[];
     }
   }
 
@@ -1087,6 +1049,15 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
     );
   }
 
+  void _openBriefPlaylist(KugouPlaylistBrief playlistBrief) {
+    final push = widget.onPushPage ?? Navigator.of(context).push;
+    push(
+      MaterialPageRoute(
+        builder: (_) => PlaylistPage(playlist: playlistBrief.toPlaylist()),
+      ),
+    );
+  }
+
   void _openTechnicalSongInfo() {
     final push = widget.onPushPage ?? Navigator.of(context).push;
     push(MaterialPageRoute(builder: (_) => const SongInfoPage()));
@@ -1094,129 +1065,127 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
 
   @override
   Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-      child: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              Colors.black.withValues(alpha: 0.36),
-              Colors.black.withValues(alpha: 0.72),
-            ],
-          ),
+    return ListenableBuilder(
+      listenable: YtPaletteTheme.instance,
+      builder: (context, _) {
+        return ClipRRect(
           borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-          border: Border(
-            top: BorderSide(
-              color: Colors.white.withValues(alpha: 0.10),
-              width: 0.5,
+          child: Container(
+            decoration: YtPaletteTheme.drawerDecoration(),
+            child: Column(
+              children: [
+                _buildTopBar(),
+                Expanded(
+                  child: Listener(
+                    behavior: HitTestBehavior.translucent,
+                    onPointerDown: (e) {
+                      _pointerStartY = e.position.dy;
+                      _capturingPullDown = false;
+                      _lastStepDy = 0.0;
+                    },
+                    onPointerMove: (e) {
+                      final startY = _pointerStartY;
+                      if (startY == null) return;
+                      final totalDy = e.position.dy - startY;
+                      final atTop =
+                          !_scrollController.hasClients ||
+                          _scrollController.offset <= 1.0;
+                      if (!_capturingPullDown && totalDy > 8.0 && atTop) {
+                        _capturingPullDown = true;
+                      }
+                      if (_capturingPullDown) {
+                        if (_scrollController.hasClients &&
+                            _scrollController.offset > 0) {
+                          _scrollController.jumpTo(0);
+                        }
+                        _lastStepDy = e.delta.dy;
+                        widget.onVerticalDragUpdate?.call(
+                          DragUpdateDetails(
+                            globalPosition: e.position,
+                            localPosition: e.localPosition,
+                            delta: Offset(0, e.delta.dy),
+                            primaryDelta: e.delta.dy,
+                          ),
+                        );
+                      }
+                    },
+                    onPointerUp: (_) {
+                      if (_capturingPullDown) {
+                        _capturingPullDown = false;
+                        final velocity = _lastStepDy * 55.0;
+                        widget.onVerticalDragEnd?.call(
+                          DragEndDetails(
+                            velocity: Velocity(
+                              pixelsPerSecond: Offset(0, velocity),
+                            ),
+                            primaryVelocity: velocity,
+                          ),
+                        );
+                      }
+                      _pointerStartY = null;
+                    },
+                    onPointerCancel: (_) {
+                      if (_capturingPullDown) {
+                        _capturingPullDown = false;
+                        widget.onVerticalDragEnd?.call(DragEndDetails());
+                      }
+                      _pointerStartY = null;
+                    },
+                    child: _buildBody(),
+                  ),
+                ),
+              ],
             ),
           ),
-        ),
-        child: Column(
-          children: [
-            _buildTopBar(),
-            _buildDualTabSwitcher(),
-            Expanded(
-              child: Listener(
-                behavior: HitTestBehavior.translucent,
-                onPointerDown: (e) {
-                  _pointerStartY = e.position.dy;
-                  _capturingPullDown = false;
-                  _lastStepDy = 0.0;
-                },
-                onPointerMove: (e) {
-                  final startY = _pointerStartY;
-                  if (startY == null) return;
-                  final totalDy = e.position.dy - startY;
-                  final atTop =
-                      !_scrollController.hasClients ||
-                      _scrollController.offset <= 1.0;
-                  if (!_capturingPullDown && totalDy > 8.0 && atTop) {
-                    _capturingPullDown = true;
-                  }
-                  if (_capturingPullDown) {
-                    if (_scrollController.hasClients &&
-                        _scrollController.offset > 0) {
-                      _scrollController.jumpTo(0);
-                    }
-                    _lastStepDy = e.delta.dy;
-                    widget.onVerticalDragUpdate?.call(
-                      DragUpdateDetails(
-                        globalPosition: e.position,
-                        localPosition: e.localPosition,
-                        delta: Offset(0, e.delta.dy),
-                        primaryDelta: e.delta.dy,
-                      ),
-                    );
-                  }
-                },
-                onPointerUp: (_) {
-                  if (_capturingPullDown) {
-                    _capturingPullDown = false;
-                    final velocity = _lastStepDy * 55.0;
-                    widget.onVerticalDragEnd?.call(
-                      DragEndDetails(
-                        velocity: Velocity(
-                          pixelsPerSecond: Offset(0, velocity),
-                        ),
-                        primaryVelocity: velocity,
-                      ),
-                    );
-                  }
-                  _pointerStartY = null;
-                },
-                onPointerCancel: (_) {
-                  if (_capturingPullDown) {
-                    _capturingPullDown = false;
-                    widget.onVerticalDragEnd?.call(DragEndDetails());
-                  }
-                  _pointerStartY = null;
-                },
-                child: _buildBody(),
-              ),
-            ),
-          ],
-        ),
-      ),
+        );
+      },
     );
   }
 
+  /// 1:1 复刻原版 YT Music 顶栏：左侧直接并排「相关内容 / 歌曲百科」，右侧关闭按钮，底部贯穿细横线
   Widget _buildTopBar() {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onVerticalDragUpdate: widget.onVerticalDragUpdate,
       onVerticalDragEnd: widget.onVerticalDragEnd,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 12, 4),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 36,
-              height: 4,
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.3),
-                borderRadius: BorderRadius.circular(2),
-              ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(height: 8),
+          Container(
+            width: 36,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.30),
+              borderRadius: BorderRadius.circular(2),
             ),
-            const SizedBox(height: 6),
-            Row(
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 8, 0),
+            child: Row(
               children: [
-                Expanded(
-                  child: Text(
-                    _tab == _YtSongDrawerTab.related ? '相关内容' : '歌曲百科',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: -0.2,
-                    ),
-                  ),
+                _buildHeaderTabItem(
+                  label: '相关内容',
+                  selected: _tab == _YtSongDrawerTab.related,
+                  onTap: () {
+                    if (_tab != _YtSongDrawerTab.related) {
+                      AppHaptics.lightImpact(HapticCategory.control);
+                      setState(() => _tab = _YtSongDrawerTab.related);
+                    }
+                  },
                 ),
+                const SizedBox(width: 22),
+                _buildHeaderTabItem(
+                  label: '歌曲百科',
+                  selected: _tab == _YtSongDrawerTab.wiki,
+                  onTap: () {
+                    if (_tab != _YtSongDrawerTab.wiki) {
+                      AppHaptics.lightImpact(HapticCategory.control);
+                      setState(() => _tab = _YtSongDrawerTab.wiki);
+                    }
+                  },
+                ),
+                const Spacer(),
                 if (_tab == _YtSongDrawerTab.wiki)
                   TextButton.icon(
                     style: TextButton.styleFrom(
@@ -1235,104 +1204,78 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
                   visualDensity: VisualDensity.compact,
                   icon: const Icon(
                     Icons.close_rounded,
-                    color: Colors.white70,
+                    color: Colors.white,
                     size: 24,
                   ),
                   onPressed: widget.onClose,
                 ),
               ],
             ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildDualTabSwitcher() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 2, 16, 10),
-      child: Container(
-        height: 38,
-        padding: const EdgeInsets.all(3),
-        decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.08),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(
-            color: Colors.white.withValues(alpha: 0.10),
-            width: 0.6,
           ),
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: _buildTabItem(
-                label: '相关内容',
-                icon: Icons.explore_outlined,
-                selected: _tab == _YtSongDrawerTab.related,
-                onTap: () {
-                  if (_tab != _YtSongDrawerTab.related) {
-                    AppHaptics.lightImpact(HapticCategory.control);
-                    setState(() => _tab = _YtSongDrawerTab.related);
-                  }
-                },
-              ),
-            ),
-            Expanded(
-              child: _buildTabItem(
-                label: '歌曲百科',
-                icon: Icons.menu_book_outlined,
-                selected: _tab == _YtSongDrawerTab.wiki,
-                onTap: () {
-                  if (_tab != _YtSongDrawerTab.wiki) {
-                    AppHaptics.lightImpact(HapticCategory.control);
-                    setState(() => _tab = _YtSongDrawerTab.wiki);
-                  }
-                },
-              ),
-            ),
-          ],
-        ),
+          Divider(
+            height: 1,
+            thickness: 0.6,
+            color: Colors.white.withValues(alpha: 0.14),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _buildTabItem({
+  Widget _buildHeaderTabItem({
     required String label,
-    required IconData icon,
     required bool selected,
     required VoidCallback onTap,
   }) {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 180),
-        curve: Curves.easeOutCubic,
-        decoration: BoxDecoration(
-          color: selected
-              ? Colors.white.withValues(alpha: 0.22)
-              : Colors.transparent,
-          borderRadius: BorderRadius.circular(17),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
+      child: Padding(
+        padding: const EdgeInsets.only(top: 6, bottom: 10),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(
-              icon,
-              size: 15,
-              color: selected ? Colors.white : Colors.white60,
-            ),
-            const SizedBox(width: 6),
             Text(
               label,
               style: TextStyle(
-                color: selected ? Colors.white : Colors.white60,
-                fontSize: 13,
-                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                color: selected ? Colors.white : Colors.white54,
+                fontSize: 18.5,
+                fontWeight: selected ? FontWeight.w900 : FontWeight.w700,
+                letterSpacing: -0.2,
+                shadows: selected
+                    ? const [Shadow(color: Colors.white, blurRadius: 0.35)]
+                    : null,
+              ),
+            ),
+            const SizedBox(height: 5),
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOutCubic,
+              height: 2.4,
+              width: selected ? 34.0 : 0.0,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(2),
               ),
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _ytSectionTitle(String text) {
+    return Text(
+      text,
+      style: const TextStyle(
+        color: Colors.white,
+        fontSize: 20.5,
+        fontWeight: FontWeight.w900,
+        letterSpacing: -0.3,
+        shadows: [
+          Shadow(color: Colors.white, blurRadius: 0.35),
+        ],
       ),
     );
   }
@@ -1351,15 +1294,15 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
     return _buildWikiTabBody(info);
   }
 
-  /// Tab 1：1:1 原版 YT Music「相关内容」视图（图 1 & 图 4）
+  /// Tab 1：1:1 原版 YT Music「相关内容」视图
   Widget _buildRelatedTabBody(_YtSongInfoData info) {
     final hasYouMayLike = info.youMayLikeSongs.isNotEmpty;
-    final hasOtherPerf = info.otherPerformances.isNotEmpty;
+    final hasPlaylists = info.recommendedPlaylists.isNotEmpty;
     final hasSimilarArtists = info.similarArtists.isNotEmpty;
     final hasArtistAlbums = info.artistAlbums.isNotEmpty;
 
     if (!hasYouMayLike &&
-        !hasOtherPerf &&
+        !hasPlaylists &&
         !hasSimilarArtists &&
         !hasArtistAlbums) {
       return ListView(
@@ -1401,15 +1344,15 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
       physics: const BouncingScrollPhysics(
         parent: AlwaysScrollableScrollPhysics(),
       ),
-      padding: EdgeInsets.fromLTRB(0, 6, 0, widget.safeBottom + 32),
+      padding: EdgeInsets.fromLTRB(0, 18, 0, widget.safeBottom + 32),
       children: [
         if (hasYouMayLike) ...[
           _buildYouMayLikeSection(info.youMayLikeSongs),
-          const SizedBox(height: 26),
+          const SizedBox(height: 28),
         ],
-        if (hasOtherPerf) ...[
-          _buildOtherPerformancesSection(info.otherPerformances),
-          const SizedBox(height: 26),
+        if (hasPlaylists) ...[
+          _buildRecommendedPlaylistsSection(info.recommendedPlaylists),
+          const SizedBox(height: 28),
         ],
         if (hasSimilarArtists) ...[
           _buildSimilarArtistsSection(info.similarArtists),
@@ -1422,7 +1365,7 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
     );
   }
 
-  /// 1. 「你可能还喜欢」—— 4 行一列横向分页滑动（复刻图 4 顶部效果）
+  /// 1. 「你可能还喜欢」—— 4 行一列横向分页滑动（1:1 复刻原版 YT Music 56x56 封面、4px 小圆角、加粗字重）
   Widget _buildYouMayLikeSection(List<Song> songs) {
     final columns = <List<Song>>[];
     for (int i = 0; i < songs.length; i += 4) {
@@ -1434,21 +1377,13 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 16),
-          child: Text(
-            '你可能还喜欢',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 20,
-              fontWeight: FontWeight.w800,
-              letterSpacing: -0.3,
-            ),
-          ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: _ytSectionTitle('你可能还喜欢'),
         ),
         const SizedBox(height: 12),
         SizedBox(
-          height: math.min(4, songs.length) * 66.0,
+          height: math.min(4, songs.length) * 72.0,
           child: ListView.separated(
             scrollDirection: Axis.horizontal,
             physics: const BouncingScrollPhysics(),
@@ -1478,33 +1413,103 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
     );
   }
 
-  /// 2. 「其他表演」—— 同曲目不同版本 / 翻唱 / Live（复刻图 1 & 图 4 中部效果，带「翻唱 / 现场」小角标）
-  Widget _buildOtherPerformancesSection(List<Song> songs) {
-    final visible = songs.take(6).toList();
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            '其他表演',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 20,
-              fontWeight: FontWeight.w800,
-              letterSpacing: -0.3,
-            ),
+  /// 2. 「推荐的播放列表」—— 1:1 复刻原版 YT Music 大号正方形歌单卡片横向画廊
+  Widget _buildRecommendedPlaylistsSection(List<KugouPlaylistBrief> playlists) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: _ytSectionTitle('推荐的播放列表'),
+        ),
+        const SizedBox(height: 14),
+        SizedBox(
+          height: 222,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            physics: const BouncingScrollPhysics(),
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            itemCount: playlists.length,
+            separatorBuilder: (_, _) => const SizedBox(width: 14),
+            itemBuilder: (context, index) {
+              final item = playlists[index];
+              final cover = YtMoreMenu.upgradeArtworkUri(item.coverUrl);
+              final subtitleParts = <String>[
+                '播放列表',
+                if (item.songCount > 0) '${item.songCount}首曲目',
+              ];
+              return GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () {
+                  AppHaptics.lightImpact(HapticCategory.control);
+                  _openBriefPlaylist(item);
+                },
+                child: SizedBox(
+                  width: 160,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: Container(
+                          width: 160,
+                          height: 160,
+                          color: Colors.white.withValues(alpha: 0.08),
+                          child: (cover != null && cover.isNotEmpty)
+                              ? CachedNetworkImage(
+                                  imageUrl: cover,
+                                  memCacheWidth: 420,
+                                  memCacheHeight: 420,
+                                  fit: BoxFit.cover,
+                                  errorWidget: (_, _, _) => const Center(
+                                    child: Icon(
+                                      Icons.queue_music_rounded,
+                                      color: Colors.white38,
+                                      size: 40,
+                                    ),
+                                  ),
+                                )
+                              : const Center(
+                                  child: Icon(
+                                    Icons.queue_music_rounded,
+                                    color: Colors.white38,
+                                    size: 40,
+                                  ),
+                                ),
+                        ),
+                      ),
+                      const SizedBox(height: 9),
+                      Text(
+                        item.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 14.5,
+                          fontWeight: FontWeight.w700,
+                          height: 1.2,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        subtitleParts.join(' • '),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white60,
+                          fontSize: 12.8,
+                          fontWeight: FontWeight.w500,
+                          height: 1.25,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
           ),
-          const SizedBox(height: 10),
-          for (int i = 0; i < visible.length; i++)
-            _buildYtSongRow(
-              song: visible[i],
-              playlist: visible,
-              indexInPlaylist: i,
-              badge: _detectPerformanceBadge(visible[i], widget.song),
-            ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
@@ -1512,7 +1517,6 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
     required Song song,
     required List<Song> playlist,
     required int indexInPlaylist,
-    String? badge,
   }) {
     final cover = YtMoreMenu.upgradeArtworkUri(song.artworkUri);
     final subtitleParts = <String>[
@@ -1529,37 +1533,37 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
           indexInPlaylist,
         );
       },
-      borderRadius: BorderRadius.circular(10),
+      borderRadius: BorderRadius.circular(8),
       child: SizedBox(
-        height: 66,
+        height: 72,
         child: Row(
           children: [
             ClipRRect(
-              borderRadius: BorderRadius.circular(6),
+              borderRadius: BorderRadius.circular(4),
               child: Container(
-                width: 50,
-                height: 50,
+                width: 56,
+                height: 56,
                 color: Colors.white.withValues(alpha: 0.08),
                 child: (cover != null && cover.isNotEmpty)
                     ? CachedNetworkImage(
                         imageUrl: cover,
-                        memCacheWidth: 160,
-                        memCacheHeight: 160,
+                        memCacheWidth: 180,
+                        memCacheHeight: 180,
                         fit: BoxFit.cover,
                         errorWidget: (_, _, _) => const Icon(
                           Icons.music_note_rounded,
                           color: Colors.white38,
-                          size: 22,
+                          size: 24,
                         ),
                       )
                     : const Icon(
                         Icons.music_note_rounded,
                         color: Colors.white38,
-                        size: 22,
+                        size: 24,
                       ),
               ),
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: 14),
             Expanded(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -1571,49 +1575,22 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                       color: Colors.white,
-                      fontSize: 14.5,
-                      fontWeight: FontWeight.w600,
-                      height: 1.2,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      height: 1.22,
                     ),
                   ),
                   const SizedBox(height: 4),
-                  Row(
-                    children: [
-                      if (badge != null && badge.isNotEmpty) ...[
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 5,
-                            vertical: 1.2,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.20),
-                            borderRadius: BorderRadius.circular(3.5),
-                          ),
-                          child: Text(
-                            badge,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
-                              height: 1.1,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                      ],
-                      Expanded(
-                        child: Text(
-                          subtitleParts.join(' • '),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Colors.white60,
-                            fontSize: 12.5,
-                            height: 1.2,
-                          ),
-                        ),
-                      ),
-                    ],
+                  Text(
+                    subtitleParts.join(' • '),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white60,
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w500,
+                      height: 1.2,
+                    ),
                   ),
                 ],
               ),
@@ -1623,8 +1600,8 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
               tooltip: '插入下一首播放',
               icon: const Icon(
                 Icons.playlist_play_rounded,
-                color: Colors.white70,
-                size: 24,
+                color: Colors.white,
+                size: 26,
               ),
               onPressed: () {
                 AppHaptics.lightImpact(HapticCategory.control);
@@ -1638,26 +1615,18 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
     );
   }
 
-  /// 3. 「同类音乐人」—— 大号圆形头像横向画廊（1:1 复刻图 1 中部效果）
+  /// 3. 「同类音乐人」—— 大号圆形头像横向画廊（1:1 复刻原版 YT Music 中部效果）
   Widget _buildSimilarArtistsSection(List<_SimilarArtistCardData> artists) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 16),
-          child: Text(
-            '同类音乐人',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 20,
-              fontWeight: FontWeight.w800,
-              letterSpacing: -0.3,
-            ),
-          ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: _ytSectionTitle('同类音乐人'),
         ),
         const SizedBox(height: 14),
         SizedBox(
-          height: 196,
+          height: 204,
           child: ListView.separated(
             scrollDirection: Axis.horizontal,
             physics: const BouncingScrollPhysics(),
@@ -1673,13 +1642,13 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
                   widget.onOpenArtist?.call(item.name);
                 },
                 child: SizedBox(
-                  width: 144,
+                  width: 148,
                   child: Column(
                     children: [
                       ClipOval(
                         child: Container(
-                          width: 138,
-                          height: 138,
+                          width: 144,
+                          height: 144,
                           color: Colors.white.withValues(alpha: 0.08),
                           child: (item.avatarUrl != null &&
                                   item.avatarUrl!.isNotEmpty)
@@ -1726,7 +1695,7 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
                         textAlign: TextAlign.center,
                         style: const TextStyle(
                           color: Colors.white60,
-                          fontSize: 12.2,
+                          fontSize: 12.5,
                           height: 1.2,
                         ),
                       ),
@@ -1741,7 +1710,7 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
     );
   }
 
-  /// 4. 「更多曲目 - <歌手名>」—— 顶部歌手小圆头像 + 底部大号 1:1 正方形专辑卡片（1:1 复刻图 1 底部效果）
+  /// 4. 「更多曲目 - <歌手名>」—— 顶部歌手小圆头像 + 底部大号 1:1 正方形专辑卡片
   Widget _buildMoreFromArtistAlbumsSection(_YtSongInfoData info) {
     final artistName = info.primaryArtistName ?? widget.song.artist;
     final avatar = info.primaryArtistAvatar;
@@ -1803,9 +1772,12 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           color: Colors.white,
-                          fontSize: 19,
-                          fontWeight: FontWeight.w800,
+                          fontSize: 19.5,
+                          fontWeight: FontWeight.w900,
                           letterSpacing: -0.2,
+                          shadows: [
+                            Shadow(color: Colors.white, blurRadius: 0.35),
+                          ],
                         ),
                       ),
                     ],
@@ -1822,7 +1794,7 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
         ),
         const SizedBox(height: 14),
         SizedBox(
-          height: 216,
+          height: 218,
           child: ListView.separated(
             scrollDirection: Axis.horizontal,
             physics: const BouncingScrollPhysics(),
@@ -1844,15 +1816,15 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
                   _openBriefAlbum(albumBrief);
                 },
                 child: SizedBox(
-                  width: 158,
+                  width: 160,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       ClipRRect(
-                        borderRadius: BorderRadius.circular(10),
+                        borderRadius: BorderRadius.circular(8),
                         child: Container(
-                          width: 158,
-                          height: 158,
+                          width: 160,
+                          height: 160,
                           color: Colors.white.withValues(alpha: 0.08),
                           child: (cover != null && cover.isNotEmpty)
                               ? CachedNetworkImage(
@@ -1884,7 +1856,7 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           color: Colors.white,
-                          fontSize: 14,
+                          fontSize: 14.5,
                           fontWeight: FontWeight.w700,
                           height: 1.2,
                         ),
@@ -1896,7 +1868,8 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           color: Colors.white60,
-                          fontSize: 12.5,
+                          fontSize: 12.8,
+                          fontWeight: FontWeight.w500,
                           height: 1.2,
                         ),
                       ),

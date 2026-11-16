@@ -16,6 +16,7 @@ import '../../album/album_detail_page.dart';
 import '../../artist/artist_detail_page.dart';
 import '../../artist/artist_photo_banner.dart';
 import '../artist_photo_service.dart';
+import 'yt_background.dart';
 import 'yt_lyrics_drawer.dart';
 import 'yt_more_menu.dart';
 
@@ -212,7 +213,6 @@ class _YtArtistDrawerContentState extends State<_YtArtistDrawerContent> {
   bool _isFollowing = false;
   bool _followSubmitting = false;
   bool _bioExpanded = false;
-  bool _expandAllHotSongs = false;
 
   _ArtistDrawerTab _tab = _ArtistDrawerTab.hotSongs;
   bool _albumsLoading = false;
@@ -300,7 +300,6 @@ class _YtArtistDrawerContentState extends State<_YtArtistDrawerContent> {
       _albumsLoading = false;
       _tab = _ArtistDrawerTab.hotSongs;
       _bioExpanded = false;
-      _expandAllHotSongs = false;
     }
     if (notify) {
       setState(applyReset);
@@ -544,92 +543,81 @@ class _YtArtistDrawerContentState extends State<_YtArtistDrawerContent> {
       (p) => p.currentSong?.id,
     );
 
-    return ClipRRect(
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-      child: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              Colors.black.withValues(alpha: 0.34),
-              Colors.black.withValues(alpha: 0.68),
-            ],
-          ),
+    return ListenableBuilder(
+      listenable: YtPaletteTheme.instance,
+      builder: (context, _) {
+        return ClipRRect(
           borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-          border: Border(
-            top: BorderSide(
-              color: Colors.white.withValues(alpha: 0.10),
-              width: 0.5,
+          child: Container(
+            decoration: YtPaletteTheme.drawerDecoration(),
+            child: Column(
+              children: [
+                _buildTopBar(),
+                if (_artistNames.length > 1) _buildArtistSwitcherChips(),
+                Expanded(
+                  child: Listener(
+                    behavior: HitTestBehavior.translucent,
+                    onPointerDown: (e) {
+                      _pointerStartY = e.position.dy;
+                      _capturingPullDown = false;
+                      _lastStepDy = 0.0;
+                    },
+                    onPointerMove: (e) {
+                      final startY = _pointerStartY;
+                      if (startY == null) return;
+                      final totalDy = e.position.dy - startY;
+                      final atTop =
+                          !_scrollController.hasClients ||
+                          _scrollController.offset <= 1.0;
+                      if (!_capturingPullDown && totalDy > 8.0 && atTop) {
+                        _capturingPullDown = true;
+                      }
+                      if (_capturingPullDown) {
+                        if (_scrollController.hasClients &&
+                            _scrollController.offset > 0) {
+                          _scrollController.jumpTo(0);
+                        }
+                        _lastStepDy = e.delta.dy;
+                        widget.onVerticalDragUpdate?.call(
+                          DragUpdateDetails(
+                            globalPosition: e.position,
+                            localPosition: e.localPosition,
+                            delta: Offset(0, e.delta.dy),
+                            primaryDelta: e.delta.dy,
+                          ),
+                        );
+                      }
+                    },
+                    onPointerUp: (_) {
+                      if (_capturingPullDown) {
+                        _capturingPullDown = false;
+                        final velocity = _lastStepDy * 55.0;
+                        widget.onVerticalDragEnd?.call(
+                          DragEndDetails(
+                            velocity: Velocity(
+                              pixelsPerSecond: Offset(0, velocity),
+                            ),
+                            primaryVelocity: velocity,
+                          ),
+                        );
+                      }
+                      _pointerStartY = null;
+                    },
+                    onPointerCancel: (_) {
+                      if (_capturingPullDown) {
+                        _capturingPullDown = false;
+                        widget.onVerticalDragEnd?.call(DragEndDetails());
+                      }
+                      _pointerStartY = null;
+                    },
+                    child: _buildBody(currentSongId),
+                  ),
+                ),
+              ],
             ),
           ),
-        ),
-        child: Column(
-          children: [
-            _buildTopBar(),
-            if (_artistNames.length > 1) _buildArtistSwitcherChips(),
-            Expanded(
-              child: Listener(
-                behavior: HitTestBehavior.translucent,
-                onPointerDown: (e) {
-                  _pointerStartY = e.position.dy;
-                  _capturingPullDown = false;
-                  _lastStepDy = 0.0;
-                },
-                onPointerMove: (e) {
-                  final startY = _pointerStartY;
-                  if (startY == null) return;
-                  final totalDy = e.position.dy - startY;
-                  final atTop =
-                      !_scrollController.hasClients ||
-                      _scrollController.offset <= 1.0;
-                  if (!_capturingPullDown && totalDy > 8.0 && atTop) {
-                    _capturingPullDown = true;
-                  }
-                  if (_capturingPullDown) {
-                    if (_scrollController.hasClients &&
-                        _scrollController.offset > 0) {
-                      _scrollController.jumpTo(0);
-                    }
-                    _lastStepDy = e.delta.dy;
-                    widget.onVerticalDragUpdate?.call(
-                      DragUpdateDetails(
-                        globalPosition: e.position,
-                        localPosition: e.localPosition,
-                        delta: Offset(0, e.delta.dy),
-                        primaryDelta: e.delta.dy,
-                      ),
-                    );
-                  }
-                },
-                onPointerUp: (_) {
-                  if (_capturingPullDown) {
-                    _capturingPullDown = false;
-                    final velocity = _lastStepDy * 55.0;
-                    widget.onVerticalDragEnd?.call(
-                      DragEndDetails(
-                        velocity: Velocity(
-                          pixelsPerSecond: Offset(0, velocity),
-                        ),
-                        primaryVelocity: velocity,
-                      ),
-                    );
-                  }
-                  _pointerStartY = null;
-                },
-                onPointerCancel: (_) {
-                  if (_capturingPullDown) {
-                    _capturingPullDown = false;
-                    widget.onVerticalDragEnd?.call(DragEndDetails());
-                  }
-                  _pointerStartY = null;
-                },
-                child: _buildBody(currentSongId),
-              ),
-            ),
-          ],
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -1175,193 +1163,174 @@ class _YtArtistDrawerContentState extends State<_YtArtistDrawerContent> {
       ];
     }
 
-    final shouldCollapseSongs =
-        _albums.isNotEmpty && !_expandAllHotSongs && _hotSongs.length > 6;
-    final visibleSongCount = shouldCollapseSongs ? 6 : _hotSongs.length;
-
     return [
       if (_hotSongs.isNotEmpty)
-        SliverList.builder(
-          itemCount: visibleSongCount,
-          itemBuilder: (context, index) {
-            final song = _hotSongs[index];
-            final playing =
-                currentSongId != null &&
-                currentSongId.toLowerCase() == song.id.toLowerCase();
-            final cover = YtMoreMenu.upgradeArtworkUri(song.artworkUri);
-            final subtitleParts = <String>[
-              if (!isUnknownArtist(song.artist)) song.artist,
-              if (!isUnknownAlbum(song.album)) song.album,
-            ];
-
-            return InkWell(
-              onTap: () {
-                AppHaptics.click(HapticCategory.transport);
-                context.read<PlayerProvider>().playOnlinePlaylist(
-                  _hotSongs,
-                  index,
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(16, 6, 16, 12),
+          sliver: SliverGrid(
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 2,
+              mainAxisSpacing: 18,
+              crossAxisSpacing: 14,
+              childAspectRatio: 0.74,
+            ),
+            delegate: SliverChildBuilderDelegate(
+              (context, index) {
+                final song = _hotSongs[index];
+                final playing =
+                    currentSongId != null &&
+                    currentSongId.toLowerCase() == song.id.toLowerCase();
+                return _buildSquareSongTile(
+                  song: song,
+                  index: index,
+                  playing: playing,
                 );
               },
-              child: Container(
-                margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                decoration: BoxDecoration(
-                  color: playing
-                      ? Colors.white.withValues(alpha: 0.14)
-                      : Colors.transparent,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Row(
-                  children: [
-                    SizedBox(
-                      width: 26,
-                      child: Text(
-                        '${index + 1}',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: playing ? Colors.white : Colors.white54,
-                          fontSize: 13,
-                          fontWeight: playing
-                              ? FontWeight.w700
-                              : FontWeight.w500,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(8),
-                      child: Container(
-                        width: 48,
-                        height: 48,
-                        color: Colors.white12,
-                        child: (cover != null && cover.isNotEmpty)
-                            ? CachedNetworkImage(
-                                imageUrl: cover,
-                                memCacheWidth: 160,
-                                memCacheHeight: 160,
-                                fit: BoxFit.cover,
-                                errorWidget: (_, _, _) => const Icon(
-                                  Icons.music_note_rounded,
-                                  color: Colors.white38,
-                                  size: 22,
-                                ),
-                              )
-                            : const Icon(
-                                Icons.music_note_rounded,
-                                color: Colors.white38,
-                                size: 22,
-                              ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            song.displayName,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 14.5,
-                              fontWeight: playing
-                                  ? FontWeight.w700
-                                  : FontWeight.w500,
-                            ),
-                          ),
-                          const SizedBox(height: 3),
-                          Text(
-                            subtitleParts.join(' · '),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: Colors.white60,
-                              fontSize: 12,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    IconButton(
-                      visualDensity: VisualDensity.compact,
-                      tooltip: '下一首播放',
-                      icon: const Icon(
-                        Icons.playlist_play_rounded,
-                        color: Colors.white60,
-                        size: 22,
-                      ),
-                      onPressed: () {
-                        AppHaptics.lightImpact(HapticCategory.control);
-                        context.read<PlayerProvider>().insertAfterCurrent([
-                          song,
-                        ]);
-                        showToast('已加入下一首播放');
-                      },
-                    ),
-                  ],
-                ),
-              ),
-            );
-          },
-        ),
-      if (_albums.isNotEmpty && _hotSongs.length > 6)
-        SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 6, 16, 4),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: InkWell(
-                onTap: () {
-                  AppHaptics.lightImpact(HapticCategory.control);
-                  setState(() => _expandAllHotSongs = !_expandAllHotSongs);
-                },
-                borderRadius: BorderRadius.circular(18),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 7,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.08),
-                    borderRadius: BorderRadius.circular(18),
-                    border: Border.all(
-                      color: Colors.white.withValues(alpha: 0.14),
-                      width: 0.6,
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        _expandAllHotSongs
-                            ? '收起热门歌曲'
-                            : '展开全部 ${_hotSongs.length} 首热门歌曲',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 12.5,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(width: 4),
-                      Icon(
-                        _expandAllHotSongs
-                            ? Icons.keyboard_arrow_up_rounded
-                            : Icons.keyboard_arrow_down_rounded,
-                        color: Colors.white70,
-                        size: 16,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
+              childCount: _hotSongs.length,
             ),
           ),
         ),
       if (_albums.isNotEmpty)
         SliverToBoxAdapter(child: _buildSquareAlbumCarouselSection()),
     ];
+  }
+
+  /// 1:1 复刻「专辑」双列大正方形网格卡片的「热门歌曲」方形卡片
+  Widget _buildSquareSongTile({
+    required Song song,
+    required int index,
+    required bool playing,
+  }) {
+    final cover = YtMoreMenu.upgradeArtworkUri(song.artworkUri);
+    final subtitleParts = <String>[
+      '单曲',
+      if (!isUnknownAlbum(song.album) && song.album != song.displayName)
+        song.album
+      else if (!isUnknownArtist(song.artist))
+        song.artist,
+    ];
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () {
+        AppHaptics.click(HapticCategory.transport);
+        context.read<PlayerProvider>().playOnlinePlaylist(_hotSongs, index);
+      },
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          AspectRatio(
+            aspectRatio: 1.0,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  Container(
+                    color: Colors.white.withValues(alpha: 0.08),
+                    child: (cover != null && cover.isNotEmpty)
+                        ? CachedNetworkImage(
+                            imageUrl: cover,
+                            memCacheWidth: 420,
+                            memCacheHeight: 420,
+                            fit: BoxFit.cover,
+                            errorWidget: (_, _, _) => const Center(
+                              child: Icon(
+                                Icons.music_note_rounded,
+                                color: Colors.white38,
+                                size: 38,
+                              ),
+                            ),
+                          )
+                        : const Center(
+                            child: Icon(
+                              Icons.music_note_rounded,
+                              color: Colors.white38,
+                              size: 38,
+                            ),
+                          ),
+                  ),
+                  if (playing)
+                    Positioned.fill(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.34),
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.65),
+                            width: 1.6,
+                          ),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Center(
+                          child: Icon(
+                            Icons.graphic_eq_rounded,
+                            color: Colors.white,
+                            size: 30,
+                          ),
+                        ),
+                      ),
+                    ),
+                  Positioned(
+                    right: 8,
+                    bottom: 8,
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () {
+                        AppHaptics.lightImpact(HapticCategory.control);
+                        context.read<PlayerProvider>().insertAfterCurrent([
+                          song,
+                        ]);
+                        showToast('已加入下一首播放');
+                      },
+                      child: Container(
+                        width: 30,
+                        height: 30,
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.56),
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.18),
+                            width: 0.6,
+                          ),
+                        ),
+                        child: const Icon(
+                          Icons.playlist_play_rounded,
+                          color: Colors.white,
+                          size: 18,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            song.displayName,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+              height: 1.2,
+            ),
+          ),
+          const SizedBox(height: 3),
+          Text(
+            subtitleParts.join(' • '),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Colors.white60,
+              fontSize: 12.5,
+              height: 1.2,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   /// YT Music 风格「专辑」大号正方形横向画廊（1:1 复刻图 3 效果）
