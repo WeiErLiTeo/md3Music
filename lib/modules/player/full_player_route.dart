@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/scheduler.dart' show SchedulerBinding;
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform;
@@ -712,14 +713,17 @@ class DraggablePlayerRoute<T> extends PageRoute<T> {
     _animStartValue = controller.value;
     _animDirection = -1;
     controller.reverse().then((_) {
-      // 强制归零，避免 removeRoute 不触发 didPop 导致 playerExpansion 残留非零值
-      // （didPop 只在系统 pop 时触发，dismiss 走 removeRoute 不触发）
+      // 先在本帧完成 playerExpansion = 0.0 的迷你栏与形变层交接落位，
+      // 将整棵播放页路由的卸载销毁（removeRoute + dispose）错峰推迟到下一帧，
+      // 避免缩回主页最后落位那一帧同时执行交接重绘与大子树销毁导致尾帧微卡。
       if (playerExpansion.value != 0.0) {
         playerExpansion.value = 0.0;
       }
-      if (navigator?.mounted ?? false) {
-        navigator!.removeRoute(this);
-      }
+      SchedulerBinding.instance.addPostFrameCallback((_) {
+        if (navigator?.mounted ?? false) {
+          navigator!.removeRoute(this);
+        }
+      });
     });
   }
 

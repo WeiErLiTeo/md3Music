@@ -179,13 +179,17 @@ class _YtMainViewState extends State<YtMainView>
   Timer? _songSwitchDeferTimer;
   bool _dynamicCoverReady = true;
 
-  // ============== 「默认收藏」歌单状态 ==============
+  // ============== 「默认收藏」歌单状态与点赞/收藏点击动效计数 ==============
   bool _defaultStarred = false;
   bool _togglingDefaultStar = false;
+  int _likeBurstTrigger = 0;
+  int _collectBurstTrigger = 0;
 
   @override
   void initState() {
     super.initState();
+    final initialResolved = YtMoreMenu.resolveMatchedSong(widget.song);
+    _defaultStarred = _isSongInDefaultCollection(widget.song, initialResolved);
     _bufferingPulseController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 850),
@@ -921,6 +925,7 @@ class _YtMainViewState extends State<YtMainView>
       } else {
         setState(() {
           _defaultStarred = true;
+          _collectBurstTrigger++;
           YtMainView._defaultCollectionHashes.add(hash);
           YtMainView._defaultCollectionHashes.add(rawHash);
         });
@@ -2104,6 +2109,9 @@ class _YtMainViewState extends State<YtMainView>
         children: [
           InkWell(
             onTap: () {
+              if (!isFavorited) {
+                setState(() => _likeBurstTrigger++);
+              }
               if (isOnline) {
                 context.read<FavoritesProvider>().toggleFavorite(song);
               } else {
@@ -2121,6 +2129,7 @@ class _YtMainViewState extends State<YtMainView>
                   _YtMinimalBurstIcon(
                     songKey: song.id,
                     active: isFavorited,
+                    burstTrigger: _likeBurstTrigger,
                     activeIcon: Icons.favorite_rounded,
                     inactiveIcon: Icons.favorite_border_rounded,
                     size: 19.5,
@@ -2158,6 +2167,7 @@ class _YtMainViewState extends State<YtMainView>
                   _YtMinimalBurstIcon(
                     songKey: song.id,
                     active: _defaultStarred,
+                    burstTrigger: _collectBurstTrigger,
                     activeIcon: Icons.star_rounded,
                     inactiveIcon: Icons.star_border_rounded,
                     size: 20.5,
@@ -2710,6 +2720,7 @@ class _YtMainViewState extends State<YtMainView>
 class _YtMinimalBurstIcon extends StatefulWidget {
   final String songKey;
   final bool active;
+  final int burstTrigger;
   final IconData activeIcon;
   final IconData inactiveIcon;
   final double size;
@@ -2717,6 +2728,7 @@ class _YtMinimalBurstIcon extends StatefulWidget {
   const _YtMinimalBurstIcon({
     required this.songKey,
     required this.active,
+    required this.burstTrigger,
     required this.activeIcon,
     required this.inactiveIcon,
     required this.size,
@@ -2742,14 +2754,13 @@ class _YtMinimalBurstIconState extends State<_YtMinimalBurstIcon>
   @override
   void didUpdateWidget(covariant _YtMinimalBurstIcon oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // 仅在同一首歌用户点击从「未激活 -> 激活」时触发极简白光微粒动效，切歌时不误触
-    if (oldWidget.songKey == widget.songKey &&
-        !oldWidget.active &&
-        widget.active) {
-      _controller.forward(from: 0.0);
-    } else if (oldWidget.songKey != widget.songKey) {
+    // 仅在用户主动点击按钮使 burstTrigger 递增时才触发白光微粒动效，
+    // 从主页进入播放页、后台完成默认收藏同步或切歌时绝不误触
+    if (oldWidget.songKey != widget.songKey) {
       _controller.stop();
       _controller.value = 0.0;
+    } else if (widget.burstTrigger > oldWidget.burstTrigger && widget.active) {
+      _controller.forward(from: 0.0);
     }
   }
 

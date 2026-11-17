@@ -18,7 +18,6 @@ import '../../../widgets/smart_artwork_image.dart';
 import '../../settings/equalizer_settings_page.dart';
 import '../../sheet/song_sheet_sheet.dart';
 import '../../sound/sounds_page.dart' show KugouSoundItem, SoundsPage;
-import 'yt_background.dart';
 import 'yt_lyrics_drawer.dart';
 
 /// YT 播放页内嵌操作抽屉类型：保存歌单 / 曲谱 / 蝰蛇音效
@@ -1952,17 +1951,28 @@ class _YtDrawerShellContainer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: YtPaletteTheme.instance,
-      builder: (context, _) {
-        return ClipRRect(
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-          child: Container(
-            decoration: YtPaletteTheme.drawerDecoration(),
-            child: child,
+    return ClipRRect(
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+      child: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Colors.black.withValues(alpha: 0.34),
+              Colors.black.withValues(alpha: 0.72),
+            ],
           ),
-        );
-      },
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          border: Border(
+            top: BorderSide(
+              color: Colors.white.withValues(alpha: 0.10),
+              width: 0.5,
+            ),
+          ),
+        ),
+        child: child,
+      ),
     );
   }
 }

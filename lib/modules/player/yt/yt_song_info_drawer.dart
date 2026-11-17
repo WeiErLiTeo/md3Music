@@ -21,7 +21,6 @@ import '../../library/song_match_sheet.dart';
 import '../../playlist/playlist_page.dart';
 import '../song_info_page.dart';
 import '../song_ranking_sheet.dart';
-import 'yt_background.dart';
 import 'yt_lyrics_drawer.dart';
 import 'yt_more_menu.dart';
 
@@ -175,6 +174,8 @@ class _YtSongInfoDrawerState extends State<YtSongInfoDrawer> {
 }
 
 enum _YtSongDrawerTab { related, wiki }
+
+enum _SongRegionProfile { western, japanese, korean, chinese }
 
 class _SimilarArtistCardData {
   final String id;
@@ -469,18 +470,11 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
     final recommendedPlaylists = allResults[6] as List<KugouPlaylistBrief>;
     final artistBundle =
         allResults[7]
-            as ({String? avatarUrl, List<KugouAlbumBrief> albums});
-
-    // 合并去重「你可能还喜欢」（优先 /ai/recommend 曲风推荐，其次 /audio/related）
-    final seenHashes = <String>{song.id.toLowerCase()};
-    final youMayLike = <Song>[];
-    for (final s in [...aiSongs, ...relatedSongs]) {
-      final key = s.id.trim().toLowerCase();
-      if (key.isEmpty || seenHashes.contains(key)) continue;
-      seenHashes.add(key);
-      youMayLike.add(s);
-      if (youMayLike.length >= 16) break;
-    }
+            as ({
+              String? avatarUrl,
+              List<KugouAlbumBrief> albums,
+              List<Song> hotSongs,
+            });
 
     // 解析专辑详情字段
     String? publishDate = _cleanDate(
@@ -566,7 +560,24 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
       }
     }
 
-    // 先渲染首屏数据（不等同类歌手头像二次查询）
+    // 识别当前歌曲语系/曲风画像，并对 /ai/recommend 与 /audio/related 做第一轮净水过滤
+    final regionProfile = _detectSongRegionProfile(
+      song: song,
+      language: language,
+      tags: tags,
+    );
+
+    final initialYouMayLike = _curateYouMayLikeSongs(
+      currentSong: song,
+      primaryArtistName: primaryArtistName,
+      profile: regionProfile,
+      aiSongs: aiSongs,
+      relatedSongs: relatedSongs,
+      playlistSongs: const <Song>[],
+      artistHotSongs: artistBundle.hotSongs,
+    );
+
+    // 先渲染首屏数据（不等歌单共现曲目与同类歌手头像二次查询）
     setState(() {
       _data = _YtSongInfoData(
         albumId: albumId,
@@ -585,7 +596,7 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
         qualityBadges: qualityBadges,
         credits: credits,
         ranking: ranking,
-        youMayLikeSongs: youMayLike,
+        youMayLikeSongs: initialYouMayLike,
         recommendedPlaylists: recommendedPlaylists,
         similarArtists: const [],
         primaryArtistName: primaryArtistName,
@@ -595,13 +606,40 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
       _loading = false;
     });
 
-    // 3. 异步解析「同类音乐人」高清圆头像与作品数（基于曲风推荐里的关联音乐人）
+    // 3. 异步拉取同风格歌单共现曲目，二次提纯「你可能还喜欢」并解析「同类音乐人」
+    final playlistPool = await _fetchCoOccurringPlaylistSongs(
+      api,
+      playlists: recommendedPlaylists,
+      profile: regionProfile,
+      primaryArtistName: primaryArtistName,
+      tags: tags,
+    );
+    if (!mounted || token != _requestToken) return;
+
+    final refinedYouMayLike = _curateYouMayLikeSongs(
+      currentSong: song,
+      primaryArtistName: primaryArtistName,
+      profile: regionProfile,
+      aiSongs: aiSongs,
+      relatedSongs: relatedSongs,
+      playlistSongs: playlistPool,
+      artistHotSongs: artistBundle.hotSongs,
+    );
+
     final similarArtists = await _resolveSimilarArtists(
       api,
-      recommendPool: youMayLike,
+      profile: regionProfile,
+      primaryArtistName: primaryArtistName,
+      tags: tags,
+      recommendPool: [
+        ...refinedYouMayLike,
+        ...playlistPool,
+        ...aiSongs,
+        ...relatedSongs,
+      ],
       excludeNames: splitArtists,
     );
-    if (!mounted || token != _requestToken || similarArtists.isEmpty) return;
+    if (!mounted || token != _requestToken) return;
     setState(() {
       final prev = _data;
       if (prev != null) {
@@ -622,7 +660,9 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
           qualityBadges: prev.qualityBadges,
           credits: prev.credits,
           ranking: prev.ranking,
-          youMayLikeSongs: prev.youMayLikeSongs,
+          youMayLikeSongs: refinedYouMayLike.isNotEmpty
+              ? refinedYouMayLike
+              : prev.youMayLikeSongs,
           recommendedPlaylists: prev.recommendedPlaylists,
           similarArtists: similarArtists,
           primaryArtistName: prev.primaryArtistName,
@@ -631,6 +671,329 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
         );
       }
     });
+  }
+
+  // ============== 客户端语系/曲风识别与推荐净水算法 ==============
+  static final RegExp _reKana = RegExp(r'[\u3040-\u30ff\u31f0-\u31ff]');
+  static final RegExp _reHangul = RegExp(r'[\uac00-\ud7af\u1100-\u11ff]');
+  static final RegExp _reCjk = RegExp(r'[\u4e00-\u9fff]');
+  static final RegExp _reLatinLetter = RegExp(r'[A-Za-z]');
+  static final RegExp _reSpamVersion = RegExp(
+    r'(dj版|djre|慢摇|喊麦|串烧|抖音|快手|车载|铃声|伴奏|卡拉ok|karaoke|温柔男声|温柔女声|烟嗓|女声版|男声版|0\.8x|0\.9x|1\.1x|1\.2x|降调|升调|加快版|慢速版)',
+    caseSensitive: false,
+  );
+
+  static _SongRegionProfile _detectSongRegionProfile({
+    required Song song,
+    required String? language,
+    required List<String> tags,
+  }) {
+    final title = _stripSongVersionTitle(song.displayName);
+    final artist = song.artist;
+    final langStr = '${language ?? ''} ${tags.join(' ')}'.toLowerCase();
+
+    if (_reKana.hasMatch(title) ||
+        _reKana.hasMatch(artist) ||
+        langStr.contains('日语') ||
+        langStr.contains('日本') ||
+        langStr.contains('j-pop') ||
+        langStr.contains('jpop') ||
+        langStr.contains('acg')) {
+      return _SongRegionProfile.japanese;
+    }
+    if (_reHangul.hasMatch(title) ||
+        _reHangul.hasMatch(artist) ||
+        langStr.contains('韩语') ||
+        langStr.contains('韩国') ||
+        langStr.contains('k-pop') ||
+        langStr.contains('kpop')) {
+      return _SongRegionProfile.korean;
+    }
+    if (langStr.contains('英语') ||
+        langStr.contains('英文') ||
+        langStr.contains('欧美') ||
+        langStr.contains('法语') ||
+        langStr.contains('德语') ||
+        langStr.contains('西班牙语')) {
+      return _SongRegionProfile.western;
+    }
+
+    final artistClean = _stripSongVersionTitle(artist);
+    final artistHasLatin = _reLatinLetter.hasMatch(artistClean);
+    final artistHasCjk = _reCjk.hasMatch(artistClean);
+    final titleHasLatin = _reLatinLetter.hasMatch(title);
+    final titleHasCjk = _reCjk.hasMatch(title);
+
+    if (artistHasLatin && !artistHasCjk && titleHasLatin && !titleHasCjk) {
+      return _SongRegionProfile.western;
+    }
+    return _SongRegionProfile.chinese;
+  }
+
+  static bool _isSpamOrGarbageTrack(Song candidate, {required Song currentSong}) {
+    final currentText =
+        '${currentSong.displayName} ${currentSong.artist}'.toLowerCase();
+    final currentIsDj = currentText.contains('dj') || currentText.contains('慢摇');
+    final candText = '${candidate.displayName} ${candidate.artist}';
+    if (!currentIsDj && _reSpamVersion.hasMatch(candText)) {
+      return true;
+    }
+    // 拦截多重括号劣质重混如 “(DJ版)(DJ版)”
+    if (RegExp(r'(\(.*?dj.*?\).*){2,}', caseSensitive: false)
+        .hasMatch(candText)) {
+      return true;
+    }
+    return false;
+  }
+
+  static bool _artistMatchesRegionProfile(
+    String artistName,
+    _SongRegionProfile profile,
+  ) {
+    final clean = _stripSongVersionTitle(artistName).trim();
+    if (clean.isEmpty || isUnknownArtist(clean)) return false;
+    if (_reSpamVersion.hasMatch(clean)) return false;
+
+    switch (profile) {
+      case _SongRegionProfile.western:
+        // 欧美歌曲只匹配拉丁字母名歌手，拒绝中文古风/网络翻唱歌手名與日韩文名
+        return _reLatinLetter.hasMatch(clean) &&
+            !_reCjk.hasMatch(clean) &&
+            !_reKana.hasMatch(clean) &&
+            !_reHangul.hasMatch(clean);
+      case _SongRegionProfile.japanese:
+        if (_reKana.hasMatch(clean)) return true;
+        if (_reHangul.hasMatch(clean)) return false;
+        // 罗马音日系歌手（如 YOASOBI / Aimer / LiSA / Soala / Kenshi Yonezu）或含日系姓氏特征
+        if (_reLatinLetter.hasMatch(clean) && !_reCjk.hasMatch(clean)) {
+          return true;
+        }
+        return true;
+      case _SongRegionProfile.korean:
+        if (_reHangul.hasMatch(clean)) return true;
+        if (_reKana.hasMatch(clean)) return false;
+        if (_reLatinLetter.hasMatch(clean) && !_reCjk.hasMatch(clean)) {
+          return true;
+        }
+        return false;
+      case _SongRegionProfile.chinese:
+        return !_reKana.hasMatch(clean) && !_reHangul.hasMatch(clean);
+    }
+  }
+
+  static bool _songMatchesRegionProfile(
+    Song candidate,
+    _SongRegionProfile profile,
+  ) {
+    final baseTitle = _stripSongVersionTitle(candidate.displayName);
+    final artists = splitSongArtistNames(candidate.artist);
+    final primaryArtist = artists.isNotEmpty
+        ? artists.first
+        : candidate.artist.trim();
+    if (baseTitle.isEmpty || isUnknownArtist(primaryArtist)) return false;
+
+    switch (profile) {
+      case _SongRegionProfile.western:
+        // 欧美曲目：歌手名必须为纯英文/拉丁字母，主歌名也必须为英文且不含中文汉字/假名/谚文
+        final artistOk = _artistMatchesRegionProfile(primaryArtist, profile);
+        final titleOk = _reLatinLetter.hasMatch(baseTitle) &&
+            !_reCjk.hasMatch(baseTitle) &&
+            !_reKana.hasMatch(baseTitle) &&
+            !_reHangul.hasMatch(baseTitle);
+        return artistOk && titleOk;
+      case _SongRegionProfile.japanese:
+        // 日系曲目：含假名，或拉丁字母日系歌手+含假名/英文歌名；拒绝纯中文歌名+纯中文网络歌手
+        if (_reKana.hasMatch(baseTitle) || _reKana.hasMatch(primaryArtist)) {
+          return true;
+        }
+        if (_reHangul.hasMatch(baseTitle) || _reHangul.hasMatch(primaryArtist)) {
+          return false;
+        }
+        if (_reLatinLetter.hasMatch(primaryArtist) &&
+            !_reCjk.hasMatch(primaryArtist)) {
+          return true;
+        }
+        return false;
+      case _SongRegionProfile.korean:
+        if (_reHangul.hasMatch(baseTitle) || _reHangul.hasMatch(primaryArtist)) {
+          return true;
+        }
+        if (_reKana.hasMatch(baseTitle) || _reKana.hasMatch(primaryArtist)) {
+          return false;
+        }
+        if (_reLatinLetter.hasMatch(primaryArtist) &&
+            !_reCjk.hasMatch(primaryArtist) &&
+            !_reCjk.hasMatch(baseTitle)) {
+          return true;
+        }
+        return false;
+      case _SongRegionProfile.chinese:
+        return !_reKana.hasMatch(baseTitle) && !_reHangul.hasMatch(baseTitle);
+    }
+  }
+
+  static String _songDedupFingerprint(Song s) {
+    final title = _stripSongVersionTitle(s.displayName).toLowerCase();
+    final artists = splitSongArtistNames(s.artist);
+    final artist = (artists.isNotEmpty ? artists.first : s.artist)
+        .trim()
+        .toLowerCase();
+    return '$title|$artist';
+  }
+
+  List<Song> _curateYouMayLikeSongs({
+    required Song currentSong,
+    required String? primaryArtistName,
+    required _SongRegionProfile profile,
+    required List<Song> aiSongs,
+    required List<Song> relatedSongs,
+    required List<Song> playlistSongs,
+    required List<Song> artistHotSongs,
+  }) {
+    final seenIds = <String>{currentSong.id.trim().toLowerCase()};
+    final seenFingerprints = <String>{_songDedupFingerprint(currentSong)};
+    final primaryLower = (primaryArtistName ?? '').trim().toLowerCase();
+
+    bool isSamePrimaryArtist(Song s) {
+      if (primaryLower.isEmpty) return false;
+      for (final a in splitSongArtistNames(s.artist)) {
+        if (a.trim().toLowerCase() == primaryLower) return true;
+      }
+      return s.artist.trim().toLowerCase() == primaryLower;
+    }
+
+    // 1. 收集同风格其他音乐人曲目（优先经过语系净水与垃圾版本过滤）
+    final peerMatched = <Song>[];
+    final sameArtistMatched = <Song>[];
+
+    for (final s in [...aiSongs, ...relatedSongs, ...playlistSongs]) {
+      final idKey = s.id.trim().toLowerCase();
+      if (idKey.isEmpty || seenIds.contains(idKey)) continue;
+      if (_isSpamOrGarbageTrack(s, currentSong: currentSong)) continue;
+      final fp = _songDedupFingerprint(s);
+      if (seenFingerprints.contains(fp)) continue;
+
+      if (isSamePrimaryArtist(s)) {
+        seenIds.add(idKey);
+        seenFingerprints.add(fp);
+        sameArtistMatched.add(s);
+      } else if (_songMatchesRegionProfile(s, profile)) {
+        seenIds.add(idKey);
+        seenFingerprints.add(fp);
+        peerMatched.add(s);
+      }
+    }
+
+    // 2. 补充歌手自己的热门代表作作为同频锚点
+    for (final s in artistHotSongs) {
+      final idKey = s.id.trim().toLowerCase();
+      if (idKey.isEmpty || seenIds.contains(idKey)) continue;
+      if (_isSpamOrGarbageTrack(s, currentSong: currentSong)) continue;
+      final fp = _songDedupFingerprint(s);
+      if (seenFingerprints.contains(fp)) continue;
+      seenIds.add(idKey);
+      seenFingerprints.add(fp);
+      sameArtistMatched.add(s);
+    }
+
+    // 3. 按 YT Music 风格交错编排：每列（4 首）最多穿插 1~2 首原歌手代表作 + 2~3 首同语系同风曲目
+    final result = <Song>[];
+    int peerIdx = 0;
+    int artistIdx = 0;
+    while (result.length < 16 &&
+        (peerIdx < peerMatched.length ||
+            artistIdx < sameArtistMatched.length)) {
+      // 每 4 首里先放 2~3 首同行好歌，再放 1 首当前歌手热歌
+      for (int i = 0;
+          i < 3 && peerIdx < peerMatched.length && result.length < 16;
+          i++) {
+        result.add(peerMatched[peerIdx++]);
+      }
+      if (artistIdx < sameArtistMatched.length && result.length < 16) {
+        result.add(sameArtistMatched[artistIdx++]);
+      }
+    }
+    return result;
+  }
+
+  Future<List<Song>> _fetchCoOccurringPlaylistSongs(
+    KugouApiClient api, {
+    required List<KugouPlaylistBrief> playlists,
+    required _SongRegionProfile profile,
+    required String? primaryArtistName,
+    required List<String> tags,
+  }) async {
+    try {
+      final selectedGids = <String>[];
+      final artistLower = (primaryArtistName ?? '').trim().toLowerCase();
+
+      // 优先挑选合集/风格歌单（不局限于“某歌手全部歌曲”），这样能同时挖出同曲风的其他优质音乐人
+      for (final p in playlists) {
+        final gid = (p.globalCollectionId ?? '').trim();
+        if (gid.isEmpty || selectedGids.contains(gid)) continue;
+        final nameLower = p.name.toLowerCase();
+        final isSingleArtistAll = artistLower.isNotEmpty &&
+            (nameLower.contains('所有') ||
+                nameLower.contains('全集') ||
+                nameLower.contains('合集'));
+        if (!isSingleArtistAll) {
+          selectedGids.add(gid);
+          if (selectedGids.length >= 2) break;
+        }
+      }
+      for (final p in playlists) {
+        if (selectedGids.length >= 2) break;
+        final gid = (p.globalCollectionId ?? '').trim();
+        if (gid.isNotEmpty && !selectedGids.contains(gid)) {
+          selectedGids.add(gid);
+        }
+      }
+
+      // 针对欧美/日系/韩系歌曲，额外并发搜一个同语系精品歌单，确保即使原歌单全是单人歌单也能推荐出同风格音乐人
+      final styleQuery = switch (profile) {
+        _SongRegionProfile.western =>
+          tags.isNotEmpty ? '欧美 ${tags.first}' : '欧美流行精选',
+        _SongRegionProfile.japanese =>
+          tags.isNotEmpty ? '日系 ${tags.first}' : '日系流行精选',
+        _SongRegionProfile.korean =>
+          tags.isNotEmpty ? '韩语 ${tags.first}' : '韩系流行精选',
+        _SongRegionProfile.chinese =>
+          tags.isNotEmpty ? '华语 ${tags.first}' : '',
+      };
+      if (styleQuery.isNotEmpty && selectedGids.length < 3) {
+        final styleLists = await api
+            .searchPlaylists(styleQuery, page: 1, pagesize: 4)
+            .catchError((_) => null);
+        if (styleLists != null) {
+          for (final item in styleLists) {
+            final gid = (item.globalCollectionId ?? '').trim();
+            if (gid.isNotEmpty && !selectedGids.contains(gid)) {
+              selectedGids.add(gid);
+              break;
+            }
+          }
+        }
+      }
+
+      if (selectedGids.isEmpty) return const <Song>[];
+      final detailLists = await Future.wait(
+        selectedGids.take(3).map(
+          (gid) => api
+              .getPlaylistSongs(gid, page: 1, pagesize: 30)
+              .catchError((_) => null),
+        ),
+      );
+      final out = <Song>[];
+      for (final d in detailLists) {
+        if (d == null) continue;
+        for (final s in d.songs) {
+          out.add(s.toSong());
+        }
+      }
+      return out;
+    } catch (_) {
+      return const <Song>[];
+    }
   }
 
   Future<List<KugouPlaylistBrief>> _fetchRecommendedPlaylists(
@@ -675,7 +1038,13 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
     }
   }
 
-  Future<({String? avatarUrl, List<KugouAlbumBrief> albums})>
+  Future<
+    ({
+      String? avatarUrl,
+      List<KugouAlbumBrief> albums,
+      List<Song> hotSongs,
+    })
+  >
   _fetchPrimaryArtistBundle(
     KugouApiClient api, {
     required String? artistId,
@@ -702,68 +1071,193 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
         }
       }
       if (resolvedId == null || resolvedId.isEmpty) {
-        return (avatarUrl: fallbackAvatar, albums: const <KugouAlbumBrief>[]);
+        return (
+          avatarUrl: fallbackAvatar,
+          albums: const <KugouAlbumBrief>[],
+          hotSongs: const <Song>[],
+        );
       }
       final res = await Future.wait([
         api.getArtistDetail(resolvedId).catchError((_) => null),
         api
             .getArtistAlbums(resolvedId, page: 1, pagesize: 14, sort: 'hot')
             .catchError((_) => null),
+        api
+            .getArtistAudios(resolvedId, page: 1, pagesize: 20, sort: 'hot')
+            .catchError((_) => null),
       ]);
       final detail = res[0] as KugouArtistDetail?;
       final albumsRes = res[1] as KugouArtistAlbums?;
+      final audiosRes = res[2] as KugouArtistAudios?;
       final avatar = YtMoreMenu.upgradeArtworkUri(
         (detail?.avatarUrl != null && detail!.avatarUrl!.isNotEmpty)
             ? detail.avatarUrl
             : fallbackAvatar,
       );
+      final hotSongs = (audiosRes?.songs ?? const <KugouSongDetail>[])
+          .map((e) => e.toSong().copyWith(artistId: e.artistId ?? resolvedId))
+          .toList();
       return (
         avatarUrl: avatar,
         albums: albumsRes?.albums ?? const <KugouAlbumBrief>[],
+        hotSongs: hotSongs,
       );
     } catch (_) {
-      return (avatarUrl: null, albums: const <KugouAlbumBrief>[]);
+      return (
+        avatarUrl: null,
+        albums: const <KugouAlbumBrief>[],
+        hotSongs: const <Song>[],
+      );
+    }
+  }
+
+  static List<String> _fallbackPeersForProfile(
+    _SongRegionProfile profile,
+    String? primaryArtistName,
+    List<String> tags,
+  ) {
+    final lower = (primaryArtistName ?? '').toLowerCase();
+    switch (profile) {
+      case _SongRegionProfile.western:
+        if (lower.contains('taylor') ||
+            lower.contains('avril') ||
+            lower.contains('katy') ||
+            lower.contains('kelly') ||
+            lower.contains('olivia') ||
+            lower.contains('carly')) {
+          return const [
+            'Avril Lavigne',
+            'Taylor Swift',
+            'Katy Perry',
+            'Kelly Clarkson',
+            'Olivia Rodrigo',
+            'Carly Rae Jepsen',
+            'Sabrina Carpenter',
+            'Ariana Grande',
+            'Billie Eilish',
+            'Selena Gomez',
+          ];
+        }
+        return const [
+          'Ed Sheeran',
+          'Taylor Swift',
+          'Avril Lavigne',
+          'Maroon 5',
+          'OneRepublic',
+          'Charlie Puth',
+          'Coldplay',
+          'Ariana Grande',
+          'Dua Lipa',
+          'Shawn Mendes',
+        ];
+      case _SongRegionProfile.japanese:
+        return const [
+          'YOASOBI',
+          'Yorushika',
+          'Lilas Ikuta',
+          'Aimer',
+          'Official HIGE DANdism',
+          'Kenshi Yonezu',
+          'Mrs. GREEN APPLE',
+          'ZUTOMAYO',
+          'Yuuri',
+          'Vaundy',
+        ];
+      case _SongRegionProfile.korean:
+        return const [
+          'IU',
+          'NewJeans',
+          'aespa',
+          'BLACKPINK',
+          'LE SSERAFIM',
+          'TWICE',
+          'TAEYEON',
+          '(G)I-DLE',
+        ];
+      case _SongRegionProfile.chinese:
+        return const [
+          '周杰伦',
+          '林俊杰',
+          '邓紫棋',
+          '陈奕迅',
+          '毛不易',
+          '薛之谦',
+          '李荣浩',
+          '蔡健雅',
+        ];
     }
   }
 
   Future<List<_SimilarArtistCardData>> _resolveSimilarArtists(
     KugouApiClient api, {
+    required _SongRegionProfile profile,
+    required String? primaryArtistName,
+    required List<String> tags,
     required List<Song> recommendPool,
     required List<String> excludeNames,
   }) async {
     final excluded = excludeNames.map((e) => e.trim().toLowerCase()).toSet();
+    if (primaryArtistName != null && primaryArtistName.trim().isNotEmpty) {
+      excluded.add(primaryArtistName.trim().toLowerCase());
+    }
+
     final candidateNames = <String>[];
     final fallbackCovers = <String, String?>{};
+
+    // 1. 先从满足当前歌曲语系画像的关联曲目里提取同行歌手（严格过滤不匹配语系的歌手）
     for (final s in recommendPool) {
+      if (_isSpamOrGarbageTrack(s, currentSong: widget.song)) continue;
+      if (!_songMatchesRegionProfile(s, profile)) continue;
       for (final name in splitSongArtistNames(s.artist)) {
         final clean = name.trim();
         final lower = clean.toLowerCase();
         if (clean.isEmpty ||
             isUnknownArtist(clean) ||
-            excluded.contains(lower)) {
+            excluded.contains(lower) ||
+            !_artistMatchesRegionProfile(clean, profile)) {
           continue;
         }
         excluded.add(lower);
         candidateNames.add(clean);
         fallbackCovers[clean] = s.artworkUri;
-        if (candidateNames.length >= 6) break;
+        if (candidateNames.length >= 7) break;
       }
-      if (candidateNames.length >= 6) break;
+      if (candidateNames.length >= 7) break;
     }
+
+    // 2. 若同语系候选不足 6 位，自动补齐同语系/同流派代表音乐人
+    if (candidateNames.length < 6) {
+      for (final peer in _fallbackPeersForProfile(
+        profile,
+        primaryArtistName,
+        tags,
+      )) {
+        final clean = peer.trim();
+        final lower = clean.toLowerCase();
+        if (clean.isEmpty || excluded.contains(lower)) continue;
+        excluded.add(lower);
+        candidateNames.add(clean);
+        if (candidateNames.length >= 7) break;
+      }
+    }
+
     if (candidateNames.isEmpty) return const [];
 
     final futures = candidateNames.map((name) async {
       try {
-        final hits = await api.searchArtists(name, pagesize: 3);
+        final hits = await api.searchArtists(name, pagesize: 5);
         if (hits != null && hits.isNotEmpty) {
-          KugouArtistBrief picked = hits.first;
+          KugouArtistBrief? picked;
           final lower = name.toLowerCase();
           for (final h in hits) {
-            if (h.name.trim().toLowerCase() == lower) {
+            final hName = h.name.trim();
+            if (hName.toLowerCase() == lower ||
+                hName.toLowerCase().contains(lower)) {
               picked = h;
               break;
             }
           }
+          picked ??= hits.first;
           KugouArtistDetail? detail;
           if (picked.id.isNotEmpty) {
             detail = await api
@@ -781,7 +1275,7 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
           ];
           return _SimilarArtistCardData(
             id: picked.id,
-            name: picked.name.isNotEmpty ? picked.name : name,
+            name: name,
             avatarUrl: avatar,
             subtitle: statsParts.isNotEmpty
                 ? statsParts.join(' · ')
@@ -798,7 +1292,9 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
     });
 
     final resolved = await Future.wait(futures);
-    return resolved;
+    return resolved
+        .where((a) => a.avatarUrl != null && a.avatarUrl!.isNotEmpty)
+        .toList();
   }
 
   Future<Map<String, dynamic>?> _fetchAlbumRaw(
@@ -1065,80 +1561,83 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
 
   @override
   Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: YtPaletteTheme.instance,
-      builder: (context, _) {
-        return ClipRRect(
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-          child: Container(
-            decoration: YtPaletteTheme.drawerDecoration(),
-            child: Column(
-              children: [
-                _buildTopBar(),
-                Expanded(
-                  child: Listener(
-                    behavior: HitTestBehavior.translucent,
-                    onPointerDown: (e) {
-                      _pointerStartY = e.position.dy;
-                      _capturingPullDown = false;
-                      _lastStepDy = 0.0;
-                    },
-                    onPointerMove: (e) {
-                      final startY = _pointerStartY;
-                      if (startY == null) return;
-                      final totalDy = e.position.dy - startY;
-                      final atTop =
-                          !_scrollController.hasClients ||
-                          _scrollController.offset <= 1.0;
-                      if (!_capturingPullDown && totalDy > 8.0 && atTop) {
-                        _capturingPullDown = true;
-                      }
-                      if (_capturingPullDown) {
-                        if (_scrollController.hasClients &&
-                            _scrollController.offset > 0) {
-                          _scrollController.jumpTo(0);
-                        }
-                        _lastStepDy = e.delta.dy;
-                        widget.onVerticalDragUpdate?.call(
-                          DragUpdateDetails(
-                            globalPosition: e.position,
-                            localPosition: e.localPosition,
-                            delta: Offset(0, e.delta.dy),
-                            primaryDelta: e.delta.dy,
-                          ),
-                        );
-                      }
-                    },
-                    onPointerUp: (_) {
-                      if (_capturingPullDown) {
-                        _capturingPullDown = false;
-                        final velocity = _lastStepDy * 55.0;
-                        widget.onVerticalDragEnd?.call(
-                          DragEndDetails(
-                            velocity: Velocity(
-                              pixelsPerSecond: Offset(0, velocity),
-                            ),
-                            primaryVelocity: velocity,
-                          ),
-                        );
-                      }
-                      _pointerStartY = null;
-                    },
-                    onPointerCancel: (_) {
-                      if (_capturingPullDown) {
-                        _capturingPullDown = false;
-                        widget.onVerticalDragEnd?.call(DragEndDetails());
-                      }
-                      _pointerStartY = null;
-                    },
-                    child: _buildBody(),
-                  ),
-                ),
-              ],
+    return ClipRRect(
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+      child: Container(
+        decoration: BoxDecoration(
+          color: const Color(0xFF0A0A0A).withValues(alpha: 0.72),
+          border: Border(
+            top: BorderSide(
+              color: Colors.white.withValues(alpha: 0.10),
+              width: 0.6,
             ),
           ),
-        );
-      },
+        ),
+        child: Column(
+          children: [
+            _buildTopBar(),
+            Expanded(
+              child: Listener(
+                behavior: HitTestBehavior.translucent,
+                onPointerDown: (e) {
+                  _pointerStartY = e.position.dy;
+                  _capturingPullDown = false;
+                  _lastStepDy = 0.0;
+                },
+                onPointerMove: (e) {
+                  final startY = _pointerStartY;
+                  if (startY == null) return;
+                  final totalDy = e.position.dy - startY;
+                  final atTop =
+                      !_scrollController.hasClients ||
+                      _scrollController.offset <= 1.0;
+                  if (!_capturingPullDown && totalDy > 8.0 && atTop) {
+                    _capturingPullDown = true;
+                  }
+                  if (_capturingPullDown) {
+                    if (_scrollController.hasClients &&
+                        _scrollController.offset > 0) {
+                      _scrollController.jumpTo(0);
+                    }
+                    _lastStepDy = e.delta.dy;
+                    widget.onVerticalDragUpdate?.call(
+                      DragUpdateDetails(
+                        globalPosition: e.position,
+                        localPosition: e.localPosition,
+                        delta: Offset(0, e.delta.dy),
+                        primaryDelta: e.delta.dy,
+                      ),
+                    );
+                  }
+                },
+                onPointerUp: (_) {
+                  if (_capturingPullDown) {
+                    _capturingPullDown = false;
+                    final velocity = _lastStepDy * 55.0;
+                    widget.onVerticalDragEnd?.call(
+                      DragEndDetails(
+                        velocity: Velocity(
+                          pixelsPerSecond: Offset(0, velocity),
+                        ),
+                        primaryVelocity: velocity,
+                      ),
+                    );
+                  }
+                  _pointerStartY = null;
+                },
+                onPointerCancel: (_) {
+                  if (_capturingPullDown) {
+                    _capturingPullDown = false;
+                    widget.onVerticalDragEnd?.call(DragEndDetails());
+                  }
+                  _pointerStartY = null;
+                },
+                child: _buildBody(),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -1231,7 +1730,7 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
       behavior: HitTestBehavior.opaque,
       onTap: onTap,
       child: Padding(
-        padding: const EdgeInsets.only(top: 6, bottom: 10),
+        padding: const EdgeInsets.only(top: 6, bottom: 9),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1240,20 +1739,17 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
               label,
               style: TextStyle(
                 color: selected ? Colors.white : Colors.white54,
-                fontSize: 18.5,
-                fontWeight: selected ? FontWeight.w900 : FontWeight.w700,
-                letterSpacing: -0.2,
-                shadows: selected
-                    ? const [Shadow(color: Colors.white, blurRadius: 0.35)]
-                    : null,
+                fontSize: 16.5,
+                fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                letterSpacing: -0.1,
               ),
             ),
             const SizedBox(height: 5),
             AnimatedContainer(
               duration: const Duration(milliseconds: 180),
               curve: Curves.easeOutCubic,
-              height: 2.4,
-              width: selected ? 34.0 : 0.0,
+              height: 2.2,
+              width: selected ? 30.0 : 0.0,
               decoration: BoxDecoration(
                 color: Colors.white,
                 borderRadius: BorderRadius.circular(2),
@@ -1270,12 +1766,9 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
       text,
       style: const TextStyle(
         color: Colors.white,
-        fontSize: 20.5,
-        fontWeight: FontWeight.w900,
-        letterSpacing: -0.3,
-        shadows: [
-          Shadow(color: Colors.white, blurRadius: 0.35),
-        ],
+        fontSize: 18.0,
+        fontWeight: FontWeight.w800,
+        letterSpacing: -0.2,
       ),
     );
   }
@@ -1365,7 +1858,7 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
     );
   }
 
-  /// 1. 「你可能还喜欢」—— 4 行一列横向分页滑动（1:1 复刻原版 YT Music 56x56 封面、4px 小圆角、加粗字重）
+  /// 1. 「你可能还喜欢」—— 4 行一列横向分页滑动（50x50 封面、4px 小圆角、协调字号）
   Widget _buildYouMayLikeSection(List<Song> songs) {
     final columns = <List<Song>>[];
     for (int i = 0; i < songs.length; i += 4) {
@@ -1381,9 +1874,9 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: _ytSectionTitle('你可能还喜欢'),
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 10),
         SizedBox(
-          height: math.min(4, songs.length) * 72.0,
+          height: math.min(4, songs.length) * 64.0,
           child: ListView.separated(
             scrollDirection: Axis.horizontal,
             physics: const BouncingScrollPhysics(),
@@ -1413,7 +1906,7 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
     );
   }
 
-  /// 2. 「推荐的播放列表」—— 1:1 复刻原版 YT Music 大号正方形歌单卡片横向画廊
+  /// 2. 「推荐的播放列表」—— 正方形歌单卡片横向画廊
   Widget _buildRecommendedPlaylistsSection(List<KugouPlaylistBrief> playlists) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1422,9 +1915,9 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: _ytSectionTitle('推荐的播放列表'),
         ),
-        const SizedBox(height: 14),
+        const SizedBox(height: 12),
         SizedBox(
-          height: 222,
+          height: 206,
           child: ListView.separated(
             scrollDirection: Axis.horizontal,
             physics: const BouncingScrollPhysics(),
@@ -1445,27 +1938,27 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
                   _openBriefPlaylist(item);
                 },
                 child: SizedBox(
-                  width: 160,
+                  width: 150,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       ClipRRect(
                         borderRadius: BorderRadius.circular(8),
                         child: Container(
-                          width: 160,
-                          height: 160,
+                          width: 150,
+                          height: 150,
                           color: Colors.white.withValues(alpha: 0.08),
                           child: (cover != null && cover.isNotEmpty)
                               ? CachedNetworkImage(
                                   imageUrl: cover,
-                                  memCacheWidth: 420,
-                                  memCacheHeight: 420,
+                                  memCacheWidth: 400,
+                                  memCacheHeight: 400,
                                   fit: BoxFit.cover,
                                   errorWidget: (_, _, _) => const Center(
                                     child: Icon(
                                       Icons.queue_music_rounded,
                                       color: Colors.white38,
-                                      size: 40,
+                                      size: 38,
                                     ),
                                   ),
                                 )
@@ -1473,33 +1966,33 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
                                   child: Icon(
                                     Icons.queue_music_rounded,
                                     color: Colors.white38,
-                                    size: 40,
+                                    size: 38,
                                   ),
                                 ),
                         ),
                       ),
-                      const SizedBox(height: 9),
+                      const SizedBox(height: 8),
                       Text(
                         item.name,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           color: Colors.white,
-                          fontSize: 14.5,
-                          fontWeight: FontWeight.w700,
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w600,
                           height: 1.2,
                         ),
                       ),
-                      const SizedBox(height: 3),
+                      const SizedBox(height: 2),
                       Text(
                         subtitleParts.join(' • '),
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           color: Colors.white60,
-                          fontSize: 12.8,
-                          fontWeight: FontWeight.w500,
-                          height: 1.25,
+                          fontSize: 12.0,
+                          fontWeight: FontWeight.w400,
+                          height: 1.22,
                         ),
                       ),
                     ],
@@ -1535,35 +2028,35 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
       },
       borderRadius: BorderRadius.circular(8),
       child: SizedBox(
-        height: 72,
+        height: 64,
         child: Row(
           children: [
             ClipRRect(
               borderRadius: BorderRadius.circular(4),
               child: Container(
-                width: 56,
-                height: 56,
+                width: 50,
+                height: 50,
                 color: Colors.white.withValues(alpha: 0.08),
                 child: (cover != null && cover.isNotEmpty)
                     ? CachedNetworkImage(
                         imageUrl: cover,
-                        memCacheWidth: 180,
-                        memCacheHeight: 180,
+                        memCacheWidth: 160,
+                        memCacheHeight: 160,
                         fit: BoxFit.cover,
                         errorWidget: (_, _, _) => const Icon(
                           Icons.music_note_rounded,
                           color: Colors.white38,
-                          size: 24,
+                          size: 22,
                         ),
                       )
                     : const Icon(
                         Icons.music_note_rounded,
                         color: Colors.white38,
-                        size: 24,
+                        size: 22,
                       ),
               ),
             ),
-            const SizedBox(width: 14),
+            const SizedBox(width: 12),
             Expanded(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -1575,20 +2068,20 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                       color: Colors.white,
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
-                      height: 1.22,
+                      fontSize: 14.0,
+                      fontWeight: FontWeight.w600,
+                      height: 1.2,
                     ),
                   ),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 3),
                   Text(
                     subtitleParts.join(' • '),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                       color: Colors.white60,
-                      fontSize: 13.5,
-                      fontWeight: FontWeight.w500,
+                      fontSize: 12.2,
+                      fontWeight: FontWeight.w400,
                       height: 1.2,
                     ),
                   ),
@@ -1601,7 +2094,7 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
               icon: const Icon(
                 Icons.playlist_play_rounded,
                 color: Colors.white,
-                size: 26,
+                size: 23,
               ),
               onPressed: () {
                 AppHaptics.lightImpact(HapticCategory.control);
@@ -1615,7 +2108,7 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
     );
   }
 
-  /// 3. 「同类音乐人」—— 大号圆形头像横向画廊（1:1 复刻原版 YT Music 中部效果）
+  /// 3. 「同类音乐人」—— 大号圆形头像横向画廊
   Widget _buildSimilarArtistsSection(List<_SimilarArtistCardData> artists) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1624,9 +2117,9 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: _ytSectionTitle('同类音乐人'),
         ),
-        const SizedBox(height: 14),
+        const SizedBox(height: 12),
         SizedBox(
-          height: 204,
+          height: 188,
           child: ListView.separated(
             scrollDirection: Axis.horizontal,
             physics: const BouncingScrollPhysics(),
@@ -1642,26 +2135,26 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
                   widget.onOpenArtist?.call(item.name);
                 },
                 child: SizedBox(
-                  width: 148,
+                  width: 136,
                   child: Column(
                     children: [
                       ClipOval(
                         child: Container(
-                          width: 144,
-                          height: 144,
+                          width: 132,
+                          height: 132,
                           color: Colors.white.withValues(alpha: 0.08),
                           child: (item.avatarUrl != null &&
                                   item.avatarUrl!.isNotEmpty)
                               ? CachedNetworkImage(
                                   imageUrl: item.avatarUrl!,
-                                  memCacheWidth: 380,
-                                  memCacheHeight: 380,
+                                  memCacheWidth: 360,
+                                  memCacheHeight: 360,
                                   fit: BoxFit.cover,
                                   errorWidget: (_, _, _) => const Center(
                                     child: Icon(
                                       Icons.person_rounded,
                                       color: Colors.white38,
-                                      size: 46,
+                                      size: 42,
                                     ),
                                   ),
                                 )
@@ -1669,12 +2162,12 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
                                   child: Icon(
                                     Icons.person_rounded,
                                     color: Colors.white38,
-                                    size: 46,
+                                    size: 42,
                                   ),
                                 ),
                         ),
                       ),
-                      const SizedBox(height: 10),
+                      const SizedBox(height: 8),
                       Text(
                         item.name,
                         maxLines: 1,
@@ -1682,12 +2175,12 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
                         textAlign: TextAlign.center,
                         style: const TextStyle(
                           color: Colors.white,
-                          fontSize: 14.5,
-                          fontWeight: FontWeight.w700,
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w600,
                           height: 1.2,
                         ),
                       ),
-                      const SizedBox(height: 3),
+                      const SizedBox(height: 2),
                       Text(
                         item.subtitle,
                         maxLines: 1,
@@ -1695,7 +2188,7 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
                         textAlign: TextAlign.center,
                         style: const TextStyle(
                           color: Colors.white60,
-                          fontSize: 12.5,
+                          fontSize: 11.8,
                           height: 1.2,
                         ),
                       ),
@@ -1710,7 +2203,7 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
     );
   }
 
-  /// 4. 「更多曲目 - <歌手名>」—— 顶部歌手小圆头像 + 底部大号 1:1 正方形专辑卡片
+  /// 4. 「更多曲目 - <歌手名>」—— 顶部歌手小圆头像 + 底部 1:1 正方形专辑卡片
   Widget _buildMoreFromArtistAlbumsSection(_YtSongInfoData info) {
     final artistName = info.primaryArtistName ?? widget.song.artist;
     final avatar = info.primaryArtistAvatar;
@@ -1730,8 +2223,8 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
               children: [
                 ClipOval(
                   child: Container(
-                    width: 40,
-                    height: 40,
+                    width: 38,
+                    height: 38,
                     color: Colors.white.withValues(alpha: 0.10),
                     child: (avatar != null && avatar.isNotEmpty)
                         ? CachedNetworkImage(
@@ -1742,13 +2235,13 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
                             errorWidget: (_, _, _) => const Icon(
                               Icons.person_rounded,
                               color: Colors.white54,
-                              size: 22,
+                              size: 20,
                             ),
                           )
                         : const Icon(
                             Icons.person_rounded,
                             color: Colors.white54,
-                            size: 22,
+                            size: 20,
                           ),
                   ),
                 ),
@@ -1761,7 +2254,7 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
                         '更多曲目 -',
                         style: TextStyle(
                           color: Colors.white60,
-                          fontSize: 12,
+                          fontSize: 11.5,
                           height: 1.15,
                         ),
                       ),
@@ -1772,12 +2265,9 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           color: Colors.white,
-                          fontSize: 19.5,
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: -0.2,
-                          shadows: [
-                            Shadow(color: Colors.white, blurRadius: 0.35),
-                          ],
+                          fontSize: 17.5,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -0.1,
                         ),
                       ),
                     ],
@@ -1792,9 +2282,9 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
             ),
           ),
         ),
-        const SizedBox(height: 14),
+        const SizedBox(height: 12),
         SizedBox(
-          height: 218,
+          height: 202,
           child: ListView.separated(
             scrollDirection: Axis.horizontal,
             physics: const BouncingScrollPhysics(),
@@ -1816,27 +2306,27 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
                   _openBriefAlbum(albumBrief);
                 },
                 child: SizedBox(
-                  width: 160,
+                  width: 150,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       ClipRRect(
                         borderRadius: BorderRadius.circular(8),
                         child: Container(
-                          width: 160,
-                          height: 160,
+                          width: 150,
+                          height: 150,
                           color: Colors.white.withValues(alpha: 0.08),
                           child: (cover != null && cover.isNotEmpty)
                               ? CachedNetworkImage(
                                   imageUrl: cover,
-                                  memCacheWidth: 420,
-                                  memCacheHeight: 420,
+                                  memCacheWidth: 400,
+                                  memCacheHeight: 400,
                                   fit: BoxFit.cover,
                                   errorWidget: (_, _, _) => const Center(
                                     child: Icon(
                                       Icons.album_rounded,
                                       color: Colors.white38,
-                                      size: 38,
+                                      size: 36,
                                     ),
                                   ),
                                 )
@@ -1844,7 +2334,7 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
                                   child: Icon(
                                     Icons.album_rounded,
                                     color: Colors.white38,
-                                    size: 38,
+                                    size: 36,
                                   ),
                                 ),
                         ),
@@ -1856,20 +2346,20 @@ class _YtSongInfoDrawerContentState extends State<_YtSongInfoDrawerContent> {
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           color: Colors.white,
-                          fontSize: 14.5,
-                          fontWeight: FontWeight.w700,
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w600,
                           height: 1.2,
                         ),
                       ),
-                      const SizedBox(height: 3),
+                      const SizedBox(height: 2),
                       Text(
                         subtitleParts.join(' • '),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           color: Colors.white60,
-                          fontSize: 12.8,
-                          fontWeight: FontWeight.w500,
+                          fontSize: 12.0,
+                          fontWeight: FontWeight.w400,
                           height: 1.2,
                         ),
                       ),

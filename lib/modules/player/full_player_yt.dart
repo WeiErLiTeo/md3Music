@@ -28,8 +28,6 @@ import 'yt/yt_main_view.dart';
 import 'yt/yt_more_menu.dart';
 import 'yt/yt_song_info_drawer.dart';
 
-export 'yt/yt_background.dart' show YtPlayerBackgroundSettingsCard;
-
 /// YouTube Music 风格的播放页界面
 class FullPlayerYt extends StatefulWidget {
   final bool dockMode;
@@ -146,7 +144,10 @@ class _FullPlayerYtState extends State<FullPlayerYt>
     if (_systemUiInitialized) return;
     _systemUiInitialized = true;
     final route = ModalRoute.of(context);
-    if (route is DraggablePlayerRoute && route.isDragMode) {
+    if (route is DraggablePlayerRoute && !widget.dockMode) {
+      // 全程绑定 _dragRoute 交给 PlayerSystemUiScope（AnnotatedRegion）管理竖屏系统栏明暗，
+      // 仅在横屏沉浸开启时才调用平台 SystemChrome.setEnabledSystemUIMode，
+      // 避免竖屏退出播放页尾帧触发 manual -> edgeToEdge 窗口内边距重排导致最后一下卡顿。
       _dragRoute = route;
       route.controller.addStatusListener(_onDragRouteStatus);
     } else if (route == null || widget.dockMode) {
@@ -154,6 +155,14 @@ class _FullPlayerYtState extends State<FullPlayerYt>
       _systemUiModified = false;
     } else {
       _dragRoute = null;
+      _applyLandscapeImmersiveIfNeeded();
+    }
+  }
+
+  void _applyLandscapeImmersiveIfNeeded() {
+    final view = WidgetsBinding.instance.platformDispatcher.views.first;
+    final isLandscape = view.physicalSize.width > view.physicalSize.height;
+    if (isLandscape && kLandscapeImmersiveEnabled) {
       applyImmersiveForOrientation();
       _systemUiModified = true;
     }
@@ -161,13 +170,9 @@ class _FullPlayerYtState extends State<FullPlayerYt>
 
   void _onDragRouteStatus(AnimationStatus status) {
     if (status == AnimationStatus.completed) {
-      _dragRoute?.controller.removeStatusListener(_onDragRouteStatus);
-      _dragRoute = null;
-      // 延后一帧切换沉浸式系统栏，避免展开落位帧与系统栏内边距重排/全页重建相撞
       SchedulerBinding.instance.scheduleFrameCallback((_) {
         if (!mounted || _isDismissing) return;
-        applyImmersiveForOrientation();
-        _systemUiModified = true;
+        _applyLandscapeImmersiveIfNeeded();
       });
     } else if (status == AnimationStatus.dismissed) {
       _dragRoute?.controller.removeStatusListener(_onDragRouteStatus);

@@ -16,7 +16,6 @@ import '../../album/album_detail_page.dart';
 import '../../artist/artist_detail_page.dart';
 import '../../artist/artist_photo_banner.dart';
 import '../artist_photo_service.dart';
-import 'yt_background.dart';
 import 'yt_lyrics_drawer.dart';
 import 'yt_more_menu.dart';
 
@@ -543,81 +542,84 @@ class _YtArtistDrawerContentState extends State<_YtArtistDrawerContent> {
       (p) => p.currentSong?.id,
     );
 
-    return ListenableBuilder(
-      listenable: YtPaletteTheme.instance,
-      builder: (context, _) {
-        return ClipRRect(
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-          child: Container(
-            decoration: YtPaletteTheme.drawerDecoration(),
-            child: Column(
-              children: [
-                _buildTopBar(),
-                if (_artistNames.length > 1) _buildArtistSwitcherChips(),
-                Expanded(
-                  child: Listener(
-                    behavior: HitTestBehavior.translucent,
-                    onPointerDown: (e) {
-                      _pointerStartY = e.position.dy;
-                      _capturingPullDown = false;
-                      _lastStepDy = 0.0;
-                    },
-                    onPointerMove: (e) {
-                      final startY = _pointerStartY;
-                      if (startY == null) return;
-                      final totalDy = e.position.dy - startY;
-                      final atTop =
-                          !_scrollController.hasClients ||
-                          _scrollController.offset <= 1.0;
-                      if (!_capturingPullDown && totalDy > 8.0 && atTop) {
-                        _capturingPullDown = true;
-                      }
-                      if (_capturingPullDown) {
-                        if (_scrollController.hasClients &&
-                            _scrollController.offset > 0) {
-                          _scrollController.jumpTo(0);
-                        }
-                        _lastStepDy = e.delta.dy;
-                        widget.onVerticalDragUpdate?.call(
-                          DragUpdateDetails(
-                            globalPosition: e.position,
-                            localPosition: e.localPosition,
-                            delta: Offset(0, e.delta.dy),
-                            primaryDelta: e.delta.dy,
-                          ),
-                        );
-                      }
-                    },
-                    onPointerUp: (_) {
-                      if (_capturingPullDown) {
-                        _capturingPullDown = false;
-                        final velocity = _lastStepDy * 55.0;
-                        widget.onVerticalDragEnd?.call(
-                          DragEndDetails(
-                            velocity: Velocity(
-                              pixelsPerSecond: Offset(0, velocity),
-                            ),
-                            primaryVelocity: velocity,
-                          ),
-                        );
-                      }
-                      _pointerStartY = null;
-                    },
-                    onPointerCancel: (_) {
-                      if (_capturingPullDown) {
-                        _capturingPullDown = false;
-                        widget.onVerticalDragEnd?.call(DragEndDetails());
-                      }
-                      _pointerStartY = null;
-                    },
-                    child: _buildBody(currentSongId),
-                  ),
-                ),
-              ],
+    return ClipRRect(
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+      child: Container(
+        decoration: BoxDecoration(
+          color: const Color(0xFF0A0A0A).withValues(alpha: 0.72),
+          border: Border(
+            top: BorderSide(
+              color: Colors.white.withValues(alpha: 0.10),
+              width: 0.6,
             ),
           ),
-        );
-      },
+        ),
+        child: Column(
+          children: [
+            _buildTopBar(),
+            if (_artistNames.length > 1) _buildArtistSwitcherChips(),
+            Expanded(
+              child: Listener(
+                behavior: HitTestBehavior.translucent,
+                onPointerDown: (e) {
+                  _pointerStartY = e.position.dy;
+                  _capturingPullDown = false;
+                  _lastStepDy = 0.0;
+                },
+                onPointerMove: (e) {
+                  final startY = _pointerStartY;
+                  if (startY == null) return;
+                  final totalDy = e.position.dy - startY;
+                  final atTop =
+                      !_scrollController.hasClients ||
+                      _scrollController.offset <= 1.0;
+                  if (!_capturingPullDown && totalDy > 8.0 && atTop) {
+                    _capturingPullDown = true;
+                  }
+                  if (_capturingPullDown) {
+                    if (_scrollController.hasClients &&
+                        _scrollController.offset > 0) {
+                      _scrollController.jumpTo(0);
+                    }
+                    _lastStepDy = e.delta.dy;
+                    widget.onVerticalDragUpdate?.call(
+                      DragUpdateDetails(
+                        globalPosition: e.position,
+                        localPosition: e.localPosition,
+                        delta: Offset(0, e.delta.dy),
+                        primaryDelta: e.delta.dy,
+                      ),
+                    );
+                  }
+                },
+                onPointerUp: (_) {
+                  if (_capturingPullDown) {
+                    _capturingPullDown = false;
+                    final velocity = _lastStepDy * 55.0;
+                    widget.onVerticalDragEnd?.call(
+                      DragEndDetails(
+                        velocity: Velocity(
+                          pixelsPerSecond: Offset(0, velocity),
+                        ),
+                        primaryVelocity: velocity,
+                      ),
+                    );
+                  }
+                  _pointerStartY = null;
+                },
+                onPointerCancel: (_) {
+                  if (_capturingPullDown) {
+                    _capturingPullDown = false;
+                    widget.onVerticalDragEnd?.call(DragEndDetails());
+                  }
+                  _pointerStartY = null;
+                },
+                child: _buildBody(currentSongId),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
