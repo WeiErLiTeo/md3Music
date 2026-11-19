@@ -3364,6 +3364,23 @@ class _SettingsPageState extends State<SettingsPage>
             kHideNavBarOnSecondaryPages.value = value;
           },
         ),
+        // search: 滚动收起 上滑隐藏底栏 跟手 菜单底栏 导航栏 隐藏 navbar scroll collapse
+        // 直读全局判定源、ValueListenableBuilder 订阅（与下方「桌面布局」同模式）：
+        // 本页字段与 app.dart 冷启动播种互不知情时会出现「开关与实际生效相反」。
+        ValueListenableBuilder<bool>(
+          valueListenable: kNavBarScrollCollapseEnabled,
+          builder: (context, scrollCollapseEnabled, _) => SwitchListTile(
+            title: const Text('滚动时收起导航栏'),
+            subtitle: const Text('向上滑动时导航栏跟随手指收起，向下滑动时展开'),
+            value: scrollCollapseEnabled,
+            onChanged: (value) {
+              AppHaptics.lightImpact(HapticCategory.control);
+              // 立即生效：主布局订阅该判定源，重建 ResponsiveScaffold。
+              kNavBarScrollCollapseEnabled.value = value;
+              _settingsRepository.setNavBarScrollCollapseEnabled(value);
+            },
+          ),
+        ),
         // ⑤ 桌面布局：侧栏外壳总开关（默认关，开启后横竖屏皆用）
         _buildGroupLabel('桌面布局', colorScheme),
         // search: 桌面布局 侧栏 大屏 平板 横屏 双栏 工具栏 desktop
@@ -5531,7 +5548,7 @@ class _SettingsPageState extends State<SettingsPage>
           if (supportsViperMaster)
             SwitchListTile(
               title: const Text('蝰蛇母带处理'),
-              subtitle: const Text('10 段均衡 + 限幅的母带级处理链，仅 Android；关闭时输出逐字节透传'),
+              subtitle: const Text('10 段均衡 + 限幅的母带级处理链（Windows 为 4 段近似）；关闭时输出逐字节透传'),
               value: _viperMasterEnabled,
               onChanged: (value) {
                 AppHaptics.lightImpact(HapticCategory.control);

@@ -13,6 +13,8 @@ Widget _host({
   double radius = 0.0,
   int direction = 1,
   Duration readyTimeout = kCoverFlipReadyTimeout,
+  Duration fallbackGrace = kCoverFlipFallbackGrace,
+  Duration fallbackFadeDuration = kCoverFlipFallbackFade,
   Future<bool> Function(String?, double, double)? probe,
 }) => MaterialApp(
   home: CoverFlipCrossfade(
@@ -23,6 +25,8 @@ Widget _host({
     radius: radius,
     direction: direction,
     readyTimeout: readyTimeout,
+    fallbackGrace: fallbackGrace,
+    fallbackFadeDuration: fallbackFadeDuration,
     readinessProbe: probe,
     child: child,
   ),
@@ -441,49 +445,100 @@ void main() {
     expect(find.text('c'), findsOneWidget);
   });
 
-  testWidgets('就绪超时：放弃动画直接换图', (tester) async {
-    final gate = Completer<bool>(); // 永不完成
+  testWidgets('就绪超时进入兜底宽限：旧封面仍在位，宽限内就绪照常翻转', (tester) async {
+    final gate = Completer<bool>();
+    Widget host(String v, String id) => _host(
+      version: v,
+      child: _art(id),
+      probe: (_, _, _) => gate.future,
+      readyTimeout: const Duration(milliseconds: 100),
+      fallbackGrace: const Duration(milliseconds: 400),
+    );
+
+    await tester.pumpWidget(host('a', 'a'));
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(host('b', 'b'));
+    await tester.pump();
+
+    // 就绪超时（>100ms）但仍在宽限：旧封面原地不动，新层不在树上、不淡出。
+    await tester.pump(const Duration(milliseconds: 150));
+    expect(
+      tester
+          .widget<PlayerArtworkImage>(find.byType(PlayerArtworkImage))
+          .artworkUri,
+      'a',
+    );
+    expect(find.text('b'), findsNothing);
+    expect(find.byType(Transform), findsNothing);
+    expect(find.byType(ImageFiltered), findsNothing);
+
+    // 宽限内就绪 → 照常翻转（兜底宽限不吞掉动画）
+    gate.complete(true);
+    await _awaitFlipStart(tester);
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.byType(ImageFiltered), findsOneWidget);
+
+    await tester.pumpAndSettle();
+    expect(find.byType(ImageFiltered), findsNothing);
+    expect(find.text('b'), findsOneWidget);
+    expect(find.byType(PlayerArtworkImage), findsNothing);
+  });
+
+  testWidgets('宽限用尽：兜底交叉淡出，不硬切', (tester) async {
+    final gate = Completer<bool>(); // 永不完成：模拟弱网下新图一直没到
+    Widget host(String v, String id) => _host(
+      version: v,
+      child: _art(id),
+      probe: (_, _, _) => gate.future,
+      readyTimeout: const Duration(milliseconds: 100),
+      fallbackGrace: const Duration(milliseconds: 200),
+      fallbackFadeDuration: const Duration(milliseconds: 200),
+    );
+
+    await tester.pumpWidget(host('a', 'a'));
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(host('b', 'b'));
+    await tester.pump();
+    expect(find.text('b'), findsNothing);
+
+    // 宽限用尽（100 + 200）：进入交叉淡出——新旧两层同时在树上，
+    // 无旋转、无模糊（新图没到，翻过去只有占位白板）。
+    await tester.pump(const Duration(milliseconds: 320));
+    expect(find.text('b'), findsOneWidget);
+    expect(find.byType(PlayerArtworkImage), findsOneWidget);
+    expect(find.byType(Transform), findsNothing);
+    expect(find.byType(ImageFiltered), findsNothing);
+
+    // 淡出收敛：旧层退场，只剩新层
+    await tester.pump(const Duration(milliseconds: 260));
+    expect(find.byType(PlayerArtworkImage), findsNothing);
+    expect(find.text('b'), findsOneWidget);
+  });
+
+  testWidgets('探测返回 false（加载失败）：交叉淡出兜底，不硬切', (tester) async {
     await tester.pumpWidget(
-      _host(
-        version: 'a',
-        child: _art('a'),
-        probe: (_, _, _) => gate.future,
-        readyTimeout: const Duration(milliseconds: 100),
-      ),
+      _host(version: 'a', child: _art('a'), probe: (_, _, _) async => false),
     );
     await tester.pumpAndSettle();
     await tester.pumpWidget(
       _host(
         version: 'b',
         child: _art('b'),
-        probe: (_, _, _) => gate.future,
-        readyTimeout: const Duration(milliseconds: 100),
+        probe: (_, _, _) async => false,
+        fallbackFadeDuration: const Duration(milliseconds: 200),
       ),
-    );
-    await tester.pump();
-    // 超时前：还在等
-    expect(find.text('b'), findsNothing);
-
-    await tester.pump(const Duration(milliseconds: 200));
-    // 超时：旧层退场，直接换图，无动画
-    expect(find.byType(Transform), findsNothing);
-    expect(find.byType(ImageFiltered), findsNothing);
-    expect(find.text('b'), findsOneWidget);
-  });
-
-  testWidgets('探测返回 false（加载失败）：不演过渡，直接换图', (tester) async {
-    await tester.pumpWidget(
-      _host(version: 'a', child: _art('a'), probe: (_, _, _) async => false),
-    );
-    await tester.pumpAndSettle();
-    await tester.pumpWidget(
-      _host(version: 'b', child: _art('b'), probe: (_, _, _) async => false),
     );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
 
+    // 失败即兜底：新层已在树上，旧层仍压在上面淡出，无旋转/模糊
+    expect(find.text('b'), findsOneWidget);
+    expect(find.byType(PlayerArtworkImage), findsOneWidget);
     expect(find.byType(Transform), findsNothing);
     expect(find.byType(ImageFiltered), findsNothing);
+
+    await tester.pumpAndSettle();
+    expect(find.byType(PlayerArtworkImage), findsNothing);
     expect(find.text('b'), findsOneWidget);
   });
 

@@ -18,6 +18,7 @@ const List<({String label, String category, String subpage, String aliases})>
   (label: '强调排版', category: '外观', subpage: '字体与显示', aliases: '强调排版 m3e 字重 typography'),
   (label: '字体与显示', category: '外观', subpage: '字体与显示', aliases: ''),
   (label: '二级页面隐藏菜单底栏', category: '外观', subpage: '导航与布局', aliases: '二级页面 详情页 隐藏底栏 收起导航栏 菜单底栏 底部导航栏 保留导航栏 secondary page hide navigation bar'),
+  (label: '滚动时收起导航栏', category: '外观', subpage: '导航与布局', aliases: '滚动收起 上滑隐藏底栏 跟手 菜单底栏 导航栏 隐藏 navbar scroll collapse'),
   (label: '桌面布局', category: '外观', subpage: '导航与布局', aliases: '桌面布局 侧栏 大屏 平板 横屏 双栏 工具栏 desktop'),
   (label: '启用双栏布局', category: '外观', subpage: '导航与布局', aliases: '双栏 单栏 分栏 左右各半 50% 布局'),
   (label: '悬浮迷你播放器', category: '外观', subpage: '导航与布局', aliases: '悬浮播放器 悬浮迷你播放器 迷你播放器 二级页面 播放栏 圆盘 浮动 关闭 secondary mini player'),

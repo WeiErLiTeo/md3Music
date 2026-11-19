@@ -2151,6 +2151,10 @@ class _MainLayoutState extends State<_MainLayout>
     // 故需监听切换后重建（与 kDesktopModeEnabled 同模式）。
     kHideNavBarOnSecondaryPages.addListener(_onHideNavBarOnSecondaryChanged);
     unawaited(_loadHideNavBarOnSecondaryPages());
+    // 主界面滚动时底栏跟手收起：本 State 的 scrollCollapseEnabled 直接读它，
+    // 切换后需重建（与上一条同一模式）。
+    kNavBarScrollCollapseEnabled.addListener(_onNavBarScrollCollapseChanged);
+    unawaited(_loadNavBarScrollCollapseEnabled());
     // 封面流歌单源：启动时载入持久化值（封面流页自己订阅通知器）。
     unawaited(_loadCoverFlowSource());
     // 悬浮播放器停靠位：启动时载入持久化值；未设置过则按设备形态取默认。
@@ -2237,6 +2241,9 @@ class _MainLayoutState extends State<_MainLayout>
     kDesktopModeEnabled.removeListener(_onDesktopModeChanged);
     kHideNavBarOnSecondaryPages.removeListener(
       _onHideNavBarOnSecondaryChanged,
+    );
+    kNavBarScrollCollapseEnabled.removeListener(
+      _onNavBarScrollCollapseChanged,
     );
     shortcutTabRequest.removeListener(_handleShortcutTabRequest);
     externalMediaRequest.removeListener(_handleExternalMediaRequest);
@@ -2410,6 +2417,22 @@ class _MainLayoutState extends State<_MainLayout>
   }
 
   void _onHideNavBarOnSecondaryChanged() {
+    if (!mounted) return;
+    setState(() {});
+  }
+
+  /// 启动时从持久化载入「滚动时底栏跟手收起」，写入全局
+  /// [kNavBarScrollCollapseEnabled]（默认 false = 关闭）。
+  Future<void> _loadNavBarScrollCollapseEnabled() async {
+    final enabled =
+        await SettingsRepository().getNavBarScrollCollapseEnabled();
+    if (!mounted) return;
+    if (kNavBarScrollCollapseEnabled.value != enabled) {
+      kNavBarScrollCollapseEnabled.value = enabled;
+    }
+  }
+
+  void _onNavBarScrollCollapseChanged() {
     if (!mounted) return;
     setState(() {});
   }
@@ -2849,6 +2872,14 @@ class _MainLayoutState extends State<_MainLayout>
   Widget build(BuildContext context) {
     final tabConfig = context.watch<TabConfigProvider>();
     final visibleTabs = tabConfig.visibleTabs;
+    // 车机侧边面板横跨全高，主界面若被压到 600dp 以下会从横屏 rail 退化成
+    // 带底部导航栏的 compact 布局；页面按整屏高度布局的底部就被底栏槽位遮住。
+    // 只在横屏 + 侧边面板（非底部布局）时让形态判定回到整屏宽度。
+    final carMode = context.watch<CarModeProvider>();
+    final keepLandscapeRail =
+        carMode.active &&
+        !carMode.useBottomLayout &&
+        MediaQuery.orientationOf(context) == Orientation.landscape;
 
     // 安全守卫：如果当前选中索引超出可见 tab 范围，重置到最后一个
     if (_selectedIndex >= visibleTabs.length) {
@@ -2985,6 +3016,13 @@ class _MainLayoutState extends State<_MainLayout>
                       (_secondaryPageOnTop &&
                           kHideNavBarOnSecondaryPages.value),
                   hideRailNavigation: immersive || _secondaryPageOnTop,
+                  // 主界面纵向滚动时底栏跟手收起（默认关）。开关切换后需重建，
+                  // 故与 kHideNavBarOnSecondaryPages 同一模式挂监听。
+                  scrollCollapseEnabled: kNavBarScrollCollapseEnabled.value,
+                  useFullWidthForBreakpoint: keepLandscapeRail,
+                  // 车机模式隐藏了 MiniPlayer，rail 布局必须自己让出底部
+                  // 系统 Taskbar（平板横屏）的 inset，否则列表底部被盖住。
+                  reserveBottomInRail: keepLandscapeRail,
                   body: _buildBody(context, visibleTabs, immersive),
                 ),
         ),

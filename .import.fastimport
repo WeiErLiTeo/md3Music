@@ -30809,35 +30809,61 @@ from :2934
 merge :2938
 commit refs/heads/rust-local-force
 mark :2940
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794748937 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794748937 +0800
+data 618
+feat: 新增播放页封面跟手拖拽翻转切歌功能
+
+- 新增 cover_swipe_flip_physics.dart 纯逻辑模块，处理手势进度映射、运动学计算、松手判定及回弹分档
+- 新增 cover_flip_physics.dart 支持可配置过冲系数的旋转进度计算，兼容原有默认行为
+- 修改 full_player_am.dart 接入手势逻辑，新增可切换邻居检测与切歌回调
+- 新增 cover_swipe_flip_physics_test.dart 与 full_player_am_cover_swipe_test.dart 等测试用例
+- 修改 cover_flip_crossfade.dart 支持手势路径与自动过渡互斥的双时钟动画系统，新增手势识别逻辑
+from :2939
+commit refs/heads/rust-local-force
+mark :2941
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794752723 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794752723 +0800
+data 536
+feat(播放器): 优化封面翻转动画及阴影处理，修复拖动中断问题
+
+- 新增封面翻转时的目标邻居封面构建逻辑，解决翻到一半穿帮问题
+- 新增 flipActive 状态控制，在翻转时淡出静止方盒阴影，避免侧立时显示整块方形阴影
+- 修复拖动中版本变化打断手势的问题，保证拖动过程流畅
+- 新增测试用例验证翻转时卡背显示目标封面及拖动不被打断的功能
+- 调整封面拖动进度的处理逻辑，明确画面取值范围为 [0, 1]
+from :2940
+commit refs/heads/rust-local-force
+mark :2942
 author vcexml <3356141621@qq.com> 1794652723 +0800
 committer vcexml <3356141621@qq.com> 1794652723 +0800
 data 118
 fix(tv): 目录选择弹层首焦点随层级切换，修复根层焦点落在禁用按钮导致遥控器反复按键
 from :2937
 commit refs/heads/rust-local-force
-mark :2941
+mark :2943
 author github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1794652409 +0000
 committer github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1794652409 +0000
 data 32
 chore: update GitHub star trend
 from :2937
 commit refs/heads/rust-local-force
-mark :2942
+mark :2944
 author vcexml <3356141621@qq.com> 1794652726 +0800
 committer vcexml <3356141621@qq.com> 1794652726 +0800
 data 97
 Merge branch 'rust-local-two' of https://github.com/zzyoxml/private_md3music into rust-local-two
-from :2940
-merge :2941
+from :2942
+merge :2943
 commit refs/heads/rust-local-force
-mark :2943
+mark :2945
 author vcexml <3356141621@qq.com> 1794665276 +0800
 committer vcexml <3356141621@qq.com> 1794665276 +0800
 data 110
 feat(tv): 本地音乐搜索框收起为图标并并入分类行，避免遥控路过弹键盘与多余留白
-from :2942
+from :2944
 commit refs/heads/rust-local-force
-mark :2944
+mark :2946
 author vcexml <3356141621@qq.com> 1794713636 +0800
 committer vcexml <3356141621@qq.com> 1794713636 +0800
 data 527
@@ -30845,9 +30871,9 @@ Windows Zen 沉浸切换消除 DWM 过渡残影；发现页区块默认按平台
 
 - flutter_window: 进/出全屏不再 ShowWindow(SW_RESTORE)（真实中间态 + DWM 还原动画是「窗口套窗口」「缩小黑圈」残影的来源）；最大化经 SetWindowPlacement 干净退出内部状态，退出路径先恢复样式再单步套快照（无边框下缺 WS_MAXIMIZEBOX 会静默跳过最大化）
 - discover: Windows 桌面五区块默认全显示，Android/TV 维持原默认；已持久化配置不受影响
-from :2943
+from :2945
 commit refs/heads/rust-local-force
-mark :2945
+mark :2947
 author vcexml <3356141621@qq.com> 1794716383 +0800
 committer vcexml <3356141621@qq.com> 1794716383 +0800
 data 624
@@ -30855,55 +30881,62 @@ Zen 退出进一步消除 DWM 最大化动画与中间帧残影
 
 - 进/出全屏改为「隐藏 → 原生形态一步落定 → 显示」：进入用 SW_RESTORE 干净退出内部最大化状态（保留还原矩形），退出恢复样式后直接 SW_SHOWMAXIMIZED / 摆回快照矩形，不再走 SetWindowPlacement（其先落还原矩形再最大化的两段过程会被 DWM 抓到中间帧）
 - 切换期间系统级关闭 MinAnimate：DWMWA_TRANSITIONS_TO_DISABLED 对 SetWindowPlacement/最大化动画实测无效，SPI_SETANIMATION 才能压掉旧窗口纹理从还原矩形放大的残影；切换完恢复原值
-from :2944
+from :2946
 commit refs/heads/rust-local-force
-mark :2946
+mark :2948
 author vcexml <3356141621@qq.com> 1794716919 +0800
 committer vcexml <3356141621@qq.com> 1794716919 +0800
 data 41
 docs: 更新 changelog 至 v6.4.0 版本
-from :2945
+from :2947
 commit refs/heads/rust-local-force
-mark :2947
+mark :2949
 author vcexml <3356141621@qq.com> 1794717377 +0800
 committer vcexml <3356141621@qq.com> 1794717377 +0800
 data 40
 chore: 更新应用版本号至6.4.0+55
-from :2946
+from :2948
 commit refs/heads/rust-local-force
-mark :2948
+mark :2950
 author vcexml <3356141621@qq.com> 1794719026 +0800
 committer vcexml <3356141621@qq.com> 1794719026 +0800
 data 171
 Gradle wrapper 升至 9.3.1：Flutter stable 3.50 要求 Gradle >= 9.3.1，CI 用 stable 浮动渠道后发版失败；AGP 9.0.1 兼容，本地已验证 APK 构建通过
-from :2947
+from :2949
 commit refs/heads/rust-local-force
-mark :2949
+mark :2951
 author vcexml <3356141621@qq.com> 1794720842 +0800
 committer vcexml <3356141621@qq.com> 1794720842 +0800
 data 163
 AGP 升至 9.1.1：Flutter stable 3.50 要求 AGP >= 9.1.1；本地 Gradle configure 验证通过，aapt2 仅本地网络无法访问 dl.google.com（CI 正常）
-from :2948
+from :2950
 commit refs/heads/rust-local-force
-mark :2950
+mark :2952
 author Little-White3110 <53994162+Little-White3110@users.noreply.github.com> 1794721347 +0800
 committer GitHub <noreply@github.com> 1794721347 +0800
 data 58
 Merge branch 'zzyoxml:rust-local-two' into rust-local-two
 from :2939
-merge :2949
+merge :2951
 commit refs/heads/rust-local-force
-mark :2951
+mark :2953
+author github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1794741110 +0000
+committer github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1794741110 +0000
+data 32
+chore: update GitHub star trend
+from :2952
+commit refs/heads/rust-local-force
+mark :2954
 author Little-White3110 <53994162+Little-White3110@users.noreply.github.com> 1794722222 +0800
 committer GitHub <noreply@github.com> 1794722222 +0800
 data 84
 Merge pull request #190 from Little-White3110/rust-local-two
 
 歌词位置自定义
-from :2949
-merge :2950
+from :2951
+merge :2952
 commit refs/heads/rust-local-force
-mark :2952
+mark :2955
 author vcexml <3356141621@qq.com> 1794725505 +0800
 committer vcexml <3356141621@qq.com> 1794725505 +0800
 data 307
@@ -30913,54 +30946,457 @@ ci: 修复 CI 中 Impeller 检测逻辑的兼容性与准确性
 1. 修复因 aapt2 属性输出顺序不固定导致的检测失败问题
 2. 兼容不同 aapt2 版本的属性输出格式
 3. 新增混淆符号表下载项说明
-from :2951
+from :2954
 commit refs/heads/rust-local-force
-mark :2953
+mark :2956
 author github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1794740543 +0000
 committer github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1794740543 +0000
 data 32
 chore: update GitHub star trend
-from :2952
+from :2955
 commit refs/heads/rust-local-force
-mark :2954
+mark :2957
+author Little-White3110 <53994162+Little-White3110@users.noreply.github.com> 1794752756 +0800
+committer GitHub <noreply@github.com> 1794752756 +0800
+data 58
+Merge branch 'zzyoxml:rust-local-two' into rust-local-two
+from :2953
+merge :2956
+commit refs/heads/rust-local-force
+mark :2958
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794752769 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794752769 +0800
+data 106
+Merge branch 'rust-local-two' of https://github.com/Little-White3110/private_md3music into rust-local-two
+from :2941
+merge :2957
+commit refs/heads/rust-local-force
+mark :2959
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794761006 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794761006 +0800
+data 308
+build(windows): 顶层统一配置NuGet下载逻辑解决锁文件问题
+
+新增Windows CMakeLists.txt中统一解析NuGet CLI的逻辑，将NuGet下载到工程外目录避免锁文件错误，同时复用统一的NuGet变量供插件使用，替换原video_player_win模块内的重复NuGet下载代码。
+from :2958
+commit refs/heads/rust-local-force
+mark :2960
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794761906 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794761906 +0800
+data 331
+feat(cover_flip_crossfade): 新增封面翻转兜底交叉淡出机制
+
+新增就绪超时宽限逻辑，弱网下新图仍可完成翻转动画
+新增探测失败时的交叉淡出兜底，避免瞬切封面闪断
+新增三个配置参数：fallbackGrace、fallbackFadeDuration
+新增对应测试用例覆盖宽限和兜底场景
+from :2959
+commit refs/heads/rust-local-force
+mark :2961
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794764025 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794764025 +0800
+data 311
+feat: 添加扭曲波转场动画相关功能及资源
+
+新增扭曲波着色器文件、Dart 实现代码、样式配置及测试用例，支持从指定源点出发的彩色扭曲波转场效果，包含波前计算、颜色渲染、边缘效果及粒子动画等功能，适配不同类型的转场场景。
+from :2960
+commit refs/heads/rust-local-force
+mark :2962
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794764873 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794764873 +0800
+data 334
+feat: 新增封面流进入播放页的扭曲波过场动画
+
+新增扭曲波过场动画逻辑，支持从点击的封面位置扩散过渡到播放页
+添加 _cardRectOf 方法获取封面布局矩形
+修改 openFullPlayer 和 fullPlayerRoute 方法，新增 waveSource 参数
+实现 _PlayerWaveEntry 组件处理过场动画渲染
+from :2961
+commit refs/heads/rust-local-force
+mark :2963
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794798805 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794798805 +0800
+data 456
+feat: 新增封面进出 Zen 模式的扭曲波转场效果
+
+- 新增反缓动函数实现波前匀速回撤
+- 新增 WaveReveal 组件支持正向扩散与反向回缩转场
+- 新增相关测试用例保障转场逻辑稳定
+- 实现播放页长按封面进出 Zen 模式的波转场
+- 适配两种播放页样式均支持波转场
+- 优化着色器加载时机避免首次转场直接切换
+- 修复反向转场进度映射逻辑解决画面卡顿问题
+from :2962
+commit refs/heads/rust-local-force
+mark :2964
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794799971 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794799971 +0800
+data 341
+refactor(player): 统一长按切换 Zen 模式的逻辑并修复转场闪屏问题
+
+- 新增长按切换 Zen 模式的统一方法 _toggleZenByLongPress
+- 移除调试用的探针计数和日志代码
+- 重构 Zen 转场的 RepaintBoundary 结构，修复页面重建闪屏问题
+- 确保转场时提示层状态正确，避免画面残留
+from :2963
+commit refs/heads/rust-local-force
+mark :2965
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794802930 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794802930 +0800
+data 321
+refactor: 重构Zen模式转场逻辑 优化实时页面显示
+
+- 移除无用的destImage相关代码 简化WaveReveal组件
+- 反向转场时直接透出实时新页面 避免内容冻结
+- 调整转场终点计算时机 解决按钮延迟显示问题
+- 稳定页面子树结构 避免进出Zen模式时的页面重建
+from :2964
+commit refs/heads/rust-local-force
+mark :2966
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794805190 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794805190 +0800
+data 361
+perf: 修复 Windows 平台播放波纹光效与窗口圆角脱节问题
+
+新增 WindowsFullscreen 服务类，实现按窗口实际 DWM 圆角计算波纹边缘半径的逻辑。修改播放器和画笔页面的波纹样式，在 Windows 平台使用窗口实际圆角，全屏/最大化时使用直角，解决四角光效与窗口边缘不匹配的问题。
+from :2965
+commit refs/heads/rust-local-force
+mark :2967
 author vcexml <3356141621@qq.com> 1794791919 +0800
 committer vcexml <3356141621@qq.com> 1794791993 +0800
 data 496
 fix(local-music): 扫描结果按存储键与真实路径跨源去重
 
 MediaStore 主卷卷名 external_primary 与 SAF documentId 前缀 primary 不一致，同一文件被两个来源各收一次；两条 MediaStore 记录解析到同一真实路径时也未去重，导致歌曲及所在文件夹重复加载。主卷 storage key 归一为 primary 供 SAF/文件系统比对；content:// 解析后校验真实路径；SAF 与文件系统分别追加规范化路径/卷内相对路径兜底。
-from :2953
+from :2956
 commit refs/heads/rust-local-force
-mark :2955
+mark :2968
 author vcexml <3356141621@qq.com> 1794791928 +0800
 committer vcexml <3356141621@qq.com> 1794791993 +0800
 data 310
 fix(lyric): 安卓非当前行默认缩放调整为 0.85
 
 安卓此前沿用 Windows 的 0.60，手机默认字号 29px 缩放后约 17px，上下行明显偏小。默认改为 0.850（只比当前行小一号），Windows 保持 0.60；仅影响新安装与恢复本页默认，已保存的用户值不变。
-from :2954
+from :2967
 commit refs/heads/rust-local-force
-mark :2956
+mark :2969
 author vcexml <3356141621@qq.com> 1794794962 +0800
 committer vcexml <3356141621@qq.com> 1794794962 +0800
 data 342
 fix(lyric): KRC 续行合并时同步补全 words
 
 孤立 word tag 续行旧实现只把文本拼到上一行、words 保持原样，而行高测量/换行计划/整行绘制都以 words 为准，导致该行只显示前半句。改为同步追加逐字时间轴，并用 copyWith 保留翻译/罗马音/agentId，补充解析回归用例。
-from :2955
+from :2968
 commit refs/heads/rust-local-force
-mark :2957
+mark :2970
 author vcexml <3356141621@qq.com> 1794794968 +0800
 committer vcexml <3356141621@qq.com> 1794794968 +0800
 data 557
 fix(lyric): 修复居中/对唱时非当前行只显示半行
 
 非当前行整行预栅格图把小图宽度当成视口宽度画字，居中/置右时文字大半落在图片外被右缘竖直裁掉；改为图内文字固定从 pad 开始、单独记录对齐后的视口 x 再定位。模糊图缓存签名补上逐行对齐与文本指纹，切换歌词位置/男女对唱后强制重烘焙；单行排版一律按自然宽度，避免与换行计划不一致时多折出的行被图片高度裁掉。补充对齐切换必须重烘焙的回归用例。
-from :2956
+from :2969
 commit refs/heads/rust-local-force
-mark :2958
+mark :2971
 author vcexml <3356141621@qq.com> 1794795182 +0800
 committer vcexml <3356141621@qq.com> 1794795182 +0800
 data 62
 docs: 更新 CHANGELOG 至 v6.4.1 版本并同步状态文件
-from :2957
+from :2970
+commit refs/heads/rust-local-force
+mark :2972
+author Little-White3110 <53994162+Little-White3110@users.noreply.github.com> 1794803904 +0800
+committer GitHub <noreply@github.com> 1794803904 +0800
+data 58
+Merge branch 'zzyoxml:rust-local-two' into rust-local-two
+from :2960
+merge :2971
+commit refs/heads/rust-local-force
+mark :2973
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794805403 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794805403 +0800
+data 106
+Merge branch 'rust-local-two' of https://github.com/Little-White3110/private_md3music into rust-local-two
+from :2966
+merge :2972
+commit refs/heads/rust-local-force
+mark :2974
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794822327 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794822331 +0800
+data 61
+docs: verify Windows AudioGraph DSP feasibility (spike PASS)
+from :2973
+commit refs/heads/rust-local-force
+mark :2975
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794822583 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794822748 +0800
+data 69
+feat(windows): add DSP gain conversion and preset downsample helpers
+from :2974
+commit refs/heads/rust-local-force
+mark :2976
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794823019 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794823019 +0800
+data 62
+feat(windows): add AudioGraph engine skeleton behind dsp flag
+from :2975
+commit refs/heads/rust-local-force
+mark :2977
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794823835 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794823835 +0800
+data 77
+feat(windows): wire equalizer and viper MethodChannels to AudioGraph effects
+from :2976
+commit refs/heads/rust-local-force
+mark :2978
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794824648 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794824648 +0800
+data 70
+docs: record Windows custom APO infeasibility (fallback to 4-band EQ)
+from :2977
+commit refs/heads/rust-local-force
+mark :2979
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794824916 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794824984 +0800
+data 75
+feat(windows): expose equalizer, sound library and viper master on desktop
+from :2978
+commit refs/heads/rust-local-force
+mark :2980
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794825133 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794825133 +0800
+data 59
+docs: record Windows DSP architecture and regression notes
+from :2979
+commit refs/heads/rust-local-force
+mark :2981
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794840380 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794840380 +0800
+data 79
+feat: 添加DSP调试日志与工作线程，修复音频初始化竞态问题
+from :2980
+commit refs/heads/rust-local-force
+mark :2982
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794847933 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794847933 +0800
+data 434
+refactor: 移除调试日志并优化音频播放核心逻辑
+
+- 移除了所有用于调试的 fprintf 日志输出
+- 新增音频输入节点重建方法解决切歌静音问题
+- 新增带验证的启动方法确保音频数据正常流动
+- 新增可播放 URI 递归提取逻辑支持嵌套源结构
+- 优化 DSP 与 MediaPlayer 切换逻辑避免真空静音
+- 新增挂起进度处理解决源未打开时的位置设置异常
+from :2981
+commit refs/heads/rust-local-force
+mark :2983
+author vcexml <3356141621@qq.com> 1794795882 +0800
+committer vcexml <3356141621@qq.com> 1794795882 +0800
+data 41
+chore: 更新应用版本号至 6.4.1+56
+from :2971
+commit refs/heads/rust-local-force
+mark :2984
+author Little-White3110 <53994162+Little-White3110@users.noreply.github.com> 1794805477 +0800
+committer GitHub <noreply@github.com> 1794805477 +0800
+data 115
+Merge pull request #192 from Little-White3110/rust-local-two
+
+Enhance cover swipe and flip functionality in player
+from :2971
+merge :2973
+commit refs/heads/rust-local-force
+mark :2985
+author github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1794828703 +0000
+committer github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1794828703 +0000
+data 32
+chore: update GitHub star trend
+from :2984
+commit refs/heads/rust-local-force
+mark :2986
+author vcexml <3356141621@qq.com> 1794886915 +0800
+committer vcexml <3356141621@qq.com> 1794886915 +0800
+data 57
+Merge branch 'origin/rust-local-two' into rust-local-two
+from :2983
+merge :2985
+commit refs/heads/rust-local-force
+mark :2987
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794906521 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794906521 +0800
+data 106
+Merge branch 'rust-local-two' of https://github.com/Little-White3110/private_md3music into rust-local-two
+from :2982
+merge :2986
+commit refs/heads/rust-local-force
+mark :2988
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794926086 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794926086 +0800
+data 82
+feat: 新增车机模式侧边面板布局适配逻辑及快速打包安装脚本
+from :2987
+commit refs/heads/rust-local-force
+mark :2989
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794929504 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794929504 +0800
+data 61
+fix: 修复封面翻页边界处轻滑漏报 Toast 的问题
+from :2988
+commit refs/heads/rust-local-force
+mark :2990
+author github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1794917020 +0000
+committer github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1794917020 +0000
+data 32
+chore: update GitHub star trend
+from :2987
+commit refs/heads/rust-local-force
+mark :2991
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794929896 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794929896 +0800
+data 106
+Merge branch 'rust-local-two' of https://github.com/Little-White3110/private_md3music into rust-local-two
+from :2989
+merge :2990
+commit refs/heads/rust-local-force
+mark :2992
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794939053 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794939053 +0800
+data 313
+feat(lyrics): 歌词动画参数支持长按标题单独重置
+
+为「歌词动画」页 24 项可调参数（19 滑块 / 3 开关 / 2 二选一）的标题
+添加长按重置，仅恢复该项为默认值且不弹二次确认，与 AppBar 全局重置
+互不干扰；同步补充 widget 测试与参数文档。
+from :2991
+commit refs/heads/rust-local-force
+mark :2993
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794969332 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794969332 +0800
+data 384
+fix(lyrics): 对唱标记行整行移除且不再空占一行
+
+- DuetLayout 在文本/agentId/关闭分支统一移除纯「男：/女：/合：/合唱：/歌手名：」标记行
+- AppleLyricsView 以清理后的可见行为唯一索引真源，修正当前行/滚动/模糊/级联/间奏/点击跳转
+- 新增纯函数与视图层回归测试，标记行区间保持上一可见行
+from :2992
+commit refs/heads/rust-local-force
+mark :2994
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794976375 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794976375 +0800
+data 300
+feat: 优化进出 Zen 模式的扭曲波圆角逻辑
+
+- 新增 WindowsFullscreen.exitZen 返回进入前的全屏快照
+- 新增 DistortionWaveStyle.maxCornerRadiusOf 计算设备最大圆角
+- 适配移动端按屏幕真实圆角取波边缘样式
+- 新增测试覆盖圆角计算与 Zen 波逻辑
+from :2993
+commit refs/heads/rust-local-force
+mark :2995
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794981494 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794981494 +0800
+data 1192
+fix(player): 修复转屏后下拉收起播放页的落点错位
+
+横屏点迷你条进播放页 → 转竖屏 → 下拉收起时，面板停在屏高约 1/3 处，
+之后真迷你条才在屏底出现。
+
+根因是收起落点用的锚点只在「点击那一刻」登记一次，而它记录的是当时
+视口里的绝对 Y：转屏后屏高从 393 变成 873，旧的 323 仍被当作落点用。
+连带两处同源问题：转场几何用进栈时的旧屏高当坐标空间；底栏下沉也吃
+这份过期锚点。
+
+- 锚点登记改为携带「发布者身份 + 登记时视口高度」，消费端据此判定过期
+- 播放页路由：进栈快照（scene / dragOriginTop）与全局锚点统一按当前
+  视口判有效，过期即退化到贴底兜底；几何一律用当前视口尺寸
+- 迷你条（常驻条 / 悬浮胶囊）在帧末按新视口重测并重登记，多形态同屏时
+  只有登记过的那一条参与重测
+- 顶栏下拉的收起距离改读 route.panelAnchorFor(当前屏高).top，与几何同源
+- 底栏下沉不再使用过期锚点
+
+新增 panel_anchor_viewport_test 复刻该路径；另补路由几何与底栏下沉的
+过期判据用例。
+from :2994
+commit refs/heads/rust-local-force
+mark :2996
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1794999124 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1794999124 +0800
+data 55
+feat: 新增主界面导航栏滚动跟手收起功能
+from :2995
+commit refs/heads/rust-local-force
+mark :2997
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795012629 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795012629 +0800
+data 233
+fix: 修复 MP3 内嵌 USLT 歌词首字符被第三方库吞掉的问题
+
+新增 MP3 USLT 歌词解析逻辑，解决 audio_metadata_reader 1.8.1 截断首字符导致歌词格式错误的问题
+新增测试用例验证修复效果
+from :2996
+commit refs/heads/rust-local-force
+mark :2998
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795015210 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795015210 +0800
+data 28
+feat: 新增构建工具链
+from :2997
+commit refs/heads/rust-local-force
+mark :2999
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795016053 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795016053 +0800
+data 292
+docs,build: 调整 android-public 构建默认值并更新文档说明
+
+- 修改 android-public 任务默认构建类型从 debug 改为 release
+- 更新相关脚本注释、帮助文档和测试用例以匹配新默认值
+- 修正构建参数的描述顺序和说明，明确各参数作用
+from :2998
+commit refs/heads/rust-local-force
+mark :3000
+author github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1795002937 +0000
+committer github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1795002937 +0000
+data 32
+chore: update GitHub star trend
+from :2994
+commit refs/heads/rust-local-force
+mark :3001
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795016775 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795016775 +0800
+data 106
+Merge branch 'rust-local-two' of https://github.com/Little-White3110/private_md3music into rust-local-two
+from :2999
+merge :3000
+commit refs/heads/rust-local-force
+mark :3002
+author github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1794916687 +0000
+committer github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1794916687 +0000
+data 32
+chore: update GitHub star trend
+from :2986
+commit refs/heads/rust-local-force
+mark :3003
+author github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1795002601 +0000
+committer github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1795002601 +0000
+data 32
+chore: update GitHub star trend
+from :3002
+commit refs/heads/rust-local-force
+mark :3004
+author Little-White3110 <53994162+Little-White3110@users.noreply.github.com> 1795017076 +0800
+committer GitHub <noreply@github.com> 1795017076 +0800
+data 50
+Merge branch 'rust-local-two' into rust-local-two
+from :3001
+merge :3003
+commit refs/heads/rust-local-force
+mark :3005
+author Little-White3110 <53994162+Little-White3110@users.noreply.github.com> 1795017125 +0800
+committer GitHub <noreply@github.com> 1795017125 +0800
+data 127
+Merge pull request #193 from Little-White3110/rust-local-two
+
+windows端均衡器支持 android端bug修复 打包逻辑优化
+from :3003
+merge :3004
