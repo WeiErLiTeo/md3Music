@@ -192,6 +192,13 @@ class _UserCenterPageState extends State<UserCenterPage> {
                 _buildActionGrid(cs),
                 const SliverToBoxAdapter(child: Gap(AppSpacing.lg)),
                 _buildVipCard(cs, tt, kugou),
+
+                const SliverToBoxAdapter(child: Gap(AppSpacing.xl)),
+                // 「更多」分组：这三个入口此前只出现在「账号管理」弹层里
+                // （_buildAccountTile 的 L728-730），主页面上根本没有，
+                // 所以一屏三块之后就是空白。它们是已实现的能力，
+                // 提到主页只是换位置，不算新增功能。
+                _buildMoreGroup(context, cs, tt),
                 // 80 之上叠加系统手势条（小横条）高度，避免末项被压住
                 SliverToBoxAdapter(
                   child: SizedBox(
@@ -325,11 +332,14 @@ class _UserCenterPageState extends State<UserCenterPage> {
               color: cs.primaryContainer,
               clipBehavior: Clip.antiAlias,
               // 对角加大圆角：左上让位圆形头像，右下承接昵称块，四角不等而对角自洽
+              // 四角收敛到 AppRadius 刻度：原来 32/20/20/32 两个值都超出刻度
+              // （最大 28）。对角不对称的意图保留（左上让位头像、右下承接昵称），
+              // 改用 xl(28) / lg(16) 两档。
               borderRadius: const BorderRadius.only(
-                topLeft: Radius.circular(32),
-                topRight: Radius.circular(20),
-                bottomLeft: Radius.circular(20),
-                bottomRight: Radius.circular(32),
+                topLeft: Radius.circular(AppRadius.xl),
+                topRight: Radius.circular(AppRadius.lg),
+                bottomLeft: Radius.circular(AppRadius.lg),
+                bottomRight: Radius.circular(AppRadius.xl),
               ),
               child: Stack(
                 children: [
@@ -542,15 +552,15 @@ class _UserCenterPageState extends State<UserCenterPage> {
                 color: cs.onPrimaryContainer.withValues(alpha: 0.55),
               ),
             ),
-            const SizedBox(width: 3),
+            const Gap(AppSpacing.xs),
             Text(
               '$gradeNum',
-              style: tt.headlineMedium?.copyWith(
+              style: tt.titleLarge?.copyWith(
                 fontWeight: FontWeight.w800,
                 color: cs.onPrimaryContainer,
               ),
             ),
-            const SizedBox(width: 10),
+            const Gap(AppSpacing.md),
             Flexible(
               child: Text(
                 _formatGradeSeconds(sec),
@@ -751,6 +761,39 @@ class _UserCenterPageState extends State<UserCenterPage> {
   }
 
   /// 账号管理面板里的「登录设备管理」入口：仅管理当前登录账号的设备
+  /// 主页「更多」分组：把原本只存在于账号管理弹层里的三个入口提到主页面。
+  ///
+  /// 复用各自的 [_buildDeviceManagerEntry] / [_buildBlacklistEntry] /
+  /// [_buildPreferenceEntry]，不复制任何导航逻辑。分组头与设置页
+  /// 的分组语言一致（labelLarge + 主色），间距用 xl 与上方会员区分开。
+  Widget _buildMoreGroup(BuildContext context, ColorScheme cs, TextTheme tt) {
+    return SliverToBoxAdapter(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.lg,
+              AppSpacing.sm,
+              AppSpacing.lg,
+              AppSpacing.sm,
+            ),
+            child: Text(
+              '更多',
+              style: tt.labelLarge?.copyWith(
+                fontWeight: FontWeight.w600,
+                color: cs.primary,
+              ),
+            ),
+          ),
+          _buildDeviceManagerEntry(context),
+          _buildBlacklistEntry(context),
+          _buildPreferenceEntry(context),
+        ],
+      ),
+    );
+  }
+
   /// （/login/device 系列接口按当前 token/userid 作用域，与其他已保存账号无关）。
   Widget _buildDeviceManagerEntry(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -1152,14 +1195,12 @@ class _UserCenterPageState extends State<UserCenterPage> {
           color: cs.surfaceContainer,
         ),
         clipBehavior: Clip.antiAlias,
+        // 不再用整卡一层 InkWell：原来点「畅听会员 / 概念会员」两行也会
+        // 打开签到日历页——两行长得像独立入口却没有各自的点击目标。
+        // 现在三行各自可点（签到→日历、畅听/概念→会员详情），卡片只做容器。
         child: Material(
           color: Colors.transparent,
-          // 整卡可点击进入签到日历页
-          child: InkWell(
-            onTap: () => Navigator.of(context, rootNavigator: true).push(
-              MaterialPageRoute(builder: (_) => const SignInCalendarPage()),
-            ),
-            child: Padding(
+          child: Padding(
               padding: const EdgeInsets.all(AppSpacing.md),
               // IntrinsicHeight：让左侧入口与右侧两行会员等高
               child: IntrinsicHeight(
@@ -1200,11 +1241,11 @@ class _UserCenterPageState extends State<UserCenterPage> {
             ),
           ),
         ),
-      ),
     );
   }
 
-  /// 签到日历展示位：仅做视觉提示，点击由整张会员卡片统一处理。
+  /// 签到日历入口：自己接管点击（此前靠整张会员卡的 InkWell 兜底，
+  /// 导致会员两行也被一起带进签到页）。现在它是独立可点目标。
   Widget _buildCalendarEntry(ColorScheme cs, TextTheme tt) {
     return Container(
       width: 76,
@@ -1212,21 +1253,30 @@ class _UserCenterPageState extends State<UserCenterPage> {
         color: cs.surfaceContainerHighest,
         borderRadius: AppRadius.mdAll,
       ),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.event_available, color: cs.primary),
-          const Gap(AppSpacing.xs),
-          Text(
-            '签到日历',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: tt.labelMedium?.copyWith(
-              fontWeight: FontWeight.w600,
-              color: cs.onSurface,
-            ),
+      clipBehavior: Clip.antiAlias,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => Navigator.of(context, rootNavigator: true).push(
+            MaterialPageRoute(builder: (_) => const SignInCalendarPage()),
           ),
-        ],
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.event_available, color: cs.primary),
+              const Gap(AppSpacing.xs),
+              Text(
+                '签到日历',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: tt.labelMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                  color: cs.onSurface,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -1253,9 +1303,9 @@ class _UserCenterPageState extends State<UserCenterPage> {
     return Row(
       children: [
         Container(
-          padding: const EdgeInsets.all(6),
+          padding: const EdgeInsets.all(AppSpacing.xs),
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(10),
+            borderRadius: AppRadius.smAll,
             color: dimmed ? cs.surfaceContainerHighest : iconBg,
           ),
           child: Icon(

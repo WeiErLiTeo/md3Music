@@ -1,4 +1,5 @@
 import 'package:material_ui/material_ui.dart';
+import '../../widgets/app_empty_state.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/layout/adaptive_navigator.dart';
@@ -47,14 +48,7 @@ class _AlbumsPageState extends State<AlbumsPage> {
   @override
   Widget build(BuildContext context) {
     if (widget.albums.isEmpty) {
-      return Center(
-        child: Text(
-          '暂无专辑',
-          style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
-        ),
-      );
+      return const AppEmptyState.text(title: '暂无专辑');
     }
 
     return ContentEntrance(

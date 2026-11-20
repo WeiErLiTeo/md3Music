@@ -89,6 +89,7 @@ void main() {
   Widget host({
     required bool enabled,
     bool hideNavigation = false,
+    int selectedIndex = 0,
     ValueChanged<double>? onCollapse,
   }) {
     return MultiProvider(
@@ -118,7 +119,7 @@ void main() {
             ),
           ],
           drawerDestinations: const <NavigationDrawerDestination>[],
-          selectedIndex: 0,
+          selectedIndex: selectedIndex,
           onDestinationSelected: (int _) {},
           scrollCollapseEnabled: enabled,
           hideNavigation: hideNavigation,
@@ -286,6 +287,68 @@ void main() {
     await tester.drag(find.byKey(const Key('list')), const Offset(0, -200));
     await tester.pumpAndSettle();
     expect(collapse, 0.0, reason: 'rail 布局无底部导航栏，滚动不参与');
+  });
+
+  testWidgets('底栏缓存不吞更新：切 tab 后选中态与高度档位照常生效',
+      (WidgetTester tester) async {
+    setPhoneViewport(tester);
+    double collapse = -1;
+    await tester.pumpWidget(
+      host(enabled: true, onCollapse: (double v) => collapse = v),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex,
+      0,
+    );
+
+    // 切到第 2 个 tab：缓存键里的 selectedIndex 变了，必须重建出新的底栏。
+    await tester.pumpWidget(
+      host(enabled: true, selectedIndex: 1, onCollapse: (double v) => collapse = v),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex,
+      1,
+      reason: '缓存必须按 selectedIndex 失效，否则切 tab 后底栏停在旧选中态',
+    );
+  });
+
+  testWidgets('滚动跟手期间底栏 widget 实例跨帧复用（缓存生效）',
+      (WidgetTester tester) async {
+    setPhoneViewport(tester);
+    double collapse = -1;
+    await tester.pumpWidget(
+      host(enabled: true, onCollapse: (double v) => collapse = v),
+    );
+    await tester.pumpAndSettle();
+
+    final TestGesture g = await tester.startGesture(
+      tester.getCenter(find.byKey(const Key('list'))),
+    );
+    int? firstHash;
+    int changes = 0;
+    for (int i = 0; i < 6; i++) {
+      await g.moveBy(const Offset(0, -8));
+      await tester.pump();
+      final int h = identityHashCode(
+        tester.widget<NavigationBar>(find.byType(NavigationBar)),
+      );
+      if (firstHash == null) {
+        firstHash = h;
+      } else if (h != firstHash) {
+        changes++;
+      }
+    }
+    await g.up();
+    await tester.pumpAndSettle();
+    expect(
+      changes,
+      0,
+      reason: '跟手期间底栏必须复用同一 widget 实例（否则每帧重建底栏子树，'
+          '实测 8.6ms/帧）',
+    );
+    expect(collapse, greaterThan(0.0));
   });
 
   testWidgets('收起中进二级页再返回：滚动那一位不复活（合并进度不残留）',

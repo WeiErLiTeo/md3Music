@@ -7,6 +7,8 @@ import 'package:provider/provider.dart';
 
 import '../../core/build_flags.dart';
 import '../../core/layout/page_layout.dart';
+import '../../core/layout/responsive_layout.dart' show gridColumnsForWidth;
+import '../../core/theme/app_dimens.dart';
 import '../../providers/tab_config_provider.dart';
 import '../../widgets/scroll_aware_app_bar.dart';
 import '../settings/home_tab_manager.dart';
@@ -109,20 +111,34 @@ class _LaunchPadPageState extends State<LaunchPadPage> {
     final unpinned = tabs
         .where((t) => tabConfig.hiddenTabs.contains(t.id))
         .toList();
-    // 手机竖屏 3 列，横屏（及宽屏）4 列
-    final columns =
-        MediaQuery.orientationOf(context) == Orientation.landscape ? 4 : 3;
+    // 卡片目标宽度：宽屏下不再让格子随可用宽度等比膨胀成大方块
+    // （曾经 4 列 × 满宽 = 每格 ~400dp，图标孤零零飘在正中，留白吞掉内容）。
+    // 改为按目标宽度算列数并夹在 [3,7] 档之间，超宽屏靠居中留白而不是拉大格子。
+    final isLandscape =
+        MediaQuery.orientationOf(context) == Orientation.landscape;
+    final minColumns = isLandscape ? 4 : 3;
+    // 标题左缘对齐内容（网格）左缘：body 走 ContentWidth（大屏 92% 居中），
+    // AppBar 却是整窗宽，不补 sideGutter 标题会比网格左移一截。
+    // 算法与 library_page.dart 同源，避免两个一级页各写一套。
+    final windowWidth = MediaQuery.sizeOf(context).width;
+    final sideGutter =
+        (windowWidth - ContentWidth.resolveWidth(context, windowWidth)) / 2;
 
     return Scaffold(
       appBar: ScrollAwareAppBar(
         title: 'LaunchPad',
         tabId: 'launchpad',
         opaque: true,
+        titleSpacing: sideGutter + AppSpacing.lg,
         actions: [
-          IconButton(
-            icon: const Icon(Icons.edit_outlined),
-            tooltip: '编辑固定项',
-            onPressed: _showEditSheet,
+          Padding(
+            // 镜像标题的 gutter，让右上角按钮与内容右缘对齐
+            padding: EdgeInsets.only(right: sideGutter),
+            child: IconButton(
+              icon: const Icon(Icons.edit_outlined),
+              tooltip: '编辑固定项',
+              onPressed: _showEditSheet,
+            ),
           ),
         ],
       ),
@@ -132,12 +148,12 @@ class _LaunchPadPageState extends State<LaunchPadPage> {
           slivers: [
             // 未固定在前，已固定分区置底
             if (unpinned.isNotEmpty) ...[
-              _buildSectionHeader('未固定', unpinned.length),
-              _buildGrid(tabConfig, unpinned, columns),
+              _buildSectionHeader('未固定', unpinned.length, first: true),
+              _buildGrid(tabConfig, unpinned, minColumns),
             ],
             if (pinned.isNotEmpty) ...[
-              _buildSectionHeader('已固定', pinned.length),
-              _buildGrid(tabConfig, pinned, columns),
+              _buildSectionHeader('已固定', pinned.length, first: unpinned.isEmpty),
+              _buildGrid(tabConfig, pinned, minColumns),
             ],
             const SliverToBoxAdapter(child: SizedBox(height: 88)),
           ],
@@ -158,31 +174,55 @@ class _LaunchPadPageState extends State<LaunchPadPage> {
   }
 
   /// 分区标题（已固定 / 未固定）。
-  Widget _buildSectionHeader(String title, int count) {
+  Widget _buildSectionHeader(String title, int count, {bool first = false}) {
     final cs = Theme.of(context).colorScheme;
     return SliverToBoxAdapter(
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+        // 首块贴顶用小间距，后续分区用 xl 拉开——形成紧/松节奏，
+        // 而不是每个分区都等距（等距等于没有分组）。
+        padding: EdgeInsets.fromLTRB(
+          AppSpacing.lg,
+          first ? AppSpacing.sm : AppSpacing.xl,
+          AppSpacing.lg,
+          AppSpacing.md,
+        ),
         child: Row(
           children: [
             Text(
               title,
-              // 非顶栏标题：比顶栏字号小一档
+              // 层级：页面标题 titleLarge(22) > 分区标题 titleSmall(14) > 卡片文字 titleSmall。
+              // 分区标题带语义色，靠颜色与字距区分，而不是把字号顶到和页面标题抢戏。
               style: Theme.of(context).textTheme.labelLarge?.copyWith(
                 fontWeight: FontWeight.w700,
                 letterSpacing: 0.4,
                 color: cs.onSurface,
               ),
             ),
-            const SizedBox(width: 8),
-            Text(
-              '$count',
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                color: cs.onSurfaceVariant,
+            const Gap(AppSpacing.sm),
+            Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: AppSpacing.sm,
+                vertical: AppSpacing.xxs,
+              ),
+              decoration: ShapeDecoration(
+                color: cs.surfaceContainerHighest,
+                shape: const StadiumBorder(),
+              ),
+              child: Text(
+                '$count',
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: cs.onSurfaceVariant,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
-            const SizedBox(width: 12),
-            Expanded(child: Divider(color: cs.outlineVariant, height: 1)),
+            const Gap(AppSpacing.md),
+            Expanded(
+              child: Divider(
+                color: cs.outlineVariant.withValues(alpha: 0.6),
+                height: 1,
+              ),
+            ),
           ],
         ),
       ),
@@ -193,36 +233,49 @@ class _LaunchPadPageState extends State<LaunchPadPage> {
   Widget _buildGrid(
     TabConfigProvider tabConfig,
     List<TabItem> items,
-    int columns,
+    int minColumns,
   ) {
     return SliverPadding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      sliver: SliverGrid(
-        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: columns,
-          crossAxisSpacing: 12,
-          mainAxisSpacing: 12,
-          childAspectRatio: 1.0,
-        ),
-        delegate: SliverChildBuilderDelegate((context, i) {
-          final tab = items[i];
-          final hidden = tabConfig.hiddenTabs.contains(tab.id);
-          return _LaunchPadCard(
-            icon: homeTabIcon(tab.id),
-            label: tab.label,
-            hidden: hidden,
-            enabling: _enablingTabId == tab.id,
-            showHint: _showHint,
-            // 可见 tab 点击切主 tab；隐藏 tab 点击跳二级页面（长按启用）
-            onTap: hidden
-                ? () => widget.onTabOpened(tab.id)
-                : () => widget.onTabSelected(tab.id),
-            onLongPressStart: hidden
-                ? () => _onLongPressStart(tab.id)
-                : null,
-            onLongPressEnd: hidden ? _onLongPressEnd : null,
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+      sliver: SliverLayoutBuilder(
+        builder: (context, constraints) {
+          // 按目标宽度算列数：宽屏增加列数保持格子紧凑，而不是把格子拉大。
+          final columns = gridColumnsForWidth(
+            constraints.crossAxisExtent,
+            targetExtent: 148,
+            min: minColumns,
+            max: 7,
           );
-        }, childCount: items.length),
+          return SliverGrid(
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: columns,
+              crossAxisSpacing: AppSpacing.md,
+              mainAxisSpacing: AppSpacing.md,
+              // 固定格高而不是 1:1：宽度变了格高不跟着膨胀，
+              // 图标与文字始终居中的「紧凑卡」形态。
+              mainAxisExtent: 132,
+            ),
+            delegate: SliverChildBuilderDelegate((context, i) {
+              final tab = items[i];
+              final hidden = tabConfig.hiddenTabs.contains(tab.id);
+              return _LaunchPadCard(
+                icon: homeTabIcon(tab.id),
+                label: tab.label,
+                hidden: hidden,
+                enabling: _enablingTabId == tab.id,
+                showHint: _showHint,
+                // 可见 tab 点击切主 tab；隐藏 tab 点击跳二级页面（长按启用）
+                onTap: hidden
+                    ? () => widget.onTabOpened(tab.id)
+                    : () => widget.onTabSelected(tab.id),
+                onLongPressStart: hidden
+                    ? () => _onLongPressStart(tab.id)
+                    : null,
+                onLongPressEnd: hidden ? _onLongPressEnd : null,
+              );
+            }, childCount: items.length),
+          );
+        },
       ),
     );
   }
@@ -281,8 +334,9 @@ class _LaunchPadCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    // 同心圆角：外框 16、内衬图标底盘 16 - 内边距 8 = 8，视觉上两圈平行。
     final content = ClipRRect(
-      borderRadius: BorderRadius.circular(16),
+      borderRadius: AppRadius.lgAll,
       child: Material(
         // 壁纸模式：60% 透明（40% 不透明），普通背景保持原有纯色。
         color: Theme.of(context).scaffoldBackgroundColor == Colors.transparent
@@ -290,24 +344,46 @@ class _LaunchPadCard extends StatelessWidget {
             : cs.surfaceContainerLow,
         child: InkWell(
           onTap: hidden ? null : onTap,
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(icon, size: 36, color: cs.primary),
-              const SizedBox(height: 10),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                child: Text(
-                  label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w600,
-                    color: cs.onSurface,
+          child: Padding(
+            padding: const EdgeInsets.all(AppSpacing.sm),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                // 图标底盘：给图标一块确定面积的承载面，卡片不再「空」
+                Container(
+                  width: 52,
+                  height: 52,
+                  decoration: BoxDecoration(
+                    // 隐藏项用中性底色弱化，可见项用主色容器强调——
+                    // 一眼分得出「已在底栏」与「未启用」。
+                    color: hidden
+                        ? cs.surfaceContainerHighest
+                        : cs.primaryContainer,
+                    borderRadius: AppRadius.mdAll,
+                  ),
+                  child: Icon(
+                    icon,
+                    size: 26,
+                    color: hidden ? cs.onSurfaceVariant : cs.onPrimaryContainer,
                   ),
                 ),
-              ),
-            ],
+                const Gap(AppSpacing.sm),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xs),
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      // 隐藏项文字弱化一档，与底盘、图标共同表达「未启用」
+                      color: hidden ? cs.onSurfaceVariant : cs.onSurface,
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -325,7 +401,7 @@ class _LaunchPadCard extends StatelessWidget {
           fit: StackFit.expand,
           children: [
             content,
-            if (enabling) Positioned.fill(child: _buildEnableHint()),
+            if (enabling) Positioned.fill(child: _buildEnableHint(context)),
           ],
         ),
       );
@@ -342,35 +418,44 @@ class _LaunchPadCard extends StatelessWidget {
         fit: StackFit.expand,
         children: [
           content,
-          if (enabling) Positioned.fill(child: _buildEnableHint()),
+          if (enabling) Positioned.fill(child: _buildEnableHint(context)),
         ],
       ),
     );
   }
 
-  /// 长按启用提示层（参考 Zen 模式长按退出）：半透明黑色背景 + 图标 + 文字。
+  /// 长按启用提示层（参考 Zen 模式长按退出）：scrim 遮罩 + 图标 + 文字。
   /// 长按被系统识别（500ms）后通过 [AnimatedOpacity] 淡入，
   /// IgnorePointer 不拦截指针事件。
-  Widget _buildEnableHint() {
+  Widget _buildEnableHint(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return IgnorePointer(
+      // 与卡片同圆角（lgAll），提示层贴着卡片边缘时不露出方角
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: AppRadius.lgAll,
         child: AnimatedOpacity(
           opacity: showHint ? 1.0 : 0.0,
           duration: _LaunchPadPageState._hintFade,
           child: Container(
-            color: Colors.black.withValues(alpha: 0.6),
+            // 用主题 scrim 而不是硬编码黑色（项目禁止硬编码黑白）
+            color: cs.scrim.withValues(alpha: 0.6),
             alignment: Alignment.center,
-            padding: const EdgeInsets.all(8),
+            padding: const EdgeInsets.all(AppSpacing.sm),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(Icons.power_settings_new, color: Colors.white, size: 28),
-                const SizedBox(height: 8),
+                Icon(
+                  Icons.power_settings_new,
+                  color: cs.onPrimaryContainer,
+                  size: 28,
+                ),
+                const Gap(AppSpacing.sm),
                 Text(
                   '继续长按启用「$label」',
                   textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.white, fontSize: 12),
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: cs.onPrimaryContainer,
+                      ),
                 ),
               ],
             ),

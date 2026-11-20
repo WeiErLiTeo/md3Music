@@ -1336,7 +1336,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
                                             size: 16,
                                             color: colorScheme.onSurfaceVariant,
                                           ),
-                                          const SizedBox(width: 6),
+                                          const Gap(AppSpacing.sm),
                                           Text(
                                             '歌单介绍',
                                             style: textTheme.labelLarge
@@ -1931,7 +1931,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
                                     ),
                             ),
                           ),
-                          const SizedBox(width: 20),
+                          const Gap(AppSpacing.xl),
                           Expanded(
                             // 文字区可视高度随 availH 收缩：超出部分由 ClipRect
                             // 裁掉并配合淡出（opacity），封面缩小时不会残留文字

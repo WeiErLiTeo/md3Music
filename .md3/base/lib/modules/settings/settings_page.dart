@@ -1860,7 +1860,7 @@ class _SettingsPageState extends State<SettingsPage>
   }) {
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
-      minVerticalPadding: AppSpacing.md,
+        minVerticalPadding: AppSpacing.sm,
       leading: Icon(icon, color: colorScheme.primary),
       title: Text(
         title,
