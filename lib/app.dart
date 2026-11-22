@@ -1464,6 +1464,7 @@ class _MainLayoutState extends State<_MainLayout>
         page = LaunchPadPage(
           onTabSelected: _switchToTab,
           onTabEnabled: _enableAndSwitchToTab,
+          onTabUnpinned: _unpinTab,
           onTabOpened: _openTabAsPage,
         );
         break;
@@ -2562,6 +2563,17 @@ class _MainLayoutState extends State<_MainLayout>
       tabConfig.toggleTabVisibility(tabId);
     }
     _switchToTab(tabId);
+  }
+
+  /// LaunchPad 长按取消固定：把已固定的 tab toggle 回隐藏态。
+  /// 不切换 tab——取消固定后仍留在当前页面，该 tab 从底栏消失。
+  void _unpinTab(String tabId) {
+    if (isFullPlayerOnTop) return;
+    final tabConfig = context.read<TabConfigProvider>();
+    if (!tabConfig.hiddenTabs.contains(tabId)) {
+      // ignore: discarded_futures
+      tabConfig.toggleTabVisibility(tabId);
+    }
   }
 
   /// LaunchPad 点击隐藏 tab：以二级页面路由打开对应功能页（不切换主 tab）。

@@ -31750,3 +31750,538 @@ refactor(ui): 详情页空态并入 AppEmptyState（专辑 2 处、歌手 5 处�
 全站 AppEmptyState 覆盖：10 个文件 19 处。
 album 2 个、artist 19 个测试全过。
 from :3025
+commit refs/heads/rust-local-force
+mark :3027
+author vcexml <3356141621@qq.com> 1795153510 +0800
+committer vcexml <3356141621@qq.com> 1795153510 +0800
+data 1491
+style(ui): 本地专辑网格按卡宽自适应、探索段移除重复入口、区块改 8 项
+
+**本地音乐·专辑卡片过大**：expanded 档原来写死 4 列 + childAspectRatio 0.72，
+1936px 窗口下每格约 470×650——一张专辑卡被拉到半屏高，封面里只有一个音符
+图标、大片空腔。改为按 200dp 目标宽算列数（同宽度可得 8 列），
+与本地音乐其它 Tab / 收藏页密度一致。
+
+**探索段移除「探索音乐」入口区**（用户要求）：它只有「热门歌单 / 排行榜」
+两个按钮，而这两个目标各自在下方区块标题右侧就有「查看全部」，入口重复。
+删掉后纵向省约 88dp。功能未丢失：ChartsPage 仍可从 app.dart 的 tab /
+LaunchPad 进入，PlaylistBrowsePage 仍从「推荐歌单 → 查看全部」进入。
+
+**推荐歌单 / 排行榜各补到 8 项**：原来默认 6，宽屏 4 列时排成 1.5 行、
+第二行只填一半，右半边留空。
+
+测试同步更新（explore_sections_cover_hero_test）：
+- 入口断言改为区块标题 / 「查看全部」定位
+- harness 补 PlayerProvider（「查看全部」进入的页面会 read 它）
+- ChartsPage 改为直接验证可构建：测试环境的假适配器不返回榜单数据，
+  排行榜区块在空数据时不渲染（既有行为），无法从探索段点入
+- 顺带修好了基线里那条失败的「迁移后的新碟完整列表仍保留封面 Hero」
+  7/7 通过（基线是 +6 -1）。
+from :3026
+commit refs/heads/rust-local-force
+mark :3028
+author vcexml <3356141621@qq.com> 1795155810 +0800
+committer vcexml <3356141621@qq.com> 1795155810 +0800
+data 820
+fix(library): 专辑网格在 Pad 分支也按卡宽自适应，修宽屏卡被拉爆
+
+上一版只改了非 Pad 的 expanded 分支，但 Windows 桌面最短边 >=600，
+走的是 isPad 分支——那里取用户捏合偏好（GridColumnsProvider 默认 4）
+与 localMax 的较小值，1936px 下仍然只有 4-6 列，每格约 300-470 宽、
+配合 childAspectRatio 0.72 就是 300×417 ~ 470×650，封面里一个音符图标
+占不满，大片空腔。
+
+现在把「按 200dp 目标宽算出的列数」作为**下限**：
+- 非 Pad：直接用宽度基准
+- Pad：用户偏好只能 ≥ 宽度基准（宽屏不会被偏好值拉回 4 列）
+1936px 下得到约 8 列，每格约 192×260，与其它列表页密度一致。
+
+实测对比：改前单卡占约 1/4 屏宽、半屏高；改后约 1/10 屏宽。
+from :3027
+commit refs/heads/rust-local-force
+mark :3029
+author vcexml <3356141621@qq.com> 1795157985 +0800
+committer vcexml <3356141621@qq.com> 1795157985 +0800
+data 599
+style(user): 「我的」页去掉「更多」分组标题与行尾箭头，列表左缘对齐卡片
+
+用户指出两处：
+1. 「更多」小标题多余——它把页面又切成一块，且标题左缘（16）比下方列表项
+   左缘（xs=4）更靠右，看起来没对齐。
+2. 三个入口行尾的 chevron 与随之而来的大片右侧空白没有实际作用。
+
+改动：
+- 删除「更多」分组标题，三个入口直接跟在会员卡下方
+- contentPadding 由 horizontal xs(4) 改为 lg(16)，与上方会员卡左缘对齐
+- 三个 ListTile 的 trailing chevron 全部移除
+from :3028
+commit refs/heads/rust-local-force
+mark :3030
+author vcexml <3356141621@qq.com> 1795163213 +0800
+committer vcexml <3356141621@qq.com> 1795163213 +0800
+data 1365
+refactor(launchpad): 重写长按启用交互——去遮罩、改为环形进度弧 + 图标微放大
+
+旧实现问题：
+- 全屏 scrim 遮罩盖住整个卡片，大片暗色 + 文字层视觉太重
+- 完全没有进度反馈——用户不知道还要按多久（500ms→2000ms 无任何提示）
+- AnimatedOpacity 淡入的提示层与卡片脱离，没有物理关联感
+
+新交互（符合 m3e 设计规范）：
+- 长按触发后**不出现任何遮罩**，反馈直接发生在卡片自身上：
+  ① 图标 AnimatedScale 微放至 1.12 倍（150ms easeOutBack）给即时触感
+  ② 图标底盘外圈出现一条 Arc 弧从 0°→360° 顺时针填满（1500ms easeInOut）
+  ③ 弧用主题 primary 色，底色 outlineVariant 30% alpha，两端圆头
+- 松手中途取消则弧归零消失；满 2 秒完成启用后弧消失
+- tv: 构建下不变（DpadFocusable 单停点，经设置页启用）
+
+技术变更：
+- _LaunchPadCard 从 StatelessWidget → StatefulWidget + SingleTickerProviderStateMixin
+- AnimationController 驱动进度值，didUpdateWidget 根据父组件 enabling 状态启停
+- _ArcPainter(CustomPainter) 在图标底盘外画背景完整圆环 + 前景进度弧
+- 删除全部 AnimatedOpacity / scrim / power_settings_new /「继续长按」文字
+- _enableDuration 从 2000-500=1500 直接对应 AnimationController duration
+from :3029
+commit refs/heads/rust-local-force
+mark :3031
+author vcexml <3356141621@qq.com> 1795163978 +0800
+committer vcexml <3356141621@qq.com> 1795163978 +0800
+data 301
+style(launchpad): 去掉进度弧底层圆环，图标放大到 52
+
+- _ArcPainter 不再画背景完整圆环（那个圆环压在图标底盘上，看起来像一层遮罩）
+- 图标 size 26 → 52，填满整个底盘，视觉重量翻倍
+- _ArcPainter.background 字段与构造参数一并移除
+from :3030
+commit refs/heads/rust-local-force
+mark :3032
+author vcexml <3356141621@qq.com> 1795164781 +0800
+committer vcexml <3356141621@qq.com> 1795164781 +0800
+data 582
+style(launchpad): 去掉卡片底色矩形框，只留图标底盘
+
+卡片整块的 Material 底色（普通模式 surfaceContainerLow、壁纸模式同色
+40% 透明）已移除，统一改为 Colors.transparent。Material 本身保留，
+仍承载 InkWell 的点击涟漪与热点。
+
+现在每张卡只剩 52px 图标底盘 + 文字，网格背景完全透出；壁纸模式下
+那层半透明显得尤其脏，一并去掉。
+
+测试同步：launchpad_background_test 的断言从「普通=实色 / 壁纸=40%透明」
+改为「两种背景模式下 Material 一律透明」。
+from :3031
+commit refs/heads/rust-local-force
+mark :3033
+author vcexml <3356141621@qq.com> 1795165721 +0800
+committer vcexml <3356141621@qq.com> 1795165721 +0800
+data 1155
+feat(launchpad): 重写长按交互——无遮罩进度环+胶囊文案，已固定长按可取消固定
+
+**视觉重做**（借鉴 Zen 模式 _buildZenPressHint 的语言，但去掉遮罩）：
+- 无 scrim / 无暗色底——CircularProgressIndicator（48×48, strokeWidth 2.5, bg outlineVariant 20%, fg primary）叠在图标上方，中央 22px 图标保持可见；
+- 环下方一个**胶囊**用 surfaceContainerHighest 88% alpha 轻底色（非暗色遮罩），内放 labelSmall 动作提示文字，随进度 Opacity 从 0→1 淡入；
+- 按压时长 1800ms（与 Zen 长按封面一致），_hintStart=0.25 给 ~450ms 纯按下缓冲后淡入。
+
+**新增已固定 tab 的取消固定**：
+- 所有卡统一挂 GestureDetector（含已固定）；
+- LaunchPadPage 新增 onTabUnpinned(String) 回调——app.dart _unpinTab 调 	oggleTabVisibility(tabId) toggle 回隐藏态（不切换当前 tab）；
+- 隐藏 tab 长按仍走 onTabEnabled → 启用并切换；
+- 动作文案随 hidden 状态区分：「继续长按启用「xxx」」vs「继续长按取消固定「xxx」」。
+
+analyze: launchpad No issues found；测试 2/2 通过。
+from :3032
+commit refs/heads/rust-local-force
+mark :3034
+author vcexml <3356141621@qq.com> 1795165853 +0800
+committer vcexml <3356141621@qq.com> 1795165853 +0800
+data 464
+fix(launchpad): 长按特效不显示的根因——动画未绑定 rebuild
+
+_pressCtrl.addListener 从未调 setState，导致：
+- 动画帧推进不会触发 Widget rebuild
+- _buildPressHint 只在构建时读一次 _press.value（始终≈0）
+- opacity=0 → 返回 SizedBox.shrink → 什么都不渲染
+
+修复：initState 里 addListener(() { if (mounted) setState((){}); })。
+现在每帧 setState → Stack 重建 → 进度环从 0→1 正常填满。
+from :3033
+commit refs/heads/rust-local-force
+mark :3035
+author vcexml <3356141621@qq.com> 1795166543 +0800
+committer vcexml <3356141621@qq.com> 1795166543 +0800
+data 715
+fix(launchpad): 移除卡片内层 InkWell，修复长按不触发与特效不显示
+
+两个根因叠加导致长按完全失效：
+
+1. **手势竞技场冲突**：content 内层有 InkWell(onTap)，外层 GestureDetector
+   同时注册 onTap + onLongPressStart。InkWell 的 TapRecognizer 在竞技场中
+   抢先判定为点击，长按永远识别不出来 → onLongPressStart 从不触发。
+   → 删掉 InkWell，GestureDetector 独占手势（点击仍走 onTap）。
+
+2. **动画未绑定 rebuild**（上一提交 a844e3a4 已修）：_pressCtrl 没有
+   addListener(setState)，帧推进不重建 Widget，特效看不到。
+
+分析通过（No issues found），Debug 已启动运行（pid 9528）。
+from :3034
+commit refs/heads/rust-local-force
+mark :3036
+author vcexml <3356141621@qq.com> 1795168114 +0800
+committer vcexml <3356141621@qq.com> 1795168114 +0800
+data 752
+fix(launchpad): 脉冲反馈替代 DistortionWave，修复点击无响应和卡死
+
+上一版把 DistortionWave 直接嵌入卡片，WaveStage 需要两面内容来截图，
+但 content/revealed 都传了 SizedBox.shrink()——shader 渲染路径异常，
+卡死主循环导致「点击和长按没反应、几秒后无响应」。
+
+改用轻量脉冲反馈（纯 Canvas，无 shader 依赖）：
+- 图标微缩(0.92x)后弹起(1.06x)——Transform.scale 逐帧计算
+- 外圈一道 primary 色扩散弧从中心填满——CustomPainter 画背景环+前景弧
+- addListener(setState) 确保每帧 rebuild（根因同 a844e3a4）
+- 按压时长缩短到 1500ms，GestureDetector 独占手势竞技场
+
+analyze: No issues found；测试 2/2 通过。
+from :3035
+commit refs/heads/rust-local-force
+mark :3037
+author vcexml <3356141621@qq.com> 1795168594 +0800
+committer vcexml <3356141621@qq.com> 1795168594 +0800
+data 742
+feat(launchpad): 长按播放扭曲波特效（同封面流），content/revealed 给实际可见底色
+
+根因（之前多次失败）：WaveStage._snapshot() 对 SizedBox.shrink() 返回 null
+→ _fail() → 退化为纯淡入淡出，用户什么都看不到。必须给 content/revealed
+各包一层带颜色的 Container，shader 才有画面可扭曲。
+
+- 波从卡片中心扩散，只在这一格内播放，不全屏
+- travel 0.7 + anticipation 0.12 → 约 1.5 秒扫完一个格子距离
+- content/revealed = SizedBox.expand(ColoredBox(surfaceContainerLow))
+- precache() 在页面 initState 预加载着色器，确保第一道波不是降级版
+- _LaunchPadCard 独立成文件，避免单文件过长
+- analyze: No issues found
+from :3036
+commit refs/heads/rust-local-force
+mark :3038
+author vcexml <3356141621@qq.com> 1795169044 +0800
+committer vcexml <3356141621@qq.com> 1795169044 +0800
+data 936
+fix(launchpad): 纯 Canvas 扭曲波替代 DistortionWave，修复卡死无响应
+
+根因：DistortionWave 内含 _snapshot()(toImageSync) + Fragment Shader 编译，
+在 grid cell 小尺寸下阻塞主线程 → 点击和长按都没反应、几秒后无响应。
+这不是 content/revealed 为空的问题——就算传了可见内容，shader 编译在格子
+尺寸下同样会阻塞。必须完全放弃 DistortionWave。
+
+改用纯 Canvas 的 _DistortionPainter 手工绘制扭曲波视觉：
+- RGB 三通道色散偏移（红偏右/绿居中/蓝偏左）→ 色散感
+- 弧宽度 sin(p*pi) 鼓包变化 + MaskFilter.blur 发光
+- 外层光环扩散 + 中心高亮光点
+- addListener(setState) 确保每帧 rebuild
+
+同时修复动作回调：_onLongPressStart(tabId, hidden) 在 Timer 中调用
+onTabEnabled / onTabUnpinned，之前的 void 空函数没有触发实际逻辑。
+
+analyze: No issues found；便携版已更新。
+from :3037
+commit refs/heads/rust-local-force
+mark :3039
+author vcexml <3356141621@qq.com> 1795169162 +0800
+committer vcexml <3356141621@qq.com> 1795169162 +0800
+data 387
+fix(launchpad): 去掉 Opacity 包装，修复扭曲波不显示
+
+根因：Opacity(opacity: 0.0) 让 Flutter 直接跳过整棵子树的渲染——
+painter 每帧的 alpha 全被 0 覆盖，paint() 从未被调用。
+这是继 shader 阻塞之后的又一个隐藏坑。
+
+去掉 Opacity，painter 内部直接用 .withValues(alpha:) 控制透明度，
+CustomPaint 每帧都被绘制。
+from :3038
+commit refs/heads/rust-local-force
+mark :3040
+author github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1795175255 +0000
+committer github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1795175255 +0000
+data 32
+chore: update GitHub star trend
+from :3039
+commit refs/heads/rust-local-force
+mark :3041
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795100269 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795100269 +0800
+data 732
+fix(car-power): 修复车机下电暂停被状态闸门误判丢弃的问题
+
+- 移除 handleCarPowerSignal 中基于 isNowPlaying 的派发闸门，下电信号一律派发 pause，避免通知链停摆时状态冻结导致功能失效
+- 新增 isNowPlayingUpdatedAt 记录状态写入时间，将 isNowPlaying 降级为日志字段，不再参与决策
+- 更新下电派发日志格式为 power-down -> dispatch pause (action=…, playing=…, since=Ns)，便于诊断状态新鲜度
+- 将 audio_service_io.dart 中焦点处理日志从 print 改为 debugPrint，并补充暂停原因留痕，确保进入诊断包
+- 新增诊断文档记录 15 次下电信号全部被误判的实证，并更新既有分析文档与排查指南
+from :3011
+commit refs/heads/rust-local-force
+mark :3042
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795142674 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795142674 +0800
+data 604
+fix(player): 间奏点禁用条件移除本地歌曲限制
+
+- 将 _isLocalLrcLyricWithoutWordTiming 方法重构为 _isLineLevelLrcLyric getter，移除对 currentSong 是否为本地歌曲的判断
+- 现在只要歌词为 LRC 行级格式（无字级时间戳）即禁用 AppleLyricsView 的间奏点动画，在线歌曲同样生效
+- 三处调用点改为直接使用该 getter，不再传入 currentSong 参数
+- 更新注释说明 KRC / TTML / 静态歌词不受影响，字级 LRC 仍保留间奏点对齐
+- apple_lyrics_view.dart 中 enableInterludeDots 文档注释同步移除本地歌曲限定
+from :3041
+commit refs/heads/rust-local-force
+mark :3043
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795150604 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795150604 +0800
+data 1632
+feat(lyrics): 新增歌词动态赋色方式（整行赋色/渐变赋色）
+
+- 新增 LyricFillStyle 枚举：lineUniform 为默认（历史行为，整行统一混色），wordGradient 为字内渐变直接用未经混色的封面取色过渡到纯白（过曝光学感）；持久化 key lyric_fill_style 仅存 name，null 或未知串一律回落 lineUniform
+- 设置页仅在「歌词动态颜色」开启且 AM 播放器时展示「动态赋色方式」二选一下拉，切换即时生效并落盘；同步补充设置搜索索引条目与别名
+- AppleLyricsView 计算渐变专用原始封面色 _gradientAccentValue，仅 AM 深色底 + 动态颜色开启 + wordGradient + 无自定义文字色 + 已提取封面主色时非空，任一条件不满足为 null 由渲染层退回整行赋色历史行为
+- WordRenderer 实现双色端点：已播侧过曝成纯白、未播侧保持封面原色，sweep 扫光、classic 均匀 tint、强调字与辉光精灵各路径统一支持，alpha 曲线完全不变，非渐变模式逐像素退化为原行为
+- 新增 _lastSetTints 与 _lastSetCharTints tint 缓存键并入 set text/layout 判定，避免扫光前沿连续变化时 painter 携带旧 tint 造成颜色滞后
+- 补充像素证据测试（sweep 与 classic 模式已播白/未播封面色、关闭开关无过曝白）及偏好单元测试（默认值、落盘 key、未知串回退、同值早退不通知、reset 移除 key、不进动画预设参数表）
+- 更新 docs/lyric-animation-params.md 参数表说明 lyric_fill_style 行为与生效条件，并在测试命令清单加入 lyric_fill_style_test.dart
+from :3042
+commit refs/heads/rust-local-force
+mark :3044
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795151601 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795151601 +0800
+data 793
+fix(apple_lyrics): 渐变赋色端点改按行内位置取色，消除已播字封色残留
+
+- 新增 fillPositionTForTest 与 fillExposedColorForTest：位置归一化 t 与 _alphaAtX 同源，按 t 把封面色向白过曝，t=0 为纯白、t=1 保原色
+- 整词路径与 classic 字符路径的渐变端点均改为按字或字符左右边缘的绝对位置取色，不再固定「左白右封」
+- 辉光层与文字层共用同一份 tLc/tRc，保证两层颜色同源
+- 修复已播完字符内残留封色渐变、相邻字边界两侧颜色跳变的问题（用户反馈的 classic 观感）
+- 未开启渐变赋色时端点原样返回封面色，两端同色保持历史行为
+- 补充位置推导、过曝色的单元测试，以及 classic 已播区零封色的像素回归用例
+from :3043
+commit refs/heads/rust-local-force
+mark :3045
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795159723 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795159723 +0800
+data 999
+fix(layout): 修复 TabBarView 页面纵向滚动无法收起底栏
+
+- 移除 _onScrollNotification 中 depth != 0 的过滤：depth 统计的是冒泡路线经过的 Viewport 个数，TabBarView/PageView 分页器本身是 Viewport，会把页面纵向滚动通知一律抬成 depth=1，导致我的收藏、本地音乐、搜索等以 TabBarView 为主体的主界面永远收不起底栏
+- 分页器自身的翻页通知 metrics.axis 恒为横向，在 axis 判定处已被拦下，卡片内嵌横向轮播同理不受影响，原过滤意图由轴向判定保留
+- 嵌套纵向列表现在同样计入浏览位移，位移方向仍由 _applyScrollDelta 的到顶/clamp 语义兜底，不会反向推动底栏
+- 测试新增 tabbedBody 辅助构造「收藏页」结构（纵向列表装在 TabBarView 内），验证四步上滑共 64dp 得收起进度 1.0，进度到 1 后 NavigationBar 槽位移除
+- 测试新增嵌套横向轮播场景，验证横向轴滚动通知被拦下、底栏不动
+from :3044
+commit refs/heads/rust-local-force
+mark :3046
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795161304 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795161304 +0800
+data 1148
+fix(apple_lyrics): 渐变赋色未播区保持原有混色
+
+- 「渐变赋色」语义二次定稿：仅扫光带内用未经混色的封面原色向白过曝、已播侧纯白，完全未播区保持当前行原有混色不变，此前未播区会被整体替换成封面原色
+- fillExposedColorForTest 重命名为 fillColorAtForTest 并改为双通道签名：t>=1 原样返回原有混色 base，t<1 把封面原色 raw 向白按已播度插值，未开启时一律返回 base 保证零回归
+- _paintSweepWord 与 _paintEmphasizedWord 新增 accentR/accentG/accentB 参数传入封面提取色，textRGB 恢复为混色结果，废弃原先替换生效颜色的 effR/effG/effB 通道
+- classic 2 停端点色抽取为 classicRampColors 供辉光层与文字层共用，退化均匀 tint 与 sweep ramp 均统一为「扫光带内过曝、未播保原混色」口径
+- 像素证据测试改为白 / 封面原色 / 原有混色三类互斥分类，新增断言钉死未播区保浅青混色、零封面原色且不被提前过曝成白
+- 同步更新设置页下拉说明注释与 lyric-animation-params.md 中 lyric_fill_style 的行为描述
+from :3045
+commit refs/heads/rust-local-force
+mark :3047
+author Little-White3110 <53994162+Little-White3110@users.noreply.github.com> 1795161637 +0800
+committer GitHub <noreply@github.com> 1795161637 +0800
+data 58
+Merge branch 'zzyoxml:rust-local-two' into rust-local-two
+from :3042
+merge :3029
+commit refs/heads/rust-local-force
+mark :3048
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795161733 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795161733 +0800
+data 73
+Merge remote-tracking branch 'origin/rust-local-two' into rust-local-two
+from :3046
+merge :3047
+commit refs/heads/rust-local-force
+mark :3049
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795163915 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795163915 +0800
+data 852
+fix(lyrics): 渐变赋色改为过曝曲线跨字连贯流动
+
+- 新增 fillHueBehindForTest / fillHueAheadForTest / fillBloomColorForTest 替换旧的 fillPositionTForTest / fillColorAtForTest，颜色曲线以光前沿为零点：后方白化余韵约 1.6em、前方回落约 1.2em，带宽独立且宽于亮度锐带
+- 光前沿处保持封面原色作为过曝光斑芯，远后方纯白，远前方回原有混色，未播区颜色不变
+- sweep 与 classic 路径的端点色均按各 stop 的行内绝对位置过曝取样，相邻字共享边界同值，跨字连贯流动不再逐词跳变
+- 曲线不可用时（未开启渐变赋色或无光前沿）bloomAt 返回 null，调用方回落原有混色，保持零回归
+- 更新设置页文案与 lyric-animation-params.md 文档说明新颜色口径
+- 补充过曝曲线的单元测试覆盖
+from :3048
+commit refs/heads/rust-local-force
+mark :3050
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795168492 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795168492 +0800
+data 1249
+feat(apple_lyrics): 新增渐变赋色取色浓度参数，默认压淡至75%
+
+- 新增 lyric_gradient_fill_ratio 参数（范围 0.5~1.0，默认 0.75），控制渐变赋色过曝轨迹里封色的混白浓度：100% = 完全原取色，50% = 取色与白各半；纯取色太鲜艳（用户反馈）故默认压淡一档，未播区不受影响
+- word_renderer 过曝曲线的取色改为经 mixWithWhiteForTest 线性混白后使用，渐变模式关闭时与原值同值，保持零回归
+- lyric_preferences 增加常量、getter 与 setter：越界钳制到 [0.5, 1.0]、同值早退不通知、落盘到 lyric_gradient_fill_ratio，load() 从持久值恢复，reset 后回默认并移除 key
+- 设置页仅在「歌词动态颜色」开启且赋色方式为 wordGradient 时显示滑块，恢复默认值流程同步重置该参数，确认弹窗文案同步更新
+- 该参数不进动画预设参数表，sanitizeAnimationValues 对它返回空，预设契约不变
+- 补充 mixWithWhiteForTest 端点单测，新增 lyric_gradient_fill_ratio_test.dart 覆盖默认值、钳制、持久化与恢复、同值不通知、reset 及预设排除
+- 文档 lyric-animation-params.md 同步新增参数行、更新赋色方式说明与测试清单
+from :3049
+commit refs/heads/rust-local-force
+mark :3051
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795172876 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795172876 +0800
+data 822
+feat(lyrics): 渐变赋色取色浓度放开至 0~100 并默认落回中轴 50%
+
+- minGradientFillRatio 从 0.5 放开到 0.0，maxGradientFillRatio 保持 1.0，setter 越界钳制范围随之改为 [0, 1]
+- defaultGradientFillRatio 从 0.75 改为 0.5（范围正中），reset 后回到默认 0.5 且持久化 key 被移除
+- 明确 0% 档语义：不取色，过曝光斑呈纯白光核；ratio=0 时 mixWithWhiteForTest 恒返回 255
+- 设置页滑块副标题补充 0% = 不取色说明，重置动画参数处的注释同步为默认 50%
+- 更新 docs/lyric-animation-params.md：参数表默认值与范围改为 0.50（50%）、0.00~1.00，并记录同日五次定稿过程
+- 测试同步：默认值断言改为 0.5，越界用例覆盖负数钳到 0 与 0.2 不再被钳制，新增 0%=纯白的渲染侧用例
+from :3050
+commit refs/heads/rust-local-force
+mark :3052
+author Little-White3110 <53994162+Little-White3110@users.noreply.github.com> 1795173751 +0800
+committer GitHub <noreply@github.com> 1795173751 +0800
+data 58
+Merge branch 'zzyoxml:rust-local-two' into rust-local-two
+from :3051
+merge :3039
+commit refs/heads/rust-local-force
+mark :3053
+author github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1795175641 +0000
+committer github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1795175641 +0000
+data 32
+chore: update GitHub star trend
+from :3052
+commit refs/heads/rust-local-force
+mark :3054
+author Little-White3110 <53994162+Little-White3110@users.noreply.github.com> 1795182429 +0800
+committer GitHub <noreply@github.com> 1795182429 +0800
+data 125
+Merge pull request #195 from Little-White3110/rust-local-two
+
+Fix car power signal handling and enhance lyric color features
+from :3040
+merge :3053
+commit refs/heads/rust-local-force
+mark :3055
+author vcexml <3356141621@qq.com> 1795222801 +0800
+committer vcexml <3356141621@qq.com> 1795222801 +0800
+data 884
+feat(launchpad): 长按扭曲波按下即起演，重写为封面流感
+
+- 按下即刻起演：Listener 原始指针事件驱动，不再等系统长按识别，
+  消除「按住第 3 秒才有反应」的体感；波整段 2000ms =
+  长按识别约 500ms + 动作定时器 1500ms，动作正好卡在波走完那一刻；
+  提前松手 / 滚动接管快速回缩（280ms），动作不触发
+- 画笔重写为封面流感：去掉呆板同心圆——三段破口色散弧各自旋转甩开、
+  拖尾两道虚影、外光晕 + 高光细线、径向流星（收拢向心飞 / 扩散外甩），
+  图标收拢段压扁、扩散段鼓胀浮起（squash/swell，同波系统口径）
+- 新增时序回归测试：按下 75ms 即出波且只在一格、提前松手回缩不触发、
+  长按约 2s 走完全程并触发动作（小步长泵规避活跃手势下假时钟陷阱）
+from :3054
+commit refs/heads/rust-local-force
+mark :3056
+author vcexml <3356141621@qq.com> 1795223752 +0800
+committer vcexml <3356141621@qq.com> 1795223752 +0800
+data 422
+refactor(user): 「我的」主页移除设备管理/黑名单/听歌偏好重复入口
+
+这三项原本在主页 VIP 卡下方与「账号管理」底部面板各有一份，
+主页这组无平台门控、Android/Windows/TV 均显示。现只保留账号
+管理面板内的一份（点用户卡片其余区域打开），删掉主页调用与
+专用的 _buildMoreGroup 方法，三个 entry builder 原样复用不删。
+from :3055
+commit refs/heads/rust-local-force
+mark :3057
+author vcexml <3356141621@qq.com> 1795232935 +0800
+committer vcexml <3356141621@qq.com> 1795232935 +0800
+data 448
+perf(portable): 替换 Windows 便携版字体 SourceHanSansCN(8MB)→方正黑体简体.TTF(2.8MB)
+
+便携版 zip 从约 30MB 降到 23.9 MB。仅影响 Windows 便携包，
+Android/TV APK 不包含此字体（C++ 经 CMakeLists 独立安装到 data/fonts/）。
+
+同步更新：
+- CMakeLists 安装名单 + windows.ps1 暂存保留名单
+- WindowsDefaultFont family 名 WindowsFangZhengHeiTi + 加载路径
+- 两个字体测试的源文件引用
+from :3056
+commit refs/heads/rust-local-force
+mark :3058
+author vcexml <3356141621@qq.com> 1795241172 +0800
+committer vcexml <3356141621@qq.com> 1795241172 +0800
+data 527
+feat(launchpad): 卡片尺寸自适应缩放 + 壁纸模式移除底盘框
+
+- 卡片按格子实际宽度用 LayoutBuilder 等比缩放（上限 1.35），桌面宽格放大、
+  手机窄格收敛不溢出；长按扭曲波画笔同步按比例缩放
+- 网格格高 170、行间距 13.2、列间距 19（经多轮实测调整）
+- 全平台开启自定义背景时，图标底盘改透明——图标直接浮在壁纸上，
+  移除每张卡下面的实心底色框；关闭壁纸时保持原样
+
+analyze: No issues found。
+from :3057
+commit refs/heads/rust-local-force
+mark :3059
+author vcexml <3356141621@qq.com> 1795241559 +0800
+committer vcexml <3356141621@qq.com> 1795241559 +0800
+data 148
+feat(launchpad): 行/列间距再缩小 50%
+
+列 19.2→9.6（md×1.6→md×0.8）、行 13.2→6.6（md×1.1→md×0.55），
+格高 170 不变。
+from :3058
+commit refs/heads/rust-local-force
+mark :3060
+author vcexml <3356141621@qq.com> 1795244057 +0800
+committer vcexml <3356141621@qq.com> 1795244057 +0800
+data 1056
+fix(launchpad): 长按扭曲波移到全屏 Overlay，修复居中/裁剪/层级
+
+三个问题一次解决（此前波画在卡片 Stack + ClipRRect 内）：
+- 没居中：波锚点原用固定 84 基准坐标；改用 GlobalKey 量图标盘真实
+  屏幕中心，Overlay 里 translate 到该点，精确居中。
+- 显示不完整：波半径超出 SizedBox(84) 半宽被双重裁剪；改全屏
+  Positioned.fill 画布，无尺寸边界。
+- 不在最上层：波原本属于当前格子，被相邻格子覆盖；改 OverlayEntry
+  插入根 Overlay，天然盖在所有内容之上。
+
+实现：
+- _iconKey 挂图标盘量中心 + 缩放；_showWave 构造全屏 OverlayEntry
+- AnimatedBuilder 只重建单个 CustomPaint（不触发整页 layout）
+- 动画完成 / 松手回缩 dismissed 即 _removeWave 解绑
+- 减少动态效果时降级为不播波、动作照常
+- 测试改为「全局 CustomPaint 计数 +1 / -1」+「卡片子树内无波」断言
+
+flutter test test/modules/launchpad: 4/4 通过（并行假阳性清缓存后复跑）。
+from :3059
+commit refs/heads/rust-local-force
+mark :3061
+author vcexml <3356141621@qq.com> 1795251068 +0800
+committer vcexml <3356141621@qq.com> 1795251068 +0800
+data 69
+feat(launchpad): 关壁纸回退大色块样式，格子改正方形
+from :3060
+commit refs/heads/rust-local-force
+mark :3062
+author vcexml <3356141621@qq.com> 1795251143 +0800
+committer vcexml <3356141621@qq.com> 1795251143 +0800
+data 65
+fix(launchpad): 图标归中整格中心，长按波随之居中
+from :3061
+commit refs/heads/rust-local-force
+mark :3063
+author vcexml <3356141621@qq.com> 1795252183 +0800
+committer vcexml <3356141621@qq.com> 1795252183 +0800
+data 75
+fix(scripts): 恢复 windows.ps1 UTF-8 BOM，修复 PS 5.1 下解析报错
+from :3062

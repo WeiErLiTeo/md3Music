@@ -178,8 +178,18 @@ class AudioPlaybackService : Service() {
         private var playerReadyEngine: FlutterEngine? = null
 
         /// 当前是否正在播放（供 LockScreenLyricReceiver 判断锁屏时是否拉起歌词界面）。
+        ///
+        /// 只在 `updateNotification()` 里赋值，是通知更新的**副产物**，不是真实播放态的
+        /// 权威来源：后台/通知链停摆时会冻结成过期值。因此它不得再用于"要不要派发下电
+        /// 暂停"这类决策（2026-11-19 诊断包实证 15/15 次被它判死），只作日志字段；
+        /// [isNowPlayingUpdatedAt] 让日志能自证这个值有多旧。
         @Volatile
         var isNowPlaying = false
+
+        /// [isNowPlaying] 最近一次被通知链写入的墙钟时间（ms）。
+        /// 0 表示本次进程内从未更新过（诊断包据此判断"状态压根没同步过"）。
+        @Volatile
+        var isNowPlayingUpdatedAt = 0L
 
         /// MD3Music fork v40：解析 Dart 推来的原子随身听三棵列表快照——静态实现，
         /// 前台主引擎通道（MainActivity）与 headless 引擎通道（本服务）共用一处。
@@ -1409,6 +1419,7 @@ class AudioPlaybackService : Service() {
                 foregroundStarted = false
                 releaseWakeLock()
                 isNowPlaying = false
+                isNowPlayingUpdatedAt = SystemClock.elapsedRealtime()
                 // 停止播放/退出 App 后锁屏歌词不应残留
                 LockScreenLyricActivity.dismiss()
                 stopSelf()
@@ -2261,6 +2272,7 @@ class AudioPlaybackService : Service() {
                         foregroundStarted = false
                         releaseWakeLock()
                         isNowPlaying = false
+                        isNowPlayingUpdatedAt = SystemClock.elapsedRealtime()
                         LockScreenLyricActivity.dismiss()
                         stopSelf()
                         result.success(true)
@@ -2533,7 +2545,7 @@ class AudioPlaybackService : Service() {
     }
 
     /**
-     * 车机信号总入口：判开关 → 写诊断日志 → 判播放态 → 派发。
+     * 车机信号总入口：判开关 → 写诊断日志 → 派发。
      *
      * 开关关闭时**内存/Logcat 保持静默**（RingLog 不写，保证"关闭 = 与旧版本无差别"），
      * 但落盘文件 [CarPowerLogFile] 仍记一行到达：否则下次拿诊断包无法区分
@@ -2542,6 +2554,13 @@ class AudioPlaybackService : Service() {
      *
      * 开关开启时的日志走 [RingLog]（Log.i + 进程内环形缓冲双写）+ 落盘双通道：
      * 环形给"当场看"，落盘给"断电后看"。
+     *
+     * **不再用 [isNowPlaying] 做闸门**（2026-11-19 诊断包实证）：该值只在
+     * `updateNotification()` 里赋值，是通知更新的副产物，后台/通知链停摆时会冻结成
+     * 过期值。记录期内 15 次下电信号全部走 `signal ignored (not playing)`、
+     * `power-down -> dispatch` 命中 0 次——功能因此从未生效。下电是"无论是否在播都该
+     * 收摊"的事件，对已暂停的播放器再发一次 pause 是幂等无害的，所以这里一律派发，
+     * 把 [isNowPlaying] 降级为**日志字段**（下次诊断包据此判断状态是否可信）。
      */
     private fun handleCarPowerSignal(action: String) {
         if (!isCarPowerOffPauseEnabled(this)) {
@@ -2555,13 +2574,17 @@ class AudioPlaybackService : Service() {
             return
         }
         val command = CarPowerSignal.commandFor(action, enabled = true) ?: return
-        if (!isNowPlaying) {
-            RingLog.i("CarPower", "signal ignored (not playing): action=$action")
-            CarPowerLogFile.write(this, "signal ignored (not playing): action=$action")
-            return
+        // playing/since 只是日志字段，不参与决策：`since` 为 -1 表示本次进程内通知链
+        // 从未写过 isNowPlaying（该值无意义），否则是它距今多少秒——数值大即说明
+        // 通知链已停摆，历史版本的 `if (!isNowPlaying) return` 正是在这种状态下丢信号。
+        val since = if (isNowPlayingUpdatedAt > 0L) {
+            (SystemClock.elapsedRealtime() - isNowPlayingUpdatedAt) / 1000L
+        } else {
+            -1L
         }
-        RingLog.i("CarPower", "power-down -> dispatch $command (action=$action)")
-        CarPowerLogFile.write(this, "power-down -> dispatch $command (action=$action)")
+        val detail = "action=$action, playing=$isNowPlaying, since=${since}s"
+        RingLog.i("CarPower", "power-down -> dispatch $command ($detail)")
+        CarPowerLogFile.write(this, "power-down -> dispatch $command ($detail)")
         // 复用线控同一条 Dart 派发链：Dart 侧 pause 会同步通知、媒体会话与播放状态，
         // 直接在原生层 pause 播放器会造成「通知栏还在播 / 进度条不动」的状态撕裂。
         handleMediaButtonCommand(command)
@@ -2883,8 +2906,11 @@ class AudioPlaybackService : Service() {
         } else {
             stopVivoAtomicTimer()
         }
-        // 同步「正在播放」状态，供锁屏歌词广播（ACTION_SCREEN_OFF）判断
+        // 同步「正在播放」状态，供锁屏歌词广播（ACTION_SCREEN_OFF）判断。
+        // 同时记下写入时刻：该值是否可信由「距今多久」决定，日志里一并输出
+        // （见 handleCarPowerSignal 的 `since=Ns`）。
         isNowPlaying = isPlaying
+        isNowPlayingUpdatedAt = SystemClock.elapsedRealtime()
         lastDesktopLyricEnabled = desktopLyricEnabled
         lastIsFavorited = isFavorited
         lastDuration = duration

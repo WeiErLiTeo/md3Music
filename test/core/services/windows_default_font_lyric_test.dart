@@ -15,7 +15,7 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   test('Windows 歌词默认档/还原后/自定义失败均使用内置字体', () async {
-    final source = File('windows/runner/fonts/SOURCEHANSANSCN-MEDIUM.OTF');
+    final source = File('windows/runner/fonts/方正黑体简体.TTF');
     expect(source.existsSync(), isTrue);
     await WindowsDefaultFont.load(fontFilePath: source.absolute.path);
     expect(WindowsDefaultFont.loadedFamily, WindowsDefaultFont.family);

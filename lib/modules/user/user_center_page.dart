@@ -193,12 +193,8 @@ class _UserCenterPageState extends State<UserCenterPage> {
                 const SliverToBoxAdapter(child: Gap(AppSpacing.lg)),
                 _buildVipCard(cs, tt, kugou),
 
-                const SliverToBoxAdapter(child: Gap(AppSpacing.xl)),
-                // 「更多」分组：这三个入口此前只出现在「账号管理」弹层里
-                // （_buildAccountTile 的 L728-730），主页面上根本没有，
-                // 所以一屏三块之后就是空白。它们是已实现的能力，
-                // 提到主页只是换位置，不算新增功能。
-                _buildMoreGroup(context, cs, tt),
+                // 登录设备管理 / 黑名单管理 / 听歌偏好只保留在「账号管理」
+                // 底部面板内（点用户卡片其余区域打开），主页不再重复展示。
                 // 80 之上叠加系统手势条（小横条）高度，避免末项被压住
                 SliverToBoxAdapter(
                   child: SizedBox(
@@ -761,39 +757,6 @@ class _UserCenterPageState extends State<UserCenterPage> {
   }
 
   /// 账号管理面板里的「登录设备管理」入口：仅管理当前登录账号的设备
-  /// 主页「更多」分组：把原本只存在于账号管理弹层里的三个入口提到主页面。
-  ///
-  /// 复用各自的 [_buildDeviceManagerEntry] / [_buildBlacklistEntry] /
-  /// [_buildPreferenceEntry]，不复制任何导航逻辑。分组头与设置页
-  /// 的分组语言一致（labelLarge + 主色），间距用 xl 与上方会员区分开。
-  Widget _buildMoreGroup(BuildContext context, ColorScheme cs, TextTheme tt) {
-    return SliverToBoxAdapter(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(
-              AppSpacing.lg,
-              AppSpacing.sm,
-              AppSpacing.lg,
-              AppSpacing.sm,
-            ),
-            child: Text(
-              '更多',
-              style: tt.labelLarge?.copyWith(
-                fontWeight: FontWeight.w600,
-                color: cs.primary,
-              ),
-            ),
-          ),
-          _buildDeviceManagerEntry(context),
-          _buildBlacklistEntry(context),
-          _buildPreferenceEntry(context),
-        ],
-      ),
-    );
-  }
-
   /// （/login/device 系列接口按当前 token/userid 作用域，与其他已保存账号无关）。
   Widget _buildDeviceManagerEntry(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -805,7 +768,8 @@ class _UserCenterPageState extends State<UserCenterPage> {
     }
 
     final tile = ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.xs),
+      // 与上方会员卡的 16dp 左缘对齐（原来 xs=4，比卡片更靠左，视觉上参差）
+      contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
       leading: Icon(Icons.devices_other, color: cs.primary),
       title: Text(
         '登录设备管理',
@@ -815,7 +779,6 @@ class _UserCenterPageState extends State<UserCenterPage> {
         '查看并下线当前账号的登录设备',
         style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
       ),
-      trailing: Icon(Icons.chevron_right, color: cs.onSurfaceVariant),
       onTap: open,
     );
 
@@ -844,7 +807,8 @@ class _UserCenterPageState extends State<UserCenterPage> {
     }
 
     final tile = ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.xs),
+      // 与上方会员卡的 16dp 左缘对齐（原来 xs=4，比卡片更靠左，视觉上参差）
+      contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
       leading: Icon(Icons.block_outlined, color: cs.primary),
       title: Text(
         '黑名单管理',
@@ -854,7 +818,6 @@ class _UserCenterPageState extends State<UserCenterPage> {
         '管理推荐中不想看到的歌曲和歌手',
         style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
       ),
-      trailing: Icon(Icons.chevron_right, color: cs.onSurfaceVariant),
       onTap: open,
     );
 
@@ -881,7 +844,8 @@ class _UserCenterPageState extends State<UserCenterPage> {
     }
 
     final tile = ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.xs),
+      // 与上方会员卡的 16dp 左缘对齐（原来 xs=4，比卡片更靠左，视觉上参差）
+      contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
       leading: Icon(Icons.tune, color: cs.primary),
       title: Text(
         '听歌偏好',
@@ -891,7 +855,6 @@ class _UserCenterPageState extends State<UserCenterPage> {
         '设置性别、年龄、语言与风格，优化每日推荐',
         style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
       ),
-      trailing: Icon(Icons.chevron_right, color: cs.onSurfaceVariant),
       onTap: open,
     );
 
@@ -919,7 +882,8 @@ class _UserCenterPageState extends State<UserCenterPage> {
         ? account.nickname!
         : '用户 ${account.userid}';
     return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.xs),
+      // 与上方会员卡的 16dp 左缘对齐（原来 xs=4，比卡片更靠左，视觉上参差）
+      contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
       leading: _accountAvatar(account, cs),
       title: Row(
         children: [

@@ -9,7 +9,7 @@ void main() {
 
   test('Windows 内置 OTF 可注册为默认全局字体', () async {
     if (!Platform.isWindows) return;
-    final source = File('windows/runner/fonts/SOURCEHANSANSCN-MEDIUM.OTF');
+    final source = File('windows/runner/fonts/方正黑体简体.TTF');
     expect(source.existsSync(), isTrue);
     await WindowsDefaultFont.load(fontFilePath: source.absolute.path);
     expect(WindowsDefaultFont.loadedFamily, WindowsDefaultFont.family);

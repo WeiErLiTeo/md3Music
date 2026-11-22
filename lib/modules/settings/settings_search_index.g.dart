@@ -62,6 +62,7 @@ const List<({String label, String category, String subpage, String aliases})>
   (label: '男女对唱歌词优化', category: '播放页样式', subpage: '歌词效果', aliases: '对唱 男女'),
   (label: '歌词位置', category: '播放页样式', subpage: '歌词效果', aliases: '歌词位置 对齐 置左 居中 置右 左对齐 右对齐 居中对齐 水平位置'),
   (label: '歌词动态颜色', category: '播放页样式', subpage: '歌词效果', aliases: '动态颜色 混色'),
+  (label: '动态赋色方式', category: '播放页样式', subpage: '歌词效果', aliases: '赋色 整行 渐变 过曝 封面色'),
   (label: '上方行使用已播颜色', category: '播放页样式', subpage: '歌词效果', aliases: '上方 已播 已唱 模糊层 高亮'),
   (label: '歌词高斯模糊', category: '播放页样式', subpage: '歌词效果', aliases: '高斯模糊 模糊'),
   (label: '歌词辉光效果', category: '播放页样式', subpage: '歌词效果', aliases: '辉光 发光'),

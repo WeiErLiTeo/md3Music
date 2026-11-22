@@ -6,7 +6,7 @@ import 'package:flutter/services.dart';
 
 /// Windows 便携包内的默认字体；不进入 Flutter assets，因此不会打进 Android APK。
 class WindowsDefaultFont {
-  static const String family = 'WindowsSourceHanSansCNMedium';
+  static const String family = 'WindowsFangZhengHeiTi';
   static String? _loadedFamily;
   static bool _attempted = false;
 
@@ -18,8 +18,7 @@ class WindowsDefaultFont {
     final separator = Platform.pathSeparator;
     final directory = File(Platform.resolvedExecutable).parent.path;
     final file = File(fontFilePath ??
-        '$directory${separator}data${separator}fonts${separator}'
-            'SOURCEHANSANSCN-MEDIUM.OTF');
+        '$directory${separator}data${separator}fonts${separator}方正黑体简体.TTF');
     try {
       final bytes = await file.readAsBytes();
       final loader = FontLoader(family)

@@ -285,7 +285,7 @@ set(INSTALL_BUNDLE_LIB_DIR "${CMAKE_INSTALL_PREFIX}")
 
 # 仅 Windows 便携包携带字体；不写入 pubspec.yaml，Android/TV APK 不包含它。
 install(FILES
-  "${CMAKE_SOURCE_DIR}/runner/fonts/SOURCEHANSANSCN-MEDIUM.OTF"
+  "${CMAKE_SOURCE_DIR}/runner/fonts/方正黑体简体.TTF"
   "${CMAKE_SOURCE_DIR}/runner/fonts/LICENSE-APACHE-2.0.txt"
   "${CMAKE_SOURCE_DIR}/runner/fonts/NOTICE.txt"
   DESTINATION "${INSTALL_BUNDLE_DATA_DIR}/fonts" COMPONENT Runtime)

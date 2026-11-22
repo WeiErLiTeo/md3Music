@@ -91,7 +91,34 @@ void main() {
     bool hideNavigation = false,
     int selectedIndex = 0,
     ValueChanged<double>? onCollapse,
+    Widget? customBody,
+    bool tabbedBody = false,
   }) {
+    final Widget body = customBody ??
+        (tabbedBody
+            // 「我的收藏」等页面的结构：纵向列表装在 TabBarView（横分页器）
+            // 的某一页里。分页器本身是 Viewport，会把冒泡上来的通知 depth
+            // 抬成 1 —— 壳层监听按 depth 过滤就会让这类页面永远收不起底栏。
+            ? Column(
+                children: [
+                  Expanded(
+                    child: DefaultTabController(
+                      length: 2,
+                      child: TabBarView(
+                        children: <Widget>[
+                          onCollapse == null
+                              ? const SizedBox.shrink()
+                              : _Probe(onCollapse: onCollapse),
+                          const SizedBox.shrink(),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              )
+            : (onCollapse == null
+                  ? const SizedBox.expand(key: Key('body'))
+                  : _Probe(onCollapse: onCollapse)));
     return MultiProvider(
       providers: [
         ChangeNotifierProvider<ThemeProvider>(create: (_) => ThemeProvider()),
@@ -123,9 +150,7 @@ void main() {
           onDestinationSelected: (int _) {},
           scrollCollapseEnabled: enabled,
           hideNavigation: hideNavigation,
-          body: onCollapse == null
-              ? const SizedBox.expand(key: Key('body'))
-              : _Probe(onCollapse: onCollapse),
+          body: body,
         ),
       ),
     );
@@ -391,6 +416,84 @@ void main() {
       0.0,
       reason: '回到一级页时滚动那一位必须已复位，否则合并取大让底栏留在收起态',
     );
+    expect(find.byType(NavigationBar), findsOneWidget);
+  });
+
+  testWidgets('TabBarView 页面内列表上滑按位移跟手收起（收藏页结构）',
+      (WidgetTester tester) async {
+    setPhoneViewport(tester);
+    double collapse = -1;
+    await tester.pumpWidget(
+      host(enabled: true, tabbedBody: true, onCollapse: (double v) => collapse = v),
+    );
+    await tester.pumpAndSettle();
+    expect(collapse, 0.0);
+
+    // 与裸 ListView 同口径（槽位高 64）：四步上滑共 64dp 应得 1.0。
+    // 修复前 TabBarView 的分页视口会把通知 depth 抬成 1 被壳层拦下，进度恒 0。
+    // 分页器的拖拽竞技场逐帧解析，通知比手势晚一帧到 —— 步进后先统一收尾，
+    // 不逐步断言（避免把帧延迟误判成换算偏差）。
+    final TestGesture gesture = await tester.startGesture(
+      tester.getCenter(find.byKey(const Key('list'))),
+    );
+    for (int i = 0; i < 4; i++) {
+      await gesture.moveBy(const Offset(0, -16));
+      await tester.pump();
+    }
+    await gesture.up();
+    await tester.pumpAndSettle();
+    expect(
+      collapse,
+      closeTo(1.0, 0.03),
+      reason: 'TabBarView 内列表的纵向滚动量必须同样换算成收起进度（1:1）',
+    );
+    expect(
+      find.byType(NavigationBar),
+      findsNothing,
+      reason: '进度到 1 后槽位移除',
+    );
+  });
+
+  testWidgets('嵌套横向轮播滚动不推动底栏（原过滤意图保留）',
+      (WidgetTester tester) async {
+    setPhoneViewport(tester);
+    double collapse = -1;
+    // 列表里嵌一条横向轮播：拖它（通知轴为横向）不应推动底栏。
+    await tester.pumpWidget(
+      host(
+        enabled: true,
+        // 列表里嵌一条横向轮播：拖它（通知轴为横向）不应推动底栏。
+        customBody: Column(
+          children: [
+            SizedBox(
+              height: 200,
+              child: SingleChildScrollView(
+                key: const Key('carousel'),
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    for (var i = 0; i < 12; i++)
+                      SizedBox(
+                        width: 160,
+                        child: Center(child: Text('car $i')),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+            Expanded(
+              child: _Probe(onCollapse: (double v) => collapse = v),
+            ),
+          ],
+        ),
+        onCollapse: (double v) => collapse = v,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.drag(find.byKey(const Key('carousel')), const Offset(-300, 0));
+    await tester.pumpAndSettle();
+    expect(collapse, 0.0, reason: '横向轴的滚动通知被拦下，底栏不得动');
     expect(find.byType(NavigationBar), findsOneWidget);
   });
 }

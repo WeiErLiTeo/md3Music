@@ -838,11 +838,20 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold>
     _scrollCollapse.value = next;
   }
 
-  /// 滚动开始 / 更新的通知入口（只认本层纵向列表）。
+  /// 滚动开始 / 更新的通知入口（只认纵向滚动，嵌套横向滚动不吃）。
   bool _onScrollNotification(ScrollNotification n) {
     if (!_scrollCollapseActive) return false;
-    if (n.depth != 0) return false; // 只认本层列表，不吃嵌套列表的通知
     if (n.metrics.axis != Axis.vertical) return false;
+    // 不能按 [ScrollNotification.depth] == 0 过滤：depth 统计的是冒泡路线经过的
+    // **Viewport** 个数，而 TabBarView/PageView 这类横分页器本身就是一个 Viewport，
+    // 夹在「tab 内纵向列表 → 壳层监听」中间，会把页面的纵向滚动通知一律抬成
+    // depth=1。按 depth 过滤会让我的收藏 / 本地音乐 / 搜索等一切以 TabBarView 为
+    // 主体的主界面永远收不起底栏（2026-11-20 用户实测反馈）。
+    //
+    // 分页器**自身**的翻页通知 metrics.axis 恒为横向，在上面的 axis 判定处已被拦下；
+    // 卡片内嵌的横向轮播同理。所以这里只管纵向：页面主体纵向滚动跟手收起，
+    // 嵌套纵向列表同样计入浏览位移（位移方向仍由 [_applyScrollDelta] 的到顶/
+    // clamp 语义兜底，不会反向推动底栏）。
     if (n is ScrollStartNotification) {
       // dragDetails 非空 = 手指拖动起手；空 = 程序化滚动/惯性延续，不重置状态。
       if (n.dragDetails != null) _scrollDragActive = true;

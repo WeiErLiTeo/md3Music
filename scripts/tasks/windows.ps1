@@ -518,6 +518,12 @@ try {
             Remove-ItemBypass $stale.FullName
         }
         Remove-ItemBypass (Join-Path $appDir 'depth_model')
+        # 旧字体残留：CMake 安装列表改过字体后，旧字体不会被 INSTALL 自动删除，
+        # 暂存整目录拷贝会把它们混进 zip。在暂存副本上剔除所有非当前安装名单的字体。
+        $keepFont = '方正黑体简体.TTF'
+        foreach ($stale in @(Get-ChildItem -Path (Join-Path $appDir 'data/fonts/*') -File -ErrorAction SilentlyContinue)) {
+            if ($stale.Name -ne $keepFont) { Remove-ItemBypass $stale.FullName }
+        }
     }
     $launcherPath = Join-Path $stageDir 'md3Music.exe'
     $launcherNamespace = 'Md3Portable' + [Guid]::NewGuid().ToString('N')

@@ -103,7 +103,7 @@ class AppleLyricsView extends StatefulWidget {
   /// 是否启用间奏点（节奏点）动画。
   ///
   /// 设为 false 时跳过间奏检测，歌词行之间不会出现节奏点小圆点动画。
-  /// 适用于本地歌曲且歌词为 LRC 逐行格式的场景：LRC 没有逐字时间戳，
+  /// 适用于歌词为 LRC 逐行格式的场景：LRC 没有逐字时间戳，
   /// 行间的节奏点与真实节拍不易对齐，禁用后体验更干净。
   /// 默认 true，保持原有视觉。
   final bool enableInterludeDots;
@@ -577,6 +577,16 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
   /// 仅当「上方行使用已播颜色」开关开启且 [_activeLineColorValue] 非空时
   /// 等于 [_activeLineColorValue]，否则为 null（上方行沿用默认歌词色）。
   int? _aboveLineColorValue;
+
+  /// 「渐变赋色」模式专用原始封面色（ARGB int，未经混色 / 明度兜底），
+  /// null 表示该模式不可用。
+  ///
+  /// 仅 AM 深色底 + 「歌词动态颜色」开启 + 赋色方式为 wordGradient +
+  /// 无自定义文字色 + 已提取到封面主色时非空（直接取 widget.accentColor
+  /// 原值）；此时当前行字内渐变的未播端用它、已播端过渡到纯白。
+  /// 任一条件不满足时为 null，渲染层退回「整行赋色」的历史行为
+  /// （整行统一混色、只改透明度）。
+  int? _gradientAccentValue;
 
   // overscan 视口缓冲行数：pad 端 15、手机端 10。在 build 中根据最短边更新
   int _overscan = 10;
@@ -2966,6 +2976,7 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
           blurFade: _clearLayerBlurFade,
           blurActive: blurActive,
           activeColorValue: lineColorValue,
+          gradientAccentValue: _gradientAccentValue,
         );
         // 用平滑时间驱动逐字动画（上浮/字内渐变），避免 positionStream 5fps 卡顿
         // isPlaying 用于冻结自驱动波浪：暂停/未就绪时波浪不推进，防止辉光持续
@@ -3860,6 +3871,20 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
         LyricPreferences.instance.useAboveLinesPlayedColor
             ? _activeLineColorValue
             : null;
+    // 「渐变赋色」专用原始封面色：与 [_activeLineColorValue] 的差别有二——
+    // 门控（无条件走封面提取色、强制忽略自定义文字色），以及**不经混色
+    // 比例、不抬明度**：渐变端点要的是封面的原色冲击，过曝成白才成立。
+    // 要求赋色方式为 wordGradient；任一条件不满足为 null，渲染层退回
+    // 「整行赋色」的历史行为。
+    _gradientAccentValue =
+        (widget.forceDarkBackground &&
+                LyricPreferences.instance.useDynamicLyricColor &&
+                LyricPreferences.instance.fillStyle ==
+                    LyricFillStyle.wordGradient &&
+                customTextColor == null &&
+                widget.accentColor != null)
+            ? widget.accentColor!.toARGB32()
+            : null;
     // 根据主题亮度设置歌词文字颜色：
     // - AM 风格（forceDarkBackground=true）→ 始终白色
     // - 深色主题 → 白色
@@ -4126,6 +4151,7 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
       textColorValue: LyricLayout.textColorValue,
       activeLineColorValue: _activeLineColorValue,
       aboveLineColorValue: _aboveLineColorValue,
+      gradientAccentValue: _gradientAccentValue,
       linesGeneration: _linesGeneration,
       lineHeightsGeneration: _lineHeightsGeneration,
       lineTopsGeneration: _lineTopsGeneration,
@@ -4188,6 +4214,7 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
     p.textColorValue = LyricLayout.textColorValue;
     p.activeLineColorValue = _activeLineColorValue;
     p.aboveLineColorValue = _aboveLineColorValue;
+    p.gradientAccentValue = _gradientAccentValue;
     p.linesGeneration = _linesGeneration;
     p.lineHeightsGeneration = _lineHeightsGeneration;
     p.lineTopsGeneration = _lineTopsGeneration;
@@ -5566,6 +5593,9 @@ class _LyricsPainter extends CustomPainter {
 
   /// 上方行颜色覆盖值（ARGB），null = 不覆盖（上方行沿用 [textColorValue]）。
   int? aboveLineColorValue;
+
+  /// 「渐变赋色」专用原始封面色（未经混色 / 明度兜底），null = 模式不可用。
+  int? gradientAccentValue;
   int linesGeneration;
   int lineHeightsGeneration;
   int lineTopsGeneration;
@@ -5614,6 +5644,7 @@ class _LyricsPainter extends CustomPainter {
     required this.textColorValue,
     required this.activeLineColorValue,
     required this.aboveLineColorValue,
+    required this.gradientAccentValue,
     required this.linesGeneration,
     required this.lineHeightsGeneration,
     required this.lineTopsGeneration,
@@ -5906,6 +5937,7 @@ class _LyricsPainter extends CustomPainter {
           blurFade: blurFade,
           blurActive: blurActive,
           activeColorValue: lineColorValue,
+          gradientAccentValue: gradientAccentValue,
         );
         renderer.paintLine(
           canvas,

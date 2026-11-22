@@ -293,6 +293,24 @@ class _LyricAnimationSettingsPageState extends State<LyricAnimationSettingsPage>
                       .defaultDynamicColorMixRatioForCurrentPlatform,
                   onChanged: (v) => prefs.setDynamicColorMixRatio(v),
                 ),
+              // 渐变赋色取色浓度：需「歌词动态颜色」且赋色方式为渐变赋色时
+              // 才显示。混白稀释过曝轨迹里的取色——纯取色太鲜艳（用户反馈，
+              // 默认落回范围正中 50%），未播区不受它影响。
+              if (prefs.useDynamicLyricColor &&
+                  prefs.fillStyle == LyricFillStyle.wordGradient)
+                _buildSliderTile<double>(
+                  prefs: prefs,
+                  title: '渐变赋色取色浓度',
+                  subtitle: '过曝轨迹里的封色浓度：100% = 完全原取色，'
+                      '50% = 取色与白一半一半，0% = 不取色（纯白光核；'
+                      '需开启渐变赋色）',
+                  value: prefs.gradientFillRatio,
+                  min: LyricPreferences.minGradientFillRatio,
+                  max: LyricPreferences.maxGradientFillRatio,
+                  label: '${(prefs.gradientFillRatio * 100).round()}%',
+                  defaultValue: LyricPreferences.defaultGradientFillRatio,
+                  onChanged: (v) => prefs.setGradientFillRatio(v),
+                ),
               // 歌词模糊强度：仅高斯模糊开启时显示（开关在播放页样式页，
               // AnimatedBuilder 监听 prefs，开关变化后进本页即自动显隐）
               if (prefs.useGaussianBlur) ...[
@@ -511,7 +529,7 @@ class _LyricAnimationSettingsPageState extends State<LyricAnimationSettingsPage>
             '间奏点水平位置、间奏点圆点大小、间奏点间距、'
             '错峰上限/步长/衰减、错峰起点开关、歌词模糊强度、'
             '模糊等级渐变切换、模糊等级渐变时长、提前换行、模糊褪去时长、'
-            '动态颜色混色比例、辉光强度、辉光触发阈值、'
+            '动态颜色混色比例、渐变赋色取色浓度、辉光强度、辉光触发阈值、'
             '辉光判定方式、辉光固定时长、字内渐变样式）'
             '恢复为默认值，确定继续吗？',
           ),
@@ -564,6 +582,9 @@ class _LyricAnimationSettingsPageState extends State<LyricAnimationSettingsPage>
     // 动态颜色混色比例回到 15%（历史观感）
     await prefs.setDynamicColorMixRatio(
         LyricPreferences.defaultDynamicColorMixRatioForCurrentPlatform);
+    // 渐变赋色取色浓度回到默认 50%（范围正中）
+    await prefs.setGradientFillRatio(
+        LyricPreferences.defaultGradientFillRatio);
     await prefs.setGlowThresholdFactor(
         LyricPreferences.defaultGlowThresholdFactorForCurrentPlatform);
     // 辉光强度回到 100%（历史观感）

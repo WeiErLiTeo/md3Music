@@ -246,6 +246,9 @@ class _SettingsPageState extends State<SettingsPage>
   bool _lyricDynamicColor = false;
   // 当前行以上的行是否跟随已播颜色（独立开关，默认关闭）
   bool _lyricAboveLinesPlayedColor = false;
+  // 动态颜色赋色方式（整行赋色 / 渐变赋色）：下拉仅在「歌词动态颜色」开启时
+  // 展示，切换即时生效；默认整行赋色（历史行为）
+  LyricFillStyle _lyricFillStyle = LyricFillStyle.lineUniform;
   // 平衡行换行：AM / MD 各一套独立偏好（key 不同，互不影响）
   bool _lyricLineBalanceAm = false;
   bool _lyricLineBalanceMd3 = false;
@@ -1061,6 +1064,7 @@ class _SettingsPageState extends State<SettingsPage>
       _lyricDynamicColor = LyricPreferences.instance.useDynamicLyricColor;
       _lyricAboveLinesPlayedColor =
           LyricPreferences.instance.useAboveLinesPlayedColor;
+      _lyricFillStyle = LyricPreferences.instance.fillStyle;
       _lyricLineBalanceAm = LyricPreferences.instance.lineBalance;
       _lyricLineBalanceMd3 = Md3LyricPreferences.instance.lineBalance;
       _hideLyricCredits = LyricPreferences.instance.hideLyricCredits;
@@ -4530,6 +4534,61 @@ class _SettingsPageState extends State<SettingsPage>
                 }
               : null,
         ),
+        // 动态赋色方式：仅 AM 播放器且「歌词动态颜色」开启时显示。
+        // 「整行赋色」= 当前行统一使用封面混色（历史行为）；「渐变赋色」=
+        // 扫光带内用封面原色（不混色）向白过曝、已播侧纯白，唱到之处
+        // 封面色过曝成白（光学感）；未播区保持原有混色，不被改动。
+        // M3E 字段式下拉：初始选中值由 M3EDropdownItem.selected 表达，
+        // 每次 build 按当前值重建 items；同值早退，避免 setItems 回调引发回环。
+        // search: 赋色 整行 渐变 过曝 封面色
+        if (_lyricDynamicColor && _useAmStylePlayer)
+          ListTile(
+            title: const Text('动态赋色方式'),
+            subtitle: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  '整行赋色：当前行统一使用封面混色；'
+                  '渐变赋色：光扫过之处封色过曝成白，过曝余韵跨字流动，'
+                  '未播部分保持原混色',
+                ),
+                const Gap(AppSpacing.sm),
+                TvDropdownMenu<LyricFillStyle>(
+                items: [
+                  for (final style in LyricFillStyle.values)
+                    M3EDropdownItem(
+                      label: lyricFillStyleLabel(style),
+                      value: style,
+                      selected: _lyricFillStyle == style,
+                    ),
+                ],
+                singleSelect: true,
+                showChipAnimation: false,
+                fieldStyle: M3EDropdownFieldStyle(
+                  hintText: '选择赋色方式',
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.md,
+                    vertical: AppSpacing.sm,
+                  ),
+                  selectedTextStyle: Theme.of(context).textTheme.bodyMedium,
+                ),
+                onSelectionChanged: (selected) {
+                  // 单选下再次点击已选中项会被取消选中：强制重建恢复原值
+                  if (selected.isEmpty) {
+                    setState(() {});
+                    return;
+                  }
+                  final style = selected.first.value;
+                  if (style == _lyricFillStyle) return;
+                  AppHaptics.lightImpact(HapticCategory.control);
+                  setState(() => _lyricFillStyle = style);
+                  LyricPreferences.instance.setFillStyle(style);
+                },
+              ),
+            ],
+            ),
+          ),
         // 上方已播行跟随已播颜色：当前行以上的行（清晰层 + 模糊层）改用
         // 当前行已播字的高亮色。独立开关，颜色来源仍是「歌词动态颜色」
         // 或自定义歌词文字色；两者都没启用时本开关无视觉变化。

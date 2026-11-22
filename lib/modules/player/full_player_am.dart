@@ -1917,21 +1917,19 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
     }
   }
 
-  /// 判断当前歌曲是否为本地歌曲且歌词为 LRC 逐行格式（无字级时间戳）。
+  /// 当前歌词是否为 LRC 行级格式（无字级时间戳）。
   ///
-  /// 这种情况禁用 AppleLyricsView 的间奏点（节奏点）动画：
+  /// 用于禁用 AppleLyricsView 的间奏点（节奏点）动画：
   /// LRC 逐行没有逐字时间戳，行间节奏点与真实节拍不易对齐，
-  /// 本地歌曲的 LRC 又常常缺少精确时间戳，体验较差，禁用后更干净。
+  /// 禁用后体验更干净。
   ///
   /// 若是字级 LRC（含逐字时间戳），行起始时间戳精确到毫秒，
   /// 间奏点可以正常对齐节拍，应保留。
-  /// 在线歌曲 / KRC 逐字歌词 / 静态歌词不受影响。
-  bool _isLocalLrcLyricWithoutWordTiming(dynamic currentSong) {
-    if (currentSong is! Song || currentSong.isOnline) return false;
-    if (_lyricFormat != LyricFormat.lrc) return false;
-    // 任意一行有字级时间戳即视为字级 LRC（混合场景按字级处理）
-    return !_parsedLyricsRaw.any((line) => line.hasWordTiming);
-  }
+  /// KRC / TTML / 静态歌词不受影响。
+  bool get _isLineLevelLrcLyric =>
+      _lyricFormat == LyricFormat.lrc &&
+      // 任意一行有字级时间戳即视为字级 LRC（混合场景按字级处理）
+      !_parsedLyricsRaw.any((line) => line.hasWordTiming);
 
   /// 构建横屏布局的封面内容：style 0/1 用 SpectrumArtwork（白色），style 2 用原封面
   Widget _buildLandscapeArtworkContent(
@@ -3092,11 +3090,8 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
                                   playbackNotReady:
                                       playerProvider.isPlaybackNotReady,
                                   forceDarkBackground: true,
-                                  // 本地歌曲 + LRC 逐行歌词：禁用间奏点（节奏点）
-                                  enableInterludeDots:
-                                      !_isLocalLrcLyricWithoutWordTiming(
-                                        currentSong,
-                                      ),
+                                  // LRC 行级歌词：禁用间奏点（节奏点）
+                                  enableInterludeDots: !_isLineLevelLrcLyric,
                                   doubleTapToJump: lyricDoubleTap,
                                   accentColor: _lyricAccentColor,
                                   // 歌曲 BPM（本地标签/接口，可空）：用于快慢歌辉光阈值
@@ -3504,11 +3499,8 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
                                                       playerProvider
                                                           .isPlaybackNotReady,
                                                   forceDarkBackground: true,
-                                                  // 本地歌曲 + LRC 逐行歌词：禁用间奏点（节奏点）
-                                                  enableInterludeDots:
-                                                      !_isLocalLrcLyricWithoutWordTiming(
-                                                        currentSong,
-                                                      ),
+                                                  // LRC 行级歌词：禁用间奏点（节奏点）
+                                                  enableInterludeDots: !_isLineLevelLrcLyric,
                                                   doubleTapToJump:
                                                       lyricDoubleTap,
                                                   accentColor:
@@ -3883,11 +3875,8 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
                                                       playerProvider
                                                           .isPlaybackNotReady,
                                                   forceDarkBackground: true,
-                                                  // 本地歌曲 + LRC 逐行歌词：禁用间奏点（节奏点）
-                                                  enableInterludeDots:
-                                                      !_isLocalLrcLyricWithoutWordTiming(
-                                                        currentSong,
-                                                      ),
+                                                  // LRC 行级歌词：禁用间奏点（节奏点）
+                                                  enableInterludeDots: !_isLineLevelLrcLyric,
                                                   doubleTapToJump:
                                                       lyricDoubleTap,
                                                   accentColor:
