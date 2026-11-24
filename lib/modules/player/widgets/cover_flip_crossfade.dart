@@ -17,26 +17,30 @@ import '../../../widgets/player_artwork_image.dart'
         resolvePlayerArtworkImage;
 import 'low_res_blur.dart';
 
-/// 就绪等待上限：超过则进入兜底宽限（见 [kCoverFlipFallbackGrace]）。
+/// 就绪等待上限：超过即不再空等，**降级为直接翻入**（见类文档「兜底不是
+/// 硬切、无动画」条）。
 ///
 /// 参考视频里「封面迟到补齐」那次翻转约等了 1s；取同量级。等待期间旧封面
 /// 一直在位（与视频「封面到位才翻」一致）。
 const Duration kCoverFlipReadyTimeout = Duration(milliseconds: 1000);
 
-/// 兜底宽限：翻转等待超时后**继续等**这么久，仍不就绪才降级为交叉淡出。
-///
-/// 弱网（图床抖动 / 建连超时）下新封面常在 1~2s 才解码完成。原实现超时即
-/// 放弃翻转、直接换图，真机观感是「封面瞬间消失、过一会儿又跳出来」——
-/// 连切歌时最刺眼的那一下。宽限期内就绪照样演完整翻转（动画不丢），
-/// 代价只是旧封面多停一会儿（有界，仍不无限压旧封面）。
-const Duration kCoverFlipFallbackGrace = Duration(milliseconds: 1200);
+/// 进行中的翻转被新版本压入时的剩余行程压缩系数：连切时把当前这段加速
+/// 收敛（剩余 × 本值，下限 [kChainFlipMinMs]），让中间歌尽快翻到位。
+const double kChainFlipAccel = 0.35;
 
-/// 兜底过渡时长：无旋转、无模糊的交叉淡出（旧封面整层渐隐，新层在下显形）。
-///
-/// 只在「宽限也用尽 / 探测明确失败」时触发。新图没到位就翻 = 翻出一只白板
-/// （占位符），比不翻更难看；而硬切是瞬变。淡出把这次瞬变摊到 220ms 里，
-/// 观感是「旧封面柔和退场」——即便新层此刻仍是占位，也读作加载而非闪断。
-const Duration kCoverFlipFallbackFade = Duration(milliseconds: 220);
+/// 链式续翻单段时长随连切深度的逐级压缩系数：连切越深、下一段越快。
+const double kChainFlipScale = 0.6;
+
+/// 链式续翻单段时长的下限：再短观感退化成瞬切，只留可辨的翻入动作。
+const int kChainFlipMinMs = 90;
+
+/// 静默窗：距上次中途到达超过该时长即认定连切已停，复位连切深度，
+/// 后续翻转恢复满长时长与满额就绪预算。
+const Duration kChainFlipQuietWindow = Duration(milliseconds: 500);
+
+/// 连切期间的就绪等待预算压缩系数：连切深度 >0 时「等封面就绪」砍半，
+/// 不空等满额（1s + 1.2s），把空转时间省给翻面本身。
+const double kChainBudgetCut = 2.0;
 
 /// 切歌封面过渡：旧封面「模糊加剧 + 绕纵轴翻倒」→ 新封面「翻入 + 逐渐清晰」。
 ///
@@ -52,11 +56,18 @@ const Duration kCoverFlipFallbackFade = Duration(milliseconds: 220);
 ///   等于消失。由 [readinessProbe] 探测同键解码缓存，未就绪时继续显示旧封面
 ///   （与视频「封面后到、到位才翻」一致）。不传 probe 时退化为「version
 ///   变化即翻」。
-/// - **兜底不是硬切**：等待超过 [readyTimeout] 后先进入 [fallbackGrace]
-///   宽限——弱网下新图常在此窗口内到达，翻转照演（动画不丢）；宽限也用尽、
-///   或探测明确失败，才降级为 [fallbackFadeDuration] 的交叉淡出（新层在底下
-///   直接显形，旧封面整层渐隐）。早先两种兜底都是「放弃动画直接换图」，
-///   弱网连切时表现为封面反复闪断——本条存在理由。
+/// - **兜底不是硬切、也不是无动画**：等待超过 [readyTimeout] 或探测明确失败，
+///   统一降级为**标准翻转**（旧层照常模糊+翻倒、新层即刻翻入）。新图未
+///   到位时新层短暂显占位、解码到位即在翻转中替换——曾经这里退化为交叉淡出，
+///   用户反馈「兜底封面没有翻转效果」，与整套翻转观感不一致。早先的「放弃
+///   动画直接换图」更糟（弱网连切封面反复闪断），本条存在理由。
+/// - **连切不断翻（链式续翻）**：翻转进行中收到新版本时不掐断、不从头重置
+///   ——把当前这段**加速收敛**（剩余行程压到 [kChainFlipAccel]，下限
+///   [kChainFlipMinMs]），收敛后在完成回调里向最新目标续翻一整段。单段时长
+///   随连切深度逐级乘 [kChainFlipScale]（下限 [kChainFlipMinMs]），就绪等待
+///   预算同步砍半（[kChainBudgetCut]）；连切停止（静默窗 [kChainFlipQuietWindow]）
+///   后深度复位，恢复满长翻转与满额预算。修复「翻转播到一半被下一首打断」
+///   （原实现每来一版就把进行中的控制器 reset 回 0°，连切时每段都演不完）。
 /// - **每层各自先裁圆角、再旋转**（[radius]）：旋转中的封面带透视，近端会
 ///   略微探出静止边界——若由外层统一裁圆角，探出部分会被切掉，表现为
 ///   「上下边缘被裁」。整张圆角卡片作为刚体旋转，不被裁。
@@ -94,8 +105,6 @@ class CoverFlipCrossfade extends StatefulWidget {
     this.direction = 1,
     this.readinessProbe,
     this.readyTimeout = kCoverFlipReadyTimeout,
-    this.fallbackGrace = kCoverFlipFallbackGrace,
-    this.fallbackFadeDuration = kCoverFlipFallbackFade,
     this.swipeEnabled = false,
     this.canGoPrevious = false,
     this.canGoNext = false,
@@ -147,12 +156,6 @@ class CoverFlipCrossfade extends StatefulWidget {
 
   /// 就绪等待上限。
   final Duration readyTimeout;
-
-  /// 兜底宽限：超时后继续等新图的时间；用尽才降级为交叉淡出（见类文档）。
-  final Duration fallbackGrace;
-
-  /// 兜底交叉淡出时长（无旋转、无模糊）。
-  final Duration fallbackFadeDuration;
 
   /// 跟手拖拽翻转切歌（AM 播放页注入；默认关闭，MD 页/测试不受影响）。
   ///
@@ -240,13 +243,6 @@ class _CoverFlipCrossfadeState extends State<CoverFlipCrossfade>
   String? _pendingVersion;
   Timer? _readyTimer;
 
-  /// 兜底交叉淡出是否正在进行（宽限用尽 / 探测失败后）。
-  ///
-  /// 只用一个标志而不是自建时钟：这段过渡是**一次性、无状态**的（进入即从
-  /// 1 走到 0，结束就把旧层摘掉），树上的 [TweenAnimationBuilder] 自带时钟，
-  /// 分支一变状态自然回收（见 `_buildFallbackFade`）。
-  bool _fallbackFading = false;
-
   /// 最近一次布局测得的封面逻辑宽 / dpr（就绪探测算同键解码档位用）。
   /// build 内只写不读 notify，与 _photoScheduledHash 同型约束。
   double _settledWidth = 0;
@@ -254,6 +250,26 @@ class _CoverFlipCrossfadeState extends State<CoverFlipCrossfade>
 
   /// 快照构建的代次号（快速连切时旧回调按它作废自己，见 _prepareBlurProbes）。
   int _prepareSeq = 0;
+
+  // ── 链式续翻（翻转进行中收到新版本时用；契约见类文档「连切不断翻」） ──────
+  //
+  // 原实现翻转途中落进「常规切换」分支，锁新层 + 等探测，随后新一轮
+  // _startFlip() 把进行中的控制器 reset 回 0°——中途收掉、画面跳回正面，
+  // 连切时每段都演不完（用户报「翻转播到一半切下一首」）。改为：加速当前段
+  // 收敛 → 向最新目标续翻一整段，每段完整演完，长度与就绪预算随深度压缩。
+
+  /// 翻转进行中收到的最新目标版本（null = 不在链续）。
+  String? _chainVersion;
+
+  /// 本段原本要翻入的那张（收敛后它就是「当前显示」），续翻的起点层。
+  String? _chainFromUri;
+  String? _chainFromFallback;
+
+  /// 连切深度：每在中途压进一个新目标 +1，驱动时长压缩；静默窗过后复位。
+  int _chainDepth = 0;
+
+  /// 最近一次中途到达的时刻（静默窗衰减深度的基准）。
+  DateTime _lastArrivalAt = DateTime.fromMillisecondsSinceEpoch(0);
 
   // ── 手势路径（见 [_CoverFlipSwipePhase]；全程零模糊、不做就绪探测） ──────
 
@@ -438,13 +454,22 @@ class _CoverFlipCrossfadeState extends State<CoverFlipCrossfade>
       return;
     }
     if (_swipeActive) _cancelSwipe();
-    // 兜底淡出在飞时又切歌：淡出作废，回到「等新图」——否则新一轮锁存的旧层
-    // 会沿用上一轮的淡出进度（半透明的旧封面凭空变淡）。
-    _fallbackFading = false;
     // 旧值为空（首图）或新值为空（占位元数据，无可翻之物）：不演过渡，
     // 撤掉在飞的过渡/等待直接换（与参考视频「图没变不翻」一致）。
     if (oldV == null || newV == null) {
       _cancel();
+      return;
+    }
+    // ── 翻转进行中再来切歌：不掐断、不从头重置（链式续翻，见类文档） ──────
+    // 把当前这段加速收敛，收敛后向最新目标续翻一整段；单段时长与就绪预算
+    // 随连切深度压缩。连切停止（静默窗）后深度复位、恢复满长翻转。
+    if (_flip.isAnimating) {
+      _chainVersion = newV;
+      _chainFromUri = oldV; // 本段原本要翻入的那张，收敛后它就是「当前显示」
+      _chainFromFallback = oldWidget.fallbackFilePath;
+      _chainDepth++;
+      _lastArrivalAt = DateTime.now();
+      _accelerateInFlight();
       return;
     }
     if (_pendingVersion == null) {
@@ -481,52 +506,117 @@ class _CoverFlipCrossfadeState extends State<CoverFlipCrossfade>
       // 内嵌封面（resolve 返回 null），留 null 走滤镜兜底整段一致。
       // ignore: discarded_futures
       _prepareBlurProbes(oldV, newV).then((_) {
-        if (mounted && widget.version == newV) _startFlip();
+        if (mounted && widget.version == newV) _startFlip(chainDepth: _chainDepth);
       });
       return;
     }
-    // 等新封面就绪再翻：等待期间只显示旧封面。
-    _pendingVersion = newV;
-    _readyTimer?.cancel();
-    _readyTimer = Timer(widget.readyTimeout, _onReadyTimeout);
-    probe(newV, _settledWidth, _dpr).then((ok) async {
-      // 过期结果丢弃：等待途中又切了歌 / 被取消。
-      if (!mounted || _pendingVersion != newV) return;
-      _clearReadyTimer();
-      debugPrint('[CoverFlip] 探测完成 uri=$newV ready=$ok');
-      if (ok) {
-        // 翻转启动前先做同键纹理预热（离屏画一次强制上传）：大图首次进
-        // display list 的纹理上传实测 12~18ms GPU（mini→full 形变已量化，
-        // 见 prewarmPlayerArtworkTexture），不预热则这笔开销落在翻转窗口
-        // 内（最坏在 swap 点）。探测已同键命中解码缓存，这里的 resolve
-        // 是缓存命中，开销很小。预热期间保持 _pendingVersion 不变：
-        // 又切歌时由新一轮等待接管，这里按过期丢弃（与探测同款口径）。
-        final status = await prewarmPlayerArtworkTexture(
-          artworkUri: newV,
-          settledLogicalWidth: _settledWidth,
-          devicePixelRatio: _dpr,
-        );
-        debugPrint('[CoverFlip] 纹理预热 uri=$newV $status');
-        if (!mounted || _pendingVersion != newV) return;
-        // 快照也在启动**前**备齐（探测命中后 resolve 为同键缓存命中，
-        // 同步补发，不引入额外帧延迟）：翻转第 0 帧起就是叠层形态，
-        // 全程不出现「滤镜→叠层」中途替换跳变（真机反馈的观感问题）。
-        final oldUri = _oldArtworkUri;
-        await _prepareBlurProbes(oldUri, newV);
-        if (!mounted || _pendingVersion != newV) return;
-        _pendingVersion = null;
-        _startFlip();
-      } else {
-        _pendingVersion = null;
-        // 加载失败：翻转演不了（翻出占位白板等于动画消失），走交叉淡出兜底，
-        // 让「旧封面退场」是连续过渡而不是瞬切（child 自行显示占位/错误态）。
-        debugPrint('[CoverFlip] 探测失败，兜底交叉淡出 uri=$newV');
-        _startFallbackFade();
-      }
-    });
+    // 等新封面就绪再翻：等待期间只显示旧封面。常规与链式续翻共用同一条
+    // 管线（_awaitAndFlip）：区别只在预算是否砍半、启动时长是否压缩，
+    // 二者均由 [_chainDepth] 在内部判定，调用方无分支。
+    unawaited(_awaitAndFlip(newV));
   }
 
-  void _startFlip() {
+  /// 就绪等待 → 纹理预热 → 模糊快照 → 启动翻转（常规与链式续翻共用）。
+  ///
+  /// [target] 途中被更新的版本取代时（[_pendingVersion] != target）整段作废；
+  /// 探测失败走交叉淡出兜底。连切深度 >0 时就绪预算砍半（[_readyMs]）、
+  /// 启动时长按深度压缩（见 [_startFlip] 的 [chainDepth]）。
+  Future<void> _awaitAndFlip(String target) async {
+    _pendingVersion = target;
+    _readyTimer?.cancel();
+    _readyTimer = Timer(Duration(milliseconds: _readyMs()), _onReadyTimeout);
+    var ok = false;
+    try {
+      ok = await widget.readinessProbe!(target, _settledWidth, _dpr);
+    } catch (_) {}
+    // 过期结果丢弃：等待途中又切了歌 / 被取消。
+    if (!mounted || _pendingVersion != target) return;
+    _clearReadyTimer();
+    debugPrint('[CoverFlip] 探测完成 uri=$target ready=$ok');
+    // 无论就绪与否都启动翻转：widget.child 本身处理加载态（解码中显示占位），
+    // 翻入后半程自然显形，不影响观感一致性（用户反馈兜底封面无翻转）。
+    // 探测失败跳纹理预热（图都没解出来，预热无意义）。
+    if (!ok) {
+      // _pendingVersion 保持为 target，在下方 guard 中检测途中是否被新版本取代。
+      final oldUri = _oldArtworkUri;
+      await _prepareBlurProbes(oldUri, target);
+      if (!mounted || _pendingVersion != target) { _pendingVersion = null; return; }
+      _pendingVersion = null;
+      _startFlip(chainDepth: _chainDepth);
+      return;
+    }
+    // 翻转启动前先做同键纹理预热（离屏画一次强制上传）：大图首次进
+    // display list 的纹理上传实测 12~18ms GPU（mini→full 形变已量化，
+    // 见 prewarmPlayerArtworkTexture），不预热则这笔开销落在翻转窗口
+    // 内（最坏在 swap 点）。探测已同键命中解码缓存，这里的 resolve
+    // 是缓存命中，开销很小。预热期间保持 _pendingVersion 不变：
+    // 又切歌时由新一轮等待接管，这里按过期丢弃（与探测同款口径）。
+    final status = await prewarmPlayerArtworkTexture(
+      artworkUri: target,
+      settledLogicalWidth: _settledWidth,
+      devicePixelRatio: _dpr,
+    );
+    debugPrint('[CoverFlip] 纹理预热 uri=$target $status');
+    if (!mounted || _pendingVersion != target) return;
+    // 快照也在启动**前**备齐（探测命中后 resolve 为同键缓存命中，
+    // 同步补发，不引入额外帧延迟）：翻转第 0 帧起就是叠层形态，
+    // 全程不出现「滤镜→叠层」中途替换跳变（真机反馈的观感问题）。
+    final oldUri = _oldArtworkUri;
+    await _prepareBlurProbes(oldUri, target);
+    if (!mounted || _pendingVersion != target) return;
+    _pendingVersion = null;
+    _startFlip(chainDepth: _chainDepth);
+  }
+
+  /// 本段就绪等待预算：连切深度 >0 时砍半，不空等满额。
+  int _readyMs() => _chainDepth > 0
+      ? (widget.readyTimeout.inMilliseconds / kChainBudgetCut).round()
+      : widget.readyTimeout.inMilliseconds;
+
+  /// 链式续翻：以 [fromUri]（刚收敛的显示图）为起点层，向 [target] 翻一整段。
+  Future<void> _beginChainFlip(
+    String fromUri,
+    String? fromFallback,
+    String target,
+  ) async {
+    if (!mounted) return;
+    if (target == fromUri) {
+      // 目标与当前显示相同：无需再翻，直接收回到 idle。
+      _dropOldLayer();
+      return;
+    }
+    setState(() {
+      _oldArtworkUri = fromUri;
+      _oldArtworkWidget = PlayerArtworkImage(
+        artworkUri: fromUri,
+        fallbackFilePath: fromFallback,
+        fit: BoxFit.cover,
+        iconSize: widget.iconSize,
+        backgroundColor: widget.placeholderColor,
+        iconColor: widget.iconColor,
+      );
+      _dropBlurProbes();
+    });
+    unawaited(_awaitAndFlip(target));
+  }
+
+  /// 加速进行中的翻转：把剩余行程压到名义剩余的 [kChainFlipAccel]，下限
+  /// [kChainFlipMinMs]。用 animateTo 而非改 duration 后 forward——后者会让
+  /// 控制器从当前值按新步长重算、观感突变；animateTo 只压缩剩余时长，速度连续。
+  void _accelerateInFlight() {
+    final remaining = (1.0 - _flip.value).clamp(0.02, 1.0);
+    final ms =
+        (widget.duration.inMilliseconds * remaining * kChainFlipAccel).round();
+    _flip.animateTo(
+      1.0,
+      duration: Duration(
+        milliseconds:
+            ms.clamp(kChainFlipMinMs, widget.duration.inMilliseconds.toInt()),
+      ),
+    );
+  }
+
+  void _startFlip({int chainDepth = 0}) {
     if (!mounted) return;
     // 快照已由 _prepareBlurProbes 在启动前备齐，这里**不再清理**——
     // 第 0 帧起两层各自整段用同一种形态（叠层，或构建失败的整段滤镜）。
@@ -535,58 +625,45 @@ class _CoverFlipCrossfadeState extends State<CoverFlipCrossfade>
     // （本帧只完成 build，tick 落到下一帧，测试与真机都表现为换图后停一拍）。
     _flip
       ..reset()
+      ..duration = Duration(milliseconds: _flipMsFor(chainDepth))
       ..forward();
     setState(() {});
+  }
+
+  /// 本段翻转时长：base 随连切深度逐级乘 [kChainFlipScale]，下限 [kChainFlipMinMs]。
+  int _flipMsFor(int chainDepth) {
+    var ms = widget.duration.inMilliseconds.toInt();
+    for (var i = 0; i < chainDepth; i++) {
+      ms = (ms * kChainFlipScale).round();
+      if (ms <= kChainFlipMinMs) break;
+    }
+    return ms.clamp(kChainFlipMinMs, widget.duration.inMilliseconds.toInt());
   }
 
   void _onReadyTimeout() {
     _readyTimer = null;
     final pending = _pendingVersion;
-    // 宽限截止时又没有待翻版本（已撤销 / 已被新一轮接管）：什么都不做。
+    // 过期（已撤销 / 被新一轮接管）：什么都不做。
     if (pending == null) return;
     debugPrint(
       '[CoverFlip] 就绪超时 ${widget.readyTimeout.inMilliseconds}ms，'
-      '进入兜底宽限 uri=$pending',
+      '直接启动翻转 uri=$pending',
     );
-    // 不放弃翻转：弱网下新图常在 1~2s 才解码完，宽限期内到位照样演完整
-    // 翻转（_pendingVersion 保持不动，探测回调仍然有效）。
-    _readyTimer = Timer(widget.fallbackGrace, _onFallbackGraceExpired);
-  }
-
-  /// 兜底宽限也用尽：不再等，降级为交叉淡出（**不硬切**，见类文档）。
-  void _onFallbackGraceExpired() {
-    _readyTimer = null;
-    final pending = _pendingVersion;
-    if (pending == null) return;
+    // 超时即翻：不再空等宽限。widget.child 自带加载占位，翻入后半程自然显形。
     _pendingVersion = null;
-    if (!mounted) return;
-    debugPrint('[CoverFlip] 宽限用尽（共等待约 '
-        '${widget.readyTimeout.inMilliseconds + widget.fallbackGrace.inMilliseconds}ms），'
-        '兜底交叉淡出 uri=$pending');
-    _startFallbackFade();
-  }
-
-  /// 兜底过渡：旧封面整层渐隐、新层在底下显形。
-  ///
-  /// 为什么不是「无模糊快速翻转」：新图此时仍没到位，翻过去只有占位白板，
-  /// 观感等于动画消失；交叉淡出至少把「瞬切换图」摊成一段连续的亮度过渡。
-  void _startFallbackFade() {
-    if (!mounted) return;
-    if (_oldArtworkUri == null) {
-      // 没有可淡出的旧封面（首图 / 已被撤销）：直接换图，无可过渡之物。
-      _dropOldLayer();
-      return;
-    }
-    _dropBlurProbes();
-    setState(() => _fallbackFading = true);
+    final oldUri = _oldArtworkUri;
+    // ignore: discarded_futures
+    _prepareBlurProbes(oldUri, pending).then((_) {
+      if (!mounted || _pendingVersion != null) return;
+      _startFlip(chainDepth: _chainDepth);
+    });
   }
 
   /// 收起旧层、回到 idle（只显示新 child）。带 setState。
   void _dropOldLayer() {
-    final had = _oldArtworkUri != null || _fallbackFading;
+    final had = _oldArtworkUri != null;
     _oldArtworkUri = null;
     _oldArtworkWidget = null;
-    _fallbackFading = false;
     _dropBlurProbes();
     if (had && mounted) setState(() {});
   }
@@ -594,6 +671,25 @@ class _CoverFlipCrossfadeState extends State<CoverFlipCrossfade>
   void _onFlipStatus(AnimationStatus status) {
     if (status != AnimationStatus.completed) return;
     if (!mounted) return;
+    // 链续：当前段收敛后，向最新目标续翻一整段（旧层改为续翻起点、不再直接丢弃）。
+    final chain = _chainVersion;
+    if (chain != null) {
+      _chainVersion = null;
+      final fromUri = _chainFromUri;
+      final fromFallback = _chainFromFallback;
+      _chainFromUri = null;
+      _chainFromFallback = null;
+      // 静默窗外没有新的中途到达：连切已停，深度复位，续翻用满长时长。
+      if (DateTime.now().difference(_lastArrivalAt) > kChainFlipQuietWindow) {
+        _chainDepth = 0;
+      }
+      if (fromUri != null) {
+        unawaited(_beginChainFlip(fromUri, fromFallback, chain));
+      } else {
+        _dropOldLayer();
+      }
+      return;
+    }
     setState(() {
       _oldArtworkUri = null;
       _oldArtworkWidget = null;
@@ -609,8 +705,17 @@ class _CoverFlipCrossfadeState extends State<CoverFlipCrossfade>
   void _cancel() {
     _clearReadyTimer();
     _pendingVersion = null;
+    _discardChain();
     _flip.stop();
     _dropOldLayer();
+  }
+
+  /// 作废链续状态并复位连切深度（序列被打断时调用）。
+  void _discardChain() {
+    _chainVersion = null;
+    _chainFromUri = null;
+    _chainFromFallback = null;
+    _chainDepth = 0;
   }
 
   // ── 手势路径：入口（跟手 → 判定 → 提交 / 回弹 → 收尾） ─────────────────
@@ -621,6 +726,8 @@ class _CoverFlipCrossfadeState extends State<CoverFlipCrossfade>
     // 早先在这里 return 会让第一次滑动整段被吞（用户必须滑第二次）。
     // 接管 = 停掉自动过渡、撤掉就绪等待与旧层/快照，手势从正面重新开始。
     if (_flip.isAnimating) _flip.stop();
+    // 手势接管在飞链续翻：它与自动过渡互斥（同一条手势时钟），序列作废。
+    _discardChain();
     _clearReadyTimer();
     _pendingVersion = null;
     _dropOldLayer();
@@ -939,44 +1046,6 @@ class _CoverFlipCrossfadeState extends State<CoverFlipCrossfade>
     );
   }
 
-  /// 兜底过渡：旧封面整层渐隐，[widget.child] 在下层直接显形。
-  ///
-  /// 用 [TweenAnimationBuilder] 而不是再开一个 `AnimationController`：这段
-  /// 过渡一次性且无状态（进入即 1 → 0，结束就把旧层摘掉），完成时分支离开
-  /// 树、状态自然回收；自建控制器还要额外处理「build 阶段把值归零会踩
-  /// markNeedsBuild during build」（本类 `_setFlipActive` 就为此刻意排到帧后）。
-  ///
-  /// 旧层压在上层——它才是「用户此刻认为在听的那首」；新层（占位 / 正在解码
-  /// 的图）在底下渐显，合起来就是一次干净的两层交叉淡出。
-  Widget _buildFallbackFade(BorderRadius radius, Widget oldArtwork) {
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        ClipRRect(borderRadius: radius, child: widget.child),
-        Positioned.fill(
-          child: TweenAnimationBuilder<double>(
-            tween: Tween<double>(begin: 1, end: 0),
-            duration: widget.fallbackFadeDuration,
-            curve: Curves.easeOutCubic,
-            onEnd: _onFallbackFadeEnd,
-            builder: (context, opacity, child) =>
-                Opacity(opacity: opacity, child: child),
-            child: ClipRRect(
-              borderRadius: radius,
-              child: RepaintBoundary(child: oldArtwork),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  void _onFallbackFadeEnd() {
-    if (!mounted) return;
-    // 淡出收敛：旧层摘掉，树回到单层（与翻转完成同一收尾口径）。
-    _dropOldLayer();
-  }
-
   Widget _buildBody() {
     // 手势路径（dragging/awaitingCommit/completing/rebounding）与自动过渡由
     // 相位互斥：swipe 为真时只认 _motion，_flip 的值一概不读。
@@ -987,13 +1056,9 @@ class _CoverFlipCrossfadeState extends State<CoverFlipCrossfade>
     if (oldUri == null && !swipe) {
       return ClipRRect(borderRadius: radius, child: widget.child);
     }
-    // 手势与自动过渡都不在飞（就绪等待中 / 兜底淡出中）：只认旧层。
+    // 手势与自动过渡都不在飞（就绪等待中）：只认旧层。
     if (!swipe && !_flip.isAnimating) {
-      // 兜底：旧封面整层渐隐，widget.child 在底下直接显形（交叉淡出）。
-      if (_fallbackFading) {
-        return _buildFallbackFade(radius, _oldArtwork());
-      }
-      // 就绪等待中：旧封面原地不动（新图到位再翻）。
+      // 就绪等待中：旧封面原地不动（新图到位/超时即翻）。
       return ClipRRect(borderRadius: radius, child: _oldArtwork());
     }
     return AnimatedBuilder(

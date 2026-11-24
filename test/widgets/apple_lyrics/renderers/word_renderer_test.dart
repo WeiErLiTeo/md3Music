@@ -9,6 +9,7 @@ import 'package:md3music/widgets/apple_lyrics/layout/lyric_preferences.dart';
 import 'package:md3music/widgets/apple_lyrics/models/lyric_line.dart';
 import 'package:md3music/widgets/apple_lyrics/renderers/emphasize_effect.dart';
 import 'package:md3music/widgets/apple_lyrics/renderers/word_renderer.dart';
+import 'package:md3music/widgets/apple_lyrics/utils/lyric_bg_bloom.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// WordRenderer 单元测试
@@ -1179,6 +1180,90 @@ void main() {
       expect(e.rightRaw, 0,
           reason: '未播区不得被改成封面原色');
       expect(e.rightWhite, 0);
+    });
+
+    // ==================== 「背景增透」（backgroundBloom） ====================
+
+    test('背景增透：注入取样处理后色走同一过曝曲线（像素证据）', () async {
+      await LyricPreferences.instance.setFillStyle(
+        LyricFillStyle.backgroundBloom,
+      );
+      // 取样背景色的提亮加饱和结果（对封面原色跑同一处理函数，
+      // 保证与真机取样口径一致）：仍属深青签名，扫光带内按 raw 分类。
+      final int accentBgBloom =
+          processBgBloomColor(kAccentRaw & 0x00FFFFFF) | 0xFF000000;
+
+      renderer.setLineState(
+        isActive: true,
+        scale: LyricLayout.activeScale,
+        activeColorValue: kAccentMixed,
+        gradientAccentValue: accentBgBloom,
+      );
+      renderer.paintLine(makeCanvas(), ui.Offset.zero, longLine, 24);
+      for (int i = 0; i < 60; i++) {
+        renderer.tick(0.016, 3500);
+      }
+
+      final e = await renderGradientEvidence(renderer, longLine);
+      expect(e.leftWhite, greaterThan(0),
+          reason: '已播侧应过曝成白（取样色经同一白化曲线）');
+      expect(e.leftMix, 0, reason: '已播侧不得残留原有混色');
+      expect(e.rightMix, greaterThan(0),
+          reason: '未播区应保持原有混色，不被背景增透改动');
+      expect(e.rightRaw, 0,
+          reason: '未播区不得被铺上取样色');
+      expect(e.rightWhite, 0, reason: '未播区不应被提前过曝成白');
+    });
+
+    test('背景增透：取样刷新（注入值变化）必须触发 tint 失效重建', () async {
+      await LyricPreferences.instance.setFillStyle(
+        LyricFillStyle.backgroundBloom,
+      );
+
+      renderer.setLineState(
+        isActive: true,
+        scale: LyricLayout.activeScale,
+        activeColorValue: kAccentMixed,
+        gradientAccentValue: kAccentRaw,
+      );
+      renderer.paintLine(makeCanvas(), ui.Offset.zero, longLine, 24);
+      for (int i = 0; i < 60; i++) {
+        renderer.tick(0.016, 3500);
+      }
+      renderer.debugTintInvalidationsForTest = 0;
+
+      // 下一次抓取的取样背景不同 → 注入值变化（lyric_bg_bloom 输出刷新，
+      // ≤2/s）。同步早退不允许：新键写入失败会让字内渐变停留在旧取样色。
+      renderer.setLineState(
+        isActive: true,
+        scale: LyricLayout.activeScale,
+        activeColorValue: kAccentMixed,
+        gradientAccentValue: 0xFF66FF99,
+      );
+      renderer.paintLine(makeCanvas(), ui.Offset.zero, longLine, 24);
+      expect(
+        renderer.debugTintInvalidationsForTest,
+        greaterThanOrEqualTo(1),
+        reason: 'accent 注入值变化必须失效 tint 缓存并重建，'
+          '否则背景增透取样刷新后字内渐变停留在旧取样色',
+      );
+      // 同值注入不得触发重复失效（逐帧稳态零额外重建开销）
+      renderer.paintLine(makeCanvas(), ui.Offset.zero, longLine, 24);
+      expect(
+        renderer.debugTintInvalidationsForTest,
+        1,
+        reason: '注入值未变化时不应重复失效（省电语义同 textColor 早退）',
+      );
+
+      // 注入值清空（模式关闭回落整行赋色）同样算一次有效变化
+      renderer.setLineState(
+        isActive: true,
+        scale: LyricLayout.activeScale,
+        activeColorValue: kAccentMixed,
+        gradientAccentValue: null,
+      );
+      renderer.paintLine(makeCanvas(), ui.Offset.zero, longLine, 24);
+      expect(renderer.debugTintInvalidationsForTest, 2);
     });
 
     test('classic 连贯性：已播字符内部无色残留、未播区保混色', () async {

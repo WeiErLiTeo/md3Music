@@ -58,7 +58,6 @@ import io.github.proify.lyricon.lyric.model.Song
 
 class AudioPlaybackService : Service() {
     companion object {
-        const val CHANNEL_ID = "md3music_audio_playback"
         // 保活通知专用频道：以最低重要度静默显示，用户可长按进入系统通知设置关闭。
         // 通知对象常驻支撑 startForeground，避免服务被系统降级（DETACH 方案已废弃）。
         private const val LEGACY_KEEPALIVE_CHANNEL_ID = "md3music_keepalive"
@@ -1869,16 +1868,25 @@ class AudioPlaybackService : Service() {
     /// 的 provider 链），本占位只负责在 5s 死线内完成 startForeground 登记并
     /// 在被系统拒绝时自停（startForegroundDetached 的 catch 崩溃防护依赖
     /// foregroundStarted 只在成功后置位）。
+    ///
+    /// 渠道必须与 showNotification/refreshKeepaliveForeground 一致用
+    /// KEEPALIVE_CHANNEL_ID（同一 ID 1002 覆盖更新）：旧的 md3music_audio_playback
+    /// 渠道曾发「准备播放」占位，随后保活通知换渠道发布，两个渠道的通知被
+    /// SystemUI 当成两条并存 —— 播放后「准备播放」仍滞留通知栏（issue #245）。
     private fun ensureForeground() {
         if (foregroundStarted) return
         try {
-            val builder = NotificationCompat.Builder(this, CHANNEL_ID)
+            val builder = NotificationCompat.Builder(this, KEEPALIVE_CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_launcher_monochrome)
-                .setContentTitle("md3music")
-                .setContentText("准备播放")
+                .setContentTitle("")
+                .setContentText(KEEPALIVE_NOTIFICATION_TEXT)
+                .setContentIntent(launchPendingIntent())
                 .setOngoing(true)
+                .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+                .setPriority(NotificationCompat.PRIORITY_MIN)
                 .setOnlyAlertOnce(true)
-                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setShowWhen(false)
+                .setSilent(true)
             startForegroundDetached(builder)
         } catch (_: Exception) {}
     }
@@ -2613,36 +2621,13 @@ class AudioPlaybackService : Service() {
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val manager = getSystemService(NotificationManager::class.java)
-            
-            // 删除旧渠道（如果存在且配置不正确）- Android 8+ 渠道一旦创建无法修改，必须删除重建
+
+            // 彻底移除旧「音乐播放」渠道：它曾发「准备播放」占位通知，与保活通知
+            // 并存导致通知栏残留（issue #245）。删除渠道会连带清除该渠道下已发布
+            // 的通知，升级安装后旧残留一并消失；新占位已改用 KEEPALIVE_CHANNEL_ID。
             try {
-                val existingChannel = manager.getNotificationChannel(CHANNEL_ID)
-                if (existingChannel != null) {
-                    // 阶段6：重要度改为 MIN（保活通知彻底隐藏/最小化），旧渠道需删除重建
-                    if (existingChannel.importance != NotificationManager.IMPORTANCE_MIN ||
-                        existingChannel.sound != null) {
-                        manager.deleteNotificationChannel(CHANNEL_ID)
-                    }
-                }
+                manager.deleteNotificationChannel("md3music_audio_playback")
             } catch (_: Exception) {}
-            
-            // 创建静音通知渠道 - 修复荣耀/vivo 手机通知提示音问题
-            // 阶段7：IMPORTANCE_MIN + 常驻 startForeground（不 DETACH），保活通知只出现在
-            // 折叠的「其他通知」区（或 DETACH 已移除的旧行为不再使用），不产生打扰；
-            // 渠道静音（setSound null）避免部分 ROM 通知「叮咚响」。
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "音乐播放",
-                NotificationManager.IMPORTANCE_MIN
-            ).apply {
-                description = "音乐播放控制（静默保活）"
-                setShowBadge(false)
-                lockscreenVisibility = NotificationCompat.VISIBILITY_PRIVATE
-                // 关键修复：禁用声音和震动
-                setSound(null, null)
-                enableVibration(false)
-            }
-            manager.createNotificationChannel(channel)
 
             // 保活通知专用频道：最低重要度静默显示；用户可长按通知进入系统设置关闭。
             try {

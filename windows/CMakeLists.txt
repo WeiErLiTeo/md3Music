@@ -284,10 +284,11 @@ set(INSTALL_BUNDLE_DATA_DIR "${CMAKE_INSTALL_PREFIX}/data")
 set(INSTALL_BUNDLE_LIB_DIR "${CMAKE_INSTALL_PREFIX}")
 
 # 仅 Windows 便携包携带字体；不写入 pubspec.yaml，Android/TV APK 不包含它。
+# MD3MusicSans：Noto Sans SC/Source Han Sans 的可商用子集（SIL OFL 1.1，
+# 按 OFL 条件 3 改名，不使用保留字体名 Source），全局 UI / 歌词 / 原生悬浮窗共用。
 install(FILES
-  "${CMAKE_SOURCE_DIR}/runner/fonts/方正黑体简体.TTF"
-  "${CMAKE_SOURCE_DIR}/runner/fonts/LICENSE-APACHE-2.0.txt"
-  "${CMAKE_SOURCE_DIR}/runner/fonts/NOTICE.txt"
+  "${CMAKE_SOURCE_DIR}/runner/fonts/MD3MusicSans.ttf"
+  "${CMAKE_SOURCE_DIR}/runner/fonts/OFL.txt"
   DESTINATION "${INSTALL_BUNDLE_DATA_DIR}/fonts" COMPONENT Runtime)
 
 install(TARGETS ${BINARY_NAME} RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}"

@@ -1,11 +1,27 @@
 import 'dart:async';
+import 'dart:ffi';
+import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:ffi/ffi.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
 import '../platform_capabilities.dart';
 import 'diagnostic_logger.dart';
+
+// ── FFI typedef（必须顶层声明，Dart 不允许类内 typedef）────────
+
+typedef _SpectrumInitC = Pointer<Void> Function();
+typedef _SpectrumInitDart = Pointer<Void> Function();
+
+typedef _SpectrumPollFrameC =
+    Bool Function(Pointer<Void>, Pointer<Double>, Pointer<Float>);
+typedef _SpectrumPollFrameDart =
+    bool Function(Pointer<Void>, Pointer<Double>, Pointer<Float>);
+
+typedef _SpectrumDropC = Void Function(Pointer<Void>);
+typedef _SpectrumDropDart = void Function(Pointer<Void>);
 
 /// 「频谱总开关」的**同步可读**进程级镜像（默认关）。
 ///
@@ -72,6 +88,102 @@ class SpectrumService with WidgetsBindingObserver {
   static const String _channelName = 'com.md3music.md3music/spectrum';
 
   final MethodChannel _channel = const MethodChannel(_channelName);
+
+  // ── FFI：Rust 频谱分析器（Android PCM 路径）─────────────────────
+  // 仅 Android 使用；Windows 暂走原有 C++ WASAPI + MethodChannel 路径（Phase 3 迁移）。
+  DynamicLibrary? _spectrumLib;
+
+  Pointer<Void>? _ffiState;
+  Timer? _pollTimer;
+
+  /// 返回当前平台的原生库文件名（与 kugou_server.dart 同口径）。
+  static String get _spectrumLibraryName {
+    if (Platform.isWindows) return 'kugou_server.dll';
+    if (Platform.isLinux) return 'libkugou_server.so';
+    if (Platform.isMacOS) return 'libkugou_server.dylib';
+    return 'libkugou_server.so'; // Android
+  }
+
+  /// 初始化 FFI 并创建 Rust 频谱状态。返回 true 表示成功。
+  ///
+  /// Android：PCM 路径（Kotlin JNI feed → Rust FFT → Dart FFI poll）
+  /// Windows：环回采集路径（cpal Rust → Rust FFT → Dart FFI poll，Phase 3 完整迁移后）
+  bool _tryInitFfi() {
+    if (!_hasNativeCapture) return false;
+    try {
+      _spectrumLib ??= DynamicLibrary.open(_spectrumLibraryName);
+      _ffiState = _spectrumLib!
+          .lookupFunction<_SpectrumInitC, _SpectrumInitDart>('spectrum_init')();
+      DiagnosticLogger.instance.info('[Spectrum] FFI state initialized');
+      return true;
+    } catch (e) {
+      DiagnosticLogger.instance.warning('[Spectrum] FFI init failed: ${e.runtimeType}');
+      return false;
+    }
+  }
+
+  /// 通过 FFI 轮询 Rust 共享缓冲，读取最新一帧（PCM 路径）。
+  /// 由 [_pollTimer] 以 ≈43fps 调用。仅在 Android + _isAndroid 时执行。
+  void _pollFfiFrame() {
+    if (!_running || _gateZero || _ffiState == null || _ffiState == Pointer<Void>.fromAddress(0)) return;
+    final lib = _spectrumLib;
+    if (lib == null) return;
+
+    final pollFn = lib.lookupFunction<_SpectrumPollFrameC, _SpectrumPollFrameDart>(
+      'spectrum_poll_frame',
+    );
+
+    // 为 FFI 输出分配 native 内存（每帧复用，不释放）
+    final bandsPtr = calloc<Double>(40);
+    final featuresPtr = calloc<Float>(20);
+    try {
+      final hasNew = pollFn(_ffiState!, bandsPtr, featuresPtr);
+      if (!hasNew) return;
+
+      _lastFftAt = DateTime.now();
+      if (_simulated) {
+        DiagnosticLogger.instance.info('[Spectrum] real FFT resumed (FFI)');
+        _stopSimulated();
+      }
+
+      // 读出 bands → _nativeBuf
+      if (_nativeBuf.length != 40) {
+        _nativeBuf = List<double>.filled(40, 0.0);
+      }
+      for (int i = 0; i < 40; i++) {
+        _nativeBuf[i] = bandsPtr[i].clamp(0.0, 1.0).toDouble();
+      }
+      final bands = _resample(_nativeBuf, bandCount);
+      _emitFrame(bands);
+
+      // 读出 features → _featureBuf
+      _lastFeatureAt = DateTime.now();
+      if (_featureBuf.length != 20) {
+        _featureBuf = List<double>.filled(20, 0.0);
+      }
+      for (int i = 0; i < 20; i++) {
+        _featureBuf[i] = featuresPtr[i].toDouble();
+      }
+      if (!_featuresController.isClosed) _featuresController.add(_featureBuf);
+    } finally {
+      calloc.free(bandsPtr);
+      calloc.free(featuresPtr);
+    }
+  }
+
+  /// 释放 FFI 状态（Android stop/dispose 时调用）。
+  void _dropFfiState() {
+    _pollTimer?.cancel();
+    _pollTimer = null;
+    if (_ffiState != null && _ffiState != Pointer<Void>.fromAddress(0) && _spectrumLib != null) {
+      try {
+        _spectrumLib!.lookupFunction<_SpectrumDropC, _SpectrumDropDart>(
+          'spectrum_drop_state',
+        )(_ffiState!);
+      } catch (_) {}
+      _ffiState = null;
+    }
+  }
 
   /// 用户可配置的频谱柱数量（默认 40，范围 20~80）。
   /// 原生端固定采集 40 段，Dart 端根据此值做线性重采样。
@@ -205,6 +317,9 @@ class SpectrumService with WidgetsBindingObserver {
     if (!_hasNativeCapture) return;
     // 不 await：生命周期回调是同步的，停失败最多是白跑一段采集，不影响播放
     unawaited(_stopNative());
+    // Android FFI 轮询定时器一并停掉（回前台时重启）
+    _pollTimer?.cancel();
+    _pollTimer = null;
   }
 
   Future<void> _stopNative() async {
@@ -223,6 +338,8 @@ class SpectrumService with WidgetsBindingObserver {
     _lastFeatureAt = null;
     _watchData();
     DiagnosticLogger.instance.info('[Spectrum] 回前台，恢复原生采集');
+    // 重启 FFI 轮询定时器（Android + Windows）
+    if (!_simulated && _ffiState != null) _startFfiPolling();
     if (_hasNativeCapture && _isPlaying) unawaited(_recoverNative());
   }
 
@@ -310,6 +427,9 @@ class SpectrumService with WidgetsBindingObserver {
       _channel.setMethodCallHandler(_handleMethodCall);
       _handlerRegistered = true;
     }
+    // 通过 FFI 创建 Rust 频谱状态，原生侧引用该指针
+    // （Android: Kotlin JNI feed; Windows: cpal Rust 环回 → Phase 3）
+    _tryInitFfi();
     bool nativeOk = false;
     _recovering = true;
     try {
@@ -318,6 +438,7 @@ class SpectrumService with WidgetsBindingObserver {
               .invokeMethod<bool>('start', {
                 'audioSessionId': audioSessionId ?? 0,
                 'visualizerFallback': visualizerFallback,
+                'statePtr': _ffiState?.address ?? 0,
               })
               .timeout(const Duration(seconds: 4)) ??
           false;
@@ -341,10 +462,23 @@ class SpectrumService with WidgetsBindingObserver {
       return true;
     }
     if (!nativeOk) _startSimulated();
+    // 启动 FFI 轮询定时器（≈43fps，与 Rust 节流对齐）
+    if (nativeOk && !_simulated && _ffiState != null) {
+      _startFfiPolling();
+    }
     // Windows 端把采集模式（process / device）记进诊断：现场排障时一眼区分
     // 「只采本应用」与「系统混音兜底」，也是 Win10 回落路径的唯一可观测证据。
     if (_isWindows && nativeOk) unawaited(_logNativeStats());
     return true;
+  }
+
+  /// 启动 FFI 轮询定时器。仅在 Android + 非模拟模式时运行。
+  void _startFfiPolling() {
+    _pollTimer?.cancel();
+    _pollTimer = Timer.periodic(const Duration(milliseconds: 23), (_) {
+      if (!_running || _gateZero || _simulated) return;
+      _pollFfiFrame();
+    });
   }
 
   /// 持续检查断流，不再仅检查启动后的第一帧；暂停期间不触发降级。
@@ -425,6 +559,7 @@ class SpectrumService with WidgetsBindingObserver {
           .invokeMethod<bool>('start', {
             'audioSessionId': _sessionId,
             'visualizerFallback': _visualizerFallback,
+            'statePtr': _ffiState?.address ?? 0,
           })
           .timeout(const Duration(seconds: 4));
     } catch (_) {
@@ -531,6 +666,8 @@ class SpectrumService with WidgetsBindingObserver {
         await _channel.invokeMethod<bool>('stop');
       } catch (_) {}
     }
+    // 释放 Rust 频谱状态
+    _dropFfiState();
   }
 
   Future<dynamic> _handleMethodCall(MethodCall call) async {
@@ -649,8 +786,11 @@ class SpectrumService with WidgetsBindingObserver {
     _owners.clear();
     _simulateTimer?.cancel();
     _fallbackTimer?.cancel();
+    _pollTimer?.cancel();
+    _pollTimer = null;
     _cancelPendingFrames();
     simulatedNotifier.dispose();
+    _dropFfiState();
     _controller.close();
   }
 }

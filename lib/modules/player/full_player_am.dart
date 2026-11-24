@@ -229,6 +229,10 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
   bool _hasTranslation = false;
   bool _hasRoma = false;
 
+  // 歌词选择模式是否激活（AppleLyricsView 回调）：激活时隐藏歌词区右下角
+  // 的翻译/伴唱角标按钮，避免与选择模式底部操作栏重叠（真机验收反馈）
+  bool _lyricSelectionActive = false;
+
   // 背景（模糊大图）淡入淡出动画。封面自身的切歌过渡已改为
   // 「模糊 + 纵轴翻转」（见 widgets/cover_flip_crossfade.dart 的
   // CoverFlipCrossfade），以下字段只为背景交叉淡服务。
@@ -271,6 +275,11 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
   // 动态字体颜色：从专辑封面提取的主色（歌词当前行按「混色比例」与白色混色用）
   Color? _lyricAccentColor;
   String? _lastAccentUrl;
+
+  /// 「背景增透」采样源：背景层总层（模糊封面 / 流光 + 蒙版 / 写真 / 频谱）
+  /// 的 RepaintBoundary key。AppleLyricsView 在赋色方式为 backgroundBloom 时
+  /// 从该层低频抓取当前行背后的背景条带（见 utils/lyric_bg_bloom.dart）。
+  final GlobalKey _bgLayerKey = GlobalKey();
 
   /// 当前生效的 tab 结构（含封面 tab / 含评论 tab）。
   /// TabController.length、TabBarView.children、底部导航条 items 全部由它派生；
@@ -2792,65 +2801,81 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
         resizeToAvoidBottomInset: false,
         body: Stack(
           children: [
-            // 1. 模糊封面背景层（Apple Music 风格，带淡入淡出）
+            // 1~3.5. 背景总层：模糊封面 / 流光背景 + 半透明蒙版 + 歌手写真 +
+            //    频谱背景，收进**一个** RepaintBoundary：
+            //    - 原模糊层自带的那层 boundary 并入本层，避免双层嵌套冗余；
+            //    - 同时承担「背景增透」采样源（key = [_bgLayerKey]）：赋色方式
+            //      为 backgroundBloom 时 AppleLyricsView 从该层低频抓取当前行
+            //      背后的背景条带，提亮加饱和后映射进字内渐变。
             //    开启动态流光时不渲染模糊层，只保留流光层（省 GPU 且画面更纯净）
             // RepaintBoundary 隔离：tab 切换/控制栏 setState/评论透传这类整页重建不再连坐本层重绘
-            if (!LyricPreferences.instance.useFlowingBackground)
-              RepaintBoundary(
-                child: _buildCrossfadeBlurredBackground(
-                  currentSong.artworkUri,
-                  fallbackFilePath: currentSong.localPath,
-                  sigma: amBlur,
-                ),
+            RepaintBoundary(
+              key: _bgLayerKey,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  if (!LyricPreferences.instance.useFlowingBackground)
+                    _buildCrossfadeBlurredBackground(
+                      currentSong.artworkUri,
+                      fallbackFilePath: currentSong.localPath,
+                      sigma: amBlur,
+                    ),
+                  // 动态流光背景层（可选，从专辑封面提取色彩流动）
+                  //    playingStream 必须传：本页会被封面形变系统缓存复用（pageBuilds=1），
+                  //    播放/暂停不重建整页 → 只给 isPlaying 快照会让流光永远停在挂载那
+                  //    一刻的播放态（真机 [FlowingBG] 日志实证 t 恒 0.00、驱动从未 bind）。
+                  if (LyricPreferences.instance.useFlowingBackground)
+                    FlowingBackground(
+                      artworkUrl: currentSong.artworkUri,
+                      isPlaying: playerProvider.isPlaying,
+                      playingStream: AudioService().playingStream,
+                    ),
+                  // 半透明蒙版 rgba(0,0,0,0.35)
+                  _buildDarkOverlay(),
+                  // 写真统一放在页面背景层：紧凑手机覆盖顶栏到控制区，避免 PageView 与相邻区域的裁剪边缘露线。
+                  // 宽屏仍只铺左栏，并在左右外缘羽化；两种布局共用控制器与加载状态。
+                  // 紧凑手机另加一层门控：**只在本页为封面页时显示**（见
+                  // [_buildCompactPhotoBackground]）——滑到歌单/歌词/评论后歌词页不该
+                  // 再有写真背景。
+                  if (getScreenType(MediaQuery.sizeOf(context).width) ==
+                      ScreenType.compact)
+                    _buildCompactPhotoBackground(photoOpacity),
+                  if (getScreenType(MediaQuery.sizeOf(context).width) !=
+                      ScreenType.compact)
+                    // 滤镜/遮罩整页绘制，只限制图片内容宽度；不在 40% 分栏处裁剪滤镜层。
+                    ListenableBuilder(
+                      listenable: _photoController,
+                      builder: (context, _) => _photoCoverActive
+                          ? RepaintBoundary(
+                              child: IgnorePointer(
+                                child: AmArtistPhotoCover(
+                                  currentUrl: _photoController.currentUrl,
+                                  feather: AmPhotoFeather.rightEdge,
+                                  photoWidthFraction: 0.4,
+                                  opacity: photoOpacity,
+                                ),
+                              ),
+                            )
+                          : const SizedBox.shrink(),
+                    ),
+                  // 频谱背景层：style=2 时显示底部条形频谱图（播放时淡入、暂停时淡出）
+                  if (_spectrumEnabled && _spectrumStyle == 2)
+                    SpectrumBackground(
+                      color: _spectrumColor,
+                      opacity: _spectrumBgOpacity,
+                      heightRatio: _spectrumBgHeight,
+                      visible: playerProvider.isPlaying,
+                    ),
+                ],
               ),
-            // 2. 动态流光背景层（可选，从专辑封面提取色彩流动）
-            //    playingStream 必须传：本页会被封面形变系统缓存复用（pageBuilds=1），
-            //    播放/暂停不重建整页 → 只给 isPlaying 快照会让流光永远停在挂载那
-            //    一刻的播放态（真机 [FlowingBG] 日志实证 t 恒 0.00、驱动从未 bind）。
-            if (LyricPreferences.instance.useFlowingBackground)
-              FlowingBackground(
-                artworkUrl: currentSong.artworkUri,
-                isPlaying: playerProvider.isPlaying,
-                playingStream: AudioService().playingStream,
-              ),
-            // 3. 半透明蒙版 rgba(0,0,0,0.35)
-            _buildDarkOverlay(),
-            // 写真统一放在页面背景层：紧凑手机覆盖顶栏到控制区，避免 PageView 与相邻区域的裁剪边缘露线。
-            // 宽屏仍只铺左栏，并在左右外缘羽化；两种布局共用控制器与加载状态。
-            // 紧凑手机另加一层门控：**只在本页为封面页时显示**（见
-            // [_buildCompactPhotoBackground]）——滑到歌单/歌词/评论后歌词页不该
-            // 再有写真背景。
-            if (getScreenType(MediaQuery.sizeOf(context).width) ==
-                ScreenType.compact)
-              Positioned.fill(
-                child: _buildCompactPhotoBackground(photoOpacity),
-              ),
-            if (getScreenType(MediaQuery.sizeOf(context).width) !=
-                ScreenType.compact)
-              // 滤镜/遮罩整页绘制，只限制图片内容宽度；不在 40% 分栏处裁剪滤镜层。
-              Positioned.fill(
-                child: ListenableBuilder(
-                  listenable: _photoController,
-                  builder: (context, _) => _photoCoverActive
-                      ? RepaintBoundary(
-                          child: IgnorePointer(
-                            child: AmArtistPhotoCover(
-                              currentUrl: _photoController.currentUrl,
-                              feather: AmPhotoFeather.rightEdge,
-                              photoWidthFraction: 0.4,
-                              opacity: photoOpacity,
-                            ),
-                          ),
-                        )
-                      : const SizedBox.shrink(),
-                ),
-              ),
+            ),
             // MD3Music fork v51：宽屏写真生效时封面盒不渲染，弹幕宿主随之消失
             // （真机实测：横屏开歌手写真无弹幕，竖屏正常——竖屏封面 tab 的
             // 封面盒仍在）。在写真层之上补一个左栏区域（与写真
             // photoWidthFraction 同宽）的弹幕层；写真关闭时封面盒路径自带
             // 弹幕，两层互斥不会双份。不套 IgnorePointer：弹幕绘制层本身无
             // 手势，右下角"发弹幕"按钮需要可点（与竖屏行为一致）。
+            // 弹幕宿主留在背景总层之外（左栏定位语义不受影响）。
             if (getScreenType(MediaQuery.sizeOf(context).width) !=
                 ScreenType.compact)
               Positioned.fill(
@@ -2866,14 +2891,6 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
                         )
                       : const SizedBox.shrink(),
                 ),
-              ),
-            // 3.5 频谱背景层：style=2 时显示底部条形频谱图（播放时淡入、暂停时淡出）
-            if (_spectrumEnabled && _spectrumStyle == 2)
-              SpectrumBackground(
-                color: _spectrumColor,
-                opacity: _spectrumBgOpacity,
-                heightRatio: _spectrumBgHeight,
-                visible: playerProvider.isPlaying,
               ),
             // 4. 主体内容（保留原有 compact/landscape/expanded 三套布局）
             ResponsiveLayout(
@@ -3094,9 +3111,13 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
                                   enableInterludeDots: !_isLineLevelLrcLyric,
                                   doubleTapToJump: lyricDoubleTap,
                                   accentColor: _lyricAccentColor,
+                                  // 「背景增透」采样源：背景总层 boundary
+                                  backgroundSamplerKey: _bgLayerKey,
                                   // 歌曲 BPM（本地标签/接口，可空）：用于快慢歌辉光阈值
                                   songBpm: currentSong?.bpm,
                                   onSeek: _seekToLyric,
+                                  // 选择模式激活时隐藏歌词角标按钮（与操作栏重叠）
+                                  onSelectionActiveChanged: _onLyricSelectionActive,
                                 );
                               },
                             ),
@@ -3505,7 +3526,11 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
                                                       lyricDoubleTap,
                                                   accentColor:
                                                       _lyricAccentColor,
+                                                  // 「背景增透」采样源：背景总层 boundary
+                                                  backgroundSamplerKey: _bgLayerKey,
                                                   onSeek: _seekToLyric,
+                                                  // 选择模式激活时隐藏歌词角标按钮（与操作栏重叠）
+                                                  onSelectionActiveChanged: _onLyricSelectionActive,
                                                 ),
                                           ),
                                         ),
@@ -3881,7 +3906,11 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
                                                       lyricDoubleTap,
                                                   accentColor:
                                                       _lyricAccentColor,
+                                                  // 「背景增透」采样源：背景总层 boundary
+                                                  backgroundSamplerKey: _bgLayerKey,
                                                   onSeek: _seekToLyric,
+                                                  // 选择模式激活时隐藏歌词角标按钮（与操作栏重叠）
+                                                  onSelectionActiveChanged: _onLyricSelectionActive,
                                                 ),
                                           ),
                                         ),
@@ -5246,6 +5275,9 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
     return Stack(
       children: [
         Positioned.fill(child: child),
+        // 选择模式激活：两枚角标按钮（伴唱/翻译）都会与底部操作栏重叠，
+        // 一并隐藏（view 的 onSelectionActiveChanged 回调驱动）
+        if (!_lyricSelectionActive) ...[
         // 伴唱按钮：翻译按钮**上方**（伴唱是歌词页的第二个开关）。
         // 叠在翻译按钮之上，两枚按钮沿右边缘竖排（伴唱在上、翻译在下）。
         Positioned(
@@ -5267,7 +5299,9 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
           child: ListenableBuilder(
             listenable: LyricPreferences.instance,
             builder: (context, _) {
-              if (_zenMode || (!_hasTranslation && !_hasRoma)) {
+              if (_zenMode ||
+                  _lyricSelectionActive ||
+                  (!_hasTranslation && !_hasRoma)) {
                 return const SizedBox.shrink();
               }
               final on = LyricPreferences.instance.showTranslation;
@@ -5301,8 +5335,16 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
             },
           ),
         ),
+        ],
       ],
     );
+  }
+
+  /// 歌词选择模式激活回调（AppleLyricsView）。
+  void _onLyricSelectionActive(bool active) {
+    if (mounted && _lyricSelectionActive != active) {
+      setState(() => _lyricSelectionActive = active);
+    }
   }
 
   /// 长按翻译按钮：在「翻译」与「罗马音」显示模式间切换。

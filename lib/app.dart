@@ -34,6 +34,7 @@ import 'core/services/diagnostic_logger.dart';
 import 'core/services/external_media_intent_service.dart';
 import 'core/services/fm_widget_sync.dart';
 import 'core/services/lock_screen_action_service.dart';
+import 'core/services/login_expiry_monitor.dart';
 import 'core/services/lyricon_provider_service.dart';
 import 'core/services/media_notification_service.dart';
 import 'core/services/music_haptics_service.dart';
@@ -451,6 +452,9 @@ class _AppViewState extends State<_AppView> {
       unawaited(MediaNotificationService.consumePendingOpenCardLyric().then((pending) {
         if (pending) _openFullPlayerOnLyrics();
       }));
+      // 当前账号登录态后台检查：首帧后开始计时，10 分钟后首次检查，
+      // 确定过期才复用账号过期弹窗（无网络/未知不弹）。
+      LoginExpiryMonitor.instance.attach();
     });
     // 预测性返回 + 封面连贯过渡：两个开关互斥，冷启动一起载入并纠正历史同开的值
     // （裁决见 resolveCoverBackExclusivity，封面连贯过渡优先）。
@@ -587,10 +591,18 @@ class _AppViewState extends State<_AppView> {
   }
 
   /// 切歌回调：当前歌曲封面 url 变化时异步提取主色并注入 ThemeProvider。
+  ///
+  /// **仅在「封面动态取色」开启时提取**（[ThemeProvider.useCoverSeedColor]）：
+  /// 该开关关闭时 `effectiveSeedColor` 优先级链根本不会消费封面色（回落到
+  /// 系统壁纸色/手动色），而 palette 量化整段跑在主 isolate 上——每首歌一次
+  /// 的中位数切分 + 像素直方图实测可把事件循环拖住几十~上百毫秒，与「新歌起播
+  /// 时阻塞 UI」的时间点精确重合。开关开启的用户行为与此前完全一致（异步、
+  /// 过过期校验照旧）。
   Future<void> _onPlayerChanged() async {
     final url = context.read<PlayerProvider>().currentSong?.artworkUri;
     if (url == null || url == _lastCoverUrl) return;
     _lastCoverUrl = url;
+    if (!context.read<ThemeProvider>().useCoverSeedColor) return;
     final color = await ArtworkColorExtractor.extract(url);
     // 过期校验：提取期间已切歌则丢弃结果（参考 AM 歌词动态取色模式）
     if (context.read<PlayerProvider>().currentSong?.artworkUri != url) return;
@@ -849,6 +861,7 @@ class _AppViewState extends State<_AppView> {
     VivoMixSync.instance.dispose();
     // v66：语音点歌回调一并摘除（旧 State 的闭包不得滞留）。
     VoiceSearchBridge.instance.dispose();
+    LoginExpiryMonitor.instance.detach();
     _shortcutConfig?.removeListener(_applyDesktopShortcuts);
     _playerProvider?.removeListener(_onPlayerChanged);
     _backgroundThemeProvider?.removeListener(_onBackgroundChanged);

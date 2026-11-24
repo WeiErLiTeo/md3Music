@@ -98,5 +98,43 @@ void main() {
         isEmpty,
       );
     });
+
+    // ==================== backgroundBloom（背景增透，2026-11-22） ====================
+
+    test('backgroundBloom：标签 / setter 落盘 / reset 清 key', () async {
+      expect(lyricFillStyleLabel(LyricFillStyle.backgroundBloom), '背景增透');
+
+      await LyricPreferences.instance.setFillStyle(
+        LyricFillStyle.backgroundBloom,
+      );
+      expect(
+        LyricPreferences.instance.fillStyle,
+        LyricFillStyle.backgroundBloom,
+      );
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getString('lyric_fill_style'), 'backgroundBloom');
+
+      // 枚举成员完整性：三选一，且 label 三条齐全（设置页下拉依赖 values）
+      expect(LyricFillStyle.values.length, 3);
+      for (final style in LyricFillStyle.values) {
+        expect(lyricFillStyleLabel(style), isNotEmpty);
+      }
+      // 未知串回落由主组 'load() 对 bogus 一律回落 lineUniform' 锁定；
+      // 精确串命中是 switch 直接映射，setter 往返已覆盖持久化口径；
+      // （load() 有 _loaded 早退守卫，单例进程内不可二次加载，故此处不重复走 load）
+    });
+
+    test('reset 后 backgroundBloom 回落默认且 key 被移除', () async {
+      await LyricPreferences.instance.setFillStyle(
+        LyricFillStyle.backgroundBloom,
+      );
+      await LyricPreferences.instance.reset();
+      expect(
+        LyricPreferences.instance.fillStyle,
+        equals(LyricFillStyle.lineUniform),
+      );
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getString('lyric_fill_style'), isNull);
+    });
   });
 }

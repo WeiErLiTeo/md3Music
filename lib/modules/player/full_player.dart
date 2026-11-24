@@ -2236,8 +2236,8 @@ class _FullPlayerState extends State<FullPlayer>
                   fallbackFilePath: fallbackFilePath,
                   fit: BoxFit.cover,
                   iconSize: iconSize,
-                  backgroundColor: colorScheme.surfaceContainerHighest,
-                  iconColor: colorScheme.onSurfaceVariant,
+                  backgroundColor: colorScheme.primaryContainer,
+                  iconColor: colorScheme.primary,
                 ),
               ),
             ),
@@ -3710,8 +3710,10 @@ class _FullPlayerState extends State<FullPlayer>
       fallbackFilePath: song.localPath,
       fit: BoxFit.cover,
       iconSize: iconSize,
-      backgroundColor: colorScheme.surfaceContainerHighest,
-      iconColor: colorScheme.onSurfaceVariant,
+      // 无封面占位跟随莫奈/封面取色（与本地音乐列表同口径）：横滑邻居页
+      // 滑到当前页后就是主封面，退场层才用中性灰（见 crossfade 旧层）。
+      backgroundColor: colorScheme.primaryContainer,
+      iconColor: colorScheme.primary,
     );
   }
 

@@ -312,6 +312,20 @@ class SettingsRepository {
     await prefs.setBool(playlistCoverTransitionEnabledPreferenceKey, enabled);
   }
 
+  /// 歌单详情页 A-Z 拖动索引条开关（右侧字母快速滚动条）。默认关闭。
+  static const String playlistAlphabetIndexBarEnabledPreferenceKey =
+      'settings_playlist_alphabet_index_bar_enabled';
+
+  Future<bool> getPlaylistAlphabetIndexBarEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(playlistAlphabetIndexBarEnabledPreferenceKey) ?? false;
+  }
+
+  Future<void> setPlaylistAlphabetIndexBarEnabled(bool enabled) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(playlistAlphabetIndexBarEnabledPreferenceKey, enabled);
+  }
+
   /// 悬浮播放器的进度指示开关。默认开启（未设置时返回 true）。
   static const String secondaryPlayerProgressPreferenceKey =
       'settings_secondary_player_progress';

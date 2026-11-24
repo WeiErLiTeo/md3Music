@@ -18,12 +18,14 @@ import '../../data/models/song.dart';
 import '../../data/repositories/collected_playlist_store.dart';
 import '../../data/repositories/favorite_lists_cache.dart';
 import '../../data/repositories/history_repository.dart';
+import '../../data/repositories/settings_repository.dart';
 import '../../providers/favorites_provider.dart';
 import '../../providers/player_provider.dart';
 import '../../providers/playlist_collection_notifier.dart';
 import '../../providers/theme_provider.dart';
 import '../../services/kugou_api/kugou_api_client.dart';
 import '../../services/kugou_api/kugou_models.dart';
+import '../../widgets/alphabet_index_bar.dart';
 import '../../widgets/song_list_item.dart';
 import '../../widgets/playlist_track_order_list.dart';
 import '../../utils/playlist_song_sort.dart';
@@ -85,6 +87,8 @@ class PlaylistPage extends StatefulWidget {
 }
 
 class _PlaylistPageState extends State<PlaylistPage> {
+  /// A-Z 字母索引条开关（设置页控制，默认关闭）。
+  bool _alphabetIndexBarEnabled = false;
   bool _isLoading = true;
   List<Song> _songs = [];
   String? _error;
@@ -233,6 +237,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
     // 筛选缓存的失效挂在监听上：放在 build 里会让每次页面重建都重排整个歌单
     PlaylistPage.songFilterListenable?.addListener(_onFilterChanged);
     _scrollController.addListener(_onScroll);
+    _loadAlphabetIndexBarPreference();
     _loadSortPreference();
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
@@ -394,6 +399,31 @@ class _PlaylistPageState extends State<PlaylistPage> {
     _cachedFilteredSongs = null;
   }
 
+  // ==================== A-Z 字母索引（仅标题排序时） ====================
+
+  /// 计算当前显示列表中**实际出现的首字母集合**，保持排序方向。
+  ///
+  /// 使用 [pinyinSortKey] 取拼音首字母，确保中文歌名也归入正确的 A-Z 段。
+  /// 非字母字符（数字、标点）归入 `#`。降序排列时列表由父级反转传入 letters。
+  List<String> _computeActiveLetters() {
+    final songs = _displaySongs;
+    if (songs.isEmpty) return const [];
+    final seen = <String>{};
+    for (final song in songs) {
+      final key = pinyinSortKey(song.displayName);
+      if (key.isEmpty) continue;
+      var first = key.substring(0, 1).toUpperCase();
+      // 非字母开头 → 归入 #
+      if (!first.contains(RegExp(r'[A-Z]'))) first = '#';
+      seen.add(first);
+    }
+    var sorted = seen.toList()..sort();
+    if (!_sortAscending) sorted = sorted.reversed.toList();
+    return sorted;
+  }
+
+
+
   /// 播放次数/最近播放数据只在首次选中对应维度时加载一次；
   /// 加载完成后使缓存失效重排。并发调用由 _sortDataLoading 去重。
   bool _sortDataLoading = false;
@@ -441,6 +471,11 @@ class _PlaylistPageState extends State<PlaylistPage> {
   String get _sortAscKey =>
       widget.isAlbum ? 'album_song_sort_asc' :
       widget.isDefaultFavorite ? _kFavoriteSortAscKey : _kSortAscKey;
+
+  Future<void> _loadAlphabetIndexBarPreference() async {
+    final enabled = await SettingsRepository().getPlaylistAlphabetIndexBarEnabled();
+    if (mounted) setState(() => _alphabetIndexBarEnabled = enabled);
+  }
 
   Future<void> _loadSortPreference() async {
     final prefs = await SharedPreferences.getInstance();
@@ -1280,7 +1315,9 @@ class _PlaylistPageState extends State<PlaylistPage> {
                   _buildMultiSelectBar(colorScheme, textTheme),
                 if (_orderSaving) const LinearProgressIndicator(),
                 Expanded(
-                  child: CustomScrollView(
+                  child: Stack(
+                    children: [
+                      CustomScrollView(
                       controller: _scrollController,
                       slivers: [
                         if (!_isMultiSelectMode)
@@ -1627,7 +1664,29 @@ class _PlaylistPageState extends State<PlaylistPage> {
                           ),
                       ],
                     ),
+
+                    // ── A-Z 字母索引条（仅标题排序、非搜索/编辑/拖拽排序）──
+                    if (_sortBy == PlaylistSongSort.title &&
+                        _alphabetIndexBarEnabled &&
+                        !_isSearching &&
+                        !_isMultiSelectMode &&
+                        _trackOrder == null &&
+                        !kTvBuild)
+                      Positioned(
+                        right: 1,
+                        top: kToolbarHeight + 8,
+                        bottom: 0,
+                        width: 20,
+                        child: AlphabetIndexBar(
+                          scrollController: _scrollController,
+                          letters: _computeActiveLetters(),
+                          bubbleBgColor: colorScheme.primaryContainer,
+                          bubbleFgColor: colorScheme.onPrimaryContainer,
+                        ),
+                      ),
+                    ],
                   ),
+                ),
               ],
             ),
               ),

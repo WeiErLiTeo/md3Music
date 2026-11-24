@@ -42,9 +42,13 @@ enum LyricFillMode { classic, sweep }
 /// - [LyricFillStyle.wordGradient]：渐变赋色——当前行字内渐变的**未播端**
 ///   用未经混色的封面取色、**已播端**过渡到纯白，唱到之处封面色"过曝"
 ///   成白色，产生光学感。
+/// - [LyricFillStyle.backgroundBloom]：背景增透——条带取色源改为**当前行背后
+///   的实拍背景色**（模糊封面 / 流光背景 + 蒙版层），经提亮加饱和后供过曝
+///   曲线使用，光学观感为"背后背景色过曝偏向白色"；需向视图注入采样 key
+///   （见 AppleLyricsView.backgroundSamplerKey），未注入时退回封面提取色。
 ///
 /// 与 [LyricFillMode] 一样，持久化时存 `name`，未知值回退默认。
-enum LyricFillStyle { lineUniform, wordGradient }
+enum LyricFillStyle { lineUniform, wordGradient, backgroundBloom }
 
 /// 辉光触发判定模式：自适应 or 固定时长。
 ///
@@ -81,6 +85,7 @@ String lyricPositionLabel(LyricPosition position) => switch (position) {
 String lyricFillStyleLabel(LyricFillStyle style) => switch (style) {
       LyricFillStyle.lineUniform => '整行赋色',
       LyricFillStyle.wordGradient => '渐变赋色',
+      LyricFillStyle.backgroundBloom => '背景增透',
     };
 
 /// 歌词显示偏好设置（字号 + 行间距 + 字体）。
@@ -776,13 +781,14 @@ class LyricPreferences extends ChangeNotifier {
   /// 100% = 完全原取色，50% = 取色与白各半，0% = 不取色（纯白光核）。
   /// 默认 0.5（范围正中）：纯取色太鲜艳（用户 2026-11-20 反馈），
   /// 先压到 75%，随后放开 0~100 并把默认落回中轴。仅「歌词动态颜色」
-  /// + 渐变赋色（wordGradient）时才由设置页展示滑块。
+  /// + 渐变赋色（wordGradient / backgroundBloom）时才由设置页展示滑块。
   static const double minGradientFillRatio = 0.0;
   static const double maxGradientFillRatio = 1.0;
   static const double defaultGradientFillRatio = 0.5;
 
-  // 动态颜色赋色方式：默认 lineUniform（整行赋色，历史行为），wordGradient =
-  // 字内渐变直接用封面原色（不混色）过渡到白（过曝感）。
+  // 动态颜色赋色方式：默认 lineUniform（整行赋色，历史行为）；wordGradient =
+  // 字内渐变直接用封面原色（不混色）过渡到白（过曝感）；backgroundBloom =
+  // 背景增透：条带取当前行背后实拍背景色（提亮加饱和后供过曝曲线）。
   // 仅 AM 播放页 + 「歌词动态颜色」开启时生效。
   LyricFillStyle _fillStyle = LyricFillStyle.lineUniform;
   // 「渐变赋色」过曝轨迹的取色混白比例（默认 0.5，范围正中）
@@ -968,7 +974,10 @@ class LyricPreferences extends ChangeNotifier {
   ///
   /// 仅在「歌词动态颜色」开启且为 AM 播放页时由设置页展示下拉；
   /// [LyricFillStyle.wordGradient] 时当前行字内渐变直接用**未经混色的
-  /// 封面取色**过渡到纯白（不随混色比例改变）。
+  /// 封面取色**过渡到纯白（不随混色比例改变）；
+  /// [LyricFillStyle.backgroundBloom]（背景增透）时条带取色源改为当前行
+  /// 背后的实拍背景色（提亮加饱和后供过曝曲线），见
+  /// `lib/widgets/apple_lyrics/utils/lyric_bg_bloom.dart`。
   LyricFillStyle get fillStyle => _fillStyle;
 
   /// 「渐变赋色」过曝轨迹的取色混白比例（范围 [minGradientFillRatio]~
@@ -1017,17 +1026,17 @@ class LyricPreferences extends ChangeNotifier {
   /// 自定义字体（[LyricFontSource.custom]）是否加载成功。
   ///
   /// 面板提示「已应用自定义字体 / 字体加载失败」必须用它：
-  /// [effectiveFontFamily] 在 Windows 的 system 档也非 null（内置思源黑体），
+  /// [effectiveFontFamily] 在 Windows 的 system 档也非 null（内置 MD3MusicSans 字体），
   /// 用它判断会把「回落到默认字体」误报成「自定义字体已生效」。
   bool get customFontLoaded => _loadedCustomFontFamily != null;
 
   /// 当前生效的 fontFamily（传给 TextPainter 的 TextStyle）：
-  /// - [LyricFontSource.system]：Windows 返回内置思源黑体（与全局 UI 同族，
+  /// - [LyricFontSource.system]：Windows 返回内置 MD3MusicSans 字体（与全局 UI 同族，
   ///   否则「还原所有设置」后歌词会掉到引擎兜底字形）；其他平台返回 null，
   ///   让 Flutter 走系统字体链
   /// - [LyricFontSource.bundled]：已废弃（内置 SimHei 已移除），等同 system
   /// - [LyricFontSource.custom]：返回 [_loadedCustomFontFamily]，
-  ///   加载失败时降级为对应平台默认字体（Windows = 内置思源黑体）
+  ///   加载失败时降级为对应平台默认字体（Windows = 内置 MD3MusicSans 字体）
   String? get effectiveFontFamily {
     switch (_fontSource) {
       case LyricFontSource.system:
@@ -1982,12 +1991,17 @@ class LyricPreferences extends ChangeNotifier {
     return name == 'classic' ? LyricFillMode.classic : LyricFillMode.sweep;
   }
 
-  /// 仅 'wordGradient' → [LyricFillStyle.wordGradient]，其余（含 null / 未知值）
-  /// → lineUniform（默认）。
+  /// 仅精确串命中：'wordGradient' / 'backgroundBloom'；
+  /// 其余（含 null / 未知值）→ lineUniform（默认）。
   static LyricFillStyle _fillStyleFromName(String? name) {
-    return name == 'wordGradient'
-        ? LyricFillStyle.wordGradient
-        : LyricFillStyle.lineUniform;
+    switch (name) {
+      case 'wordGradient':
+        return LyricFillStyle.wordGradient;
+      case 'backgroundBloom':
+        return LyricFillStyle.backgroundBloom;
+      default:
+        return LyricFillStyle.lineUniform;
+    }
   }
 
   /// 仅 'adaptive' → [GlowThresholdMode.adaptive]，其余（含 null / 未知值）→ fixed（默认）。

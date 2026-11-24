@@ -57,12 +57,24 @@ class _LaunchPadCardState extends State<LaunchPadCard>
   /// 波覆盖层边长（图标盘 52 的外围一圈，格子内的小范围）。
   static const double _waveExtent = 84;
 
+  /// 大色块模式「图标盘 + 与标签间隙」的总高基准（52 + 8），按格内可用
+  /// 高度反解缩放系数 s 用：矮格里整体收缩，避免「图标 + 标签」列溢出。
+  static const double _blockIconSlotHeight = 52 + AppSpacing.sm;
+
+  /// 大色块模式标签预留：单行约 20dp + 余量。
+  static const double _blockLabelReserve = 24;
+
   late final flutter.AnimationController _ctrl;
   /// 手指是否还压在卡片上（Listen 原始指针事件，跟手势竞技场的裁决无关）。
   bool _down = false;
 
-  /// 图标盘 GlobalKey：量出图标真实屏幕中心作为波锚点（精确居中）。
+  /// 图标盘 GlobalKey：量图标盘真实尺寸，作为波的半径基准（scale）。
   final flutter.GlobalKey _iconKey = flutter.GlobalKey();
+  /// 整卡 GlobalKey：量卡片几何中心作为波锚点——布局是「图标+文字整组居中」，
+  /// 图标本身位于格心偏上，若以图标为锚，波整体偏上；用户要波在卡片正中。
+  final flutter.GlobalKey _cardKey = flutter.GlobalKey();
+  /// Windows 桌面格子大，波可再放大一档（移动端保持原尺寸）。
+  static const double _windowsWaveBoost = 1.35;
   /// 全屏波层：画在根 Overlay 上，不受卡片 ClipRRect / 相邻格子遮挡。
   flutter.OverlayEntry? _waveEntry;
 
@@ -92,20 +104,26 @@ class _LaunchPadCardState extends State<LaunchPadCard>
     super.dispose();
   }
 
-  /// 量图标盘的真实屏幕中心 + 相对设计基准（52dp）的缩放系数。
-  ({flutter.Offset center, double scale}) _iconGeometry() {
-    final ctx = _iconKey.currentContext;
-    final box = ctx?.findRenderObject() as flutter.RenderBox?;
-    if (box == null || !box.attached) {
+  /// 波锚点 = 整卡几何中心（屏幕坐标）；半径基准 = 图标盘实际尺寸 / 52dp。
+  /// 锚点与尺度分开：布局是「图标+文字整组居中」，图标偏上，但波要在格心；
+  /// 波的圈仍贴着图标大小起步，不至于脱离图标观感。
+  ({flutter.Offset center, double scale}) _waveGeometry() {
+    final cardCtx = _cardKey.currentContext;
+    final cardBox = cardCtx?.findRenderObject() as flutter.RenderBox?;
+    final iconCtx = _iconKey.currentContext;
+    final iconBox = iconCtx?.findRenderObject() as flutter.RenderBox?;
+    if (cardBox == null || !cardBox.attached ||
+        iconBox == null || !iconBox.attached) {
       return (center: flutter.Offset.zero, scale: 1.0);
     }
+    final boost = Platform.isWindows ? _windowsWaveBoost : 1.0;
     return (
-      center: box.localToGlobal(box.size.center(flutter.Offset.zero)),
-      scale: box.size.width / 52.0,
+      center: cardBox.localToGlobal(cardBox.size.center(flutter.Offset.zero)),
+      scale: iconBox.size.width / 52.0 * boost,
     );
   }
 
-  /// 插入全屏波层：锚点 = 图标真实中心，画在根 Overlay 最上层。
+  /// 插入全屏波层：锚点 = 整卡几何中心，画在根 Overlay 最上层。
   void _showWave(flutter.Offset center, double scale) {
     _removeWave();
     final cs = Theme.of(context).colorScheme;
@@ -158,7 +176,7 @@ class _LaunchPadCardState extends State<LaunchPadCard>
     _ctrl.stop();
     _ctrl.value = 0;
     _ctrl.duration = _waveDuration;
-    final geo = _iconGeometry();
+    final geo = _waveGeometry();
     // 系统要求减少动画时不播装饰性波（动作照常执行）。
     if (!(MediaQuery.maybeDisableAnimationsOf(context) ?? false)) {
       _showWave(geo.center, geo.scale);
@@ -211,7 +229,50 @@ class _LaunchPadCardState extends State<LaunchPadCard>
       builder: (context, constraints) {
         final s =
             (constraints.maxWidth / _waveExtent).clamp(1.0, 1.35);
+        // 大色块模式「图标盘 + 间隙 + 标签」要装进格子内：宽度档上限 1.35 的
+        // 整套在安卓竖屏正方形格（≈118dp）会超可用高度（盘≈70+间隙+标签≈101
+        // > ≈97）→ Column 溢出。按格内可用高度再收一档 s（矮格整体收敛，
+        // Windows 大格仍由宽度档 1.35 决定，不变外观）；壁纸浮层不受此约束。
+        final double sBlock;
+        if (blockMode) {
+          final hBudget = constraints.maxHeight -
+              _blockLabelReserve -
+              2 * (AppSpacing.sm * 1.35);
+          sBlock =
+              math.min(s, (hBudget / _blockIconSlotHeight).clamp(0.6, 1.35));
+        } else {
+          sBlock = s;
+        }
+        // 图标 + 底盘：先画——波从它上面扫过去，半径基准取自它
+        // （锚点是整卡中心，见 _waveGeometry）。
+        // 大色块模式：整卡已是实色块，不垫小底盘，图标 36 基准 + primary
+        // 着色（一周前最初样式）；壁纸模式：透明底盘，图标直接浮在壁纸上。
+        final iconWidget = Transform.scale(
+          key: _iconKey,
+          scale: lift,
+          child: Container(
+            width: 52 * sBlock,
+            height: 52 * sBlock,
+            decoration: BoxDecoration(
+              // 大色块模式不垫底盘；壁纸模式也透明。
+              color: Colors.transparent,
+              borderRadius: BorderRadius.circular(12 * sBlock),
+            ),
+            child: Center(
+              child: Icon(widget.icon,
+                  size: blockMode
+                      ? 36 * sBlock
+                      : 26 * sBlock * iconFactor,
+                  color: blockMode
+                      ? cs.primary
+                      : (widget.hidden
+                          ? cs.onSurfaceVariant
+                          : cs.onPrimaryContainer)),
+            ),
+          ),
+        );
         return ClipRRect(
+          key: _cardKey,
           borderRadius: AppRadius.lgAll,
           child: Material(
             // 大色块模式：整卡实色；壁纸模式：透明（图标浮在壁纸上）。
@@ -230,65 +291,62 @@ class _LaunchPadCardState extends State<LaunchPadCard>
                 onLongPressEnd: (_) => widget.onLongPressEnd(),
                 onLongPressCancel: () => widget.onLongPressEnd(),
                 child: Padding(
-                  padding: EdgeInsets.all(AppSpacing.sm * s),
-                  // 图标在「整格」正中心、标签沉底（Stack 叠放，标签不占布局
-                  // 高度）。之前 Column(Expanded 槽 + 标签) 的图标中心 = 标签
-                  // 以上区域的中心，恒在格心上方——格越小偏得越多（安卓竖屏
-                  // 正方形格最明显，Windows 大格只偏 ~6% 看不出来），全屏波
-                  // 锚定图标真实中心，随之一起偏离格心。
-                  child: Stack(
-                    alignment: Alignment.center,
-                    children: [
-                      // 图标 + 底盘：先画——波从它上面扫过去。
-                      // 大色块模式：整卡已是实色块，不再垫小底盘，图标 36
-                      // 基准 + primary 着色（一周前最初样式）；
-                      // 壁纸模式：透明底盘，图标直接浮在壁纸上。
-                      Transform.scale(
-                        key: _iconKey,
-                        scale: lift,
-                        child: Container(
-                          width: 52 * s,
-                          height: 52 * s,
-                          decoration: BoxDecoration(
-                            // 大色块模式不垫底盘；壁纸模式也透明。
-                            color: Colors.transparent,
-                            borderRadius: BorderRadius.circular(12 * s),
-                          ),
-                          child: Center(
-                            child: Icon(widget.icon,
-                                size: blockMode
-                                    ? 36 * s
-                                    : 26 * s * iconFactor,
-                                color: blockMode
-                                    ? cs.primary
-                                    : (widget.hidden
-                                        ? cs.onSurfaceVariant
-                                        : cs.onPrimaryContainer)),
-                          ),
-                        ),
-                      ),
-                      // 标签沉底：图标不为其让位，格心即图标心（即波心）。
-                      Positioned(
-                        left: AppSpacing.xs,
-                        right: AppSpacing.xs,
-                        bottom: 0,
-                        child: Text(
-                          widget.label,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          textAlign: TextAlign.center,
-                          style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                                fontWeight: FontWeight.w600,
-                                color: widget.hidden
-                                    ? cs.onSurfaceVariant
-                                    : cs.onSurface,
+                  padding: EdgeInsets.all(AppSpacing.sm * sBlock),
+                  // 大色块模式：Column 把「图标 + 标签」视作整体居中——
+                  // 图标在上、标签在下、整组视觉重心居中（同最初大色块样式；
+                  // 此前写死 84*s 的图标槽在安卓矮格里还会溢出）。
+                  // 壁纸模式：Stack 叠放——图标在整格正中心、标签沉底不占布局
+                  // 高度（浮层观感），全屏波锚定整卡几何中心。
+                  child: blockMode
+                      ? Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            iconWidget,
+                            Gap(AppSpacing.sm * sBlock),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: AppSpacing.xs),
+                              child: Text(
+                                widget.label,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                textAlign: TextAlign.center,
+                                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                                      fontWeight: FontWeight.w600,
+                                      color: widget.hidden
+                                          ? cs.onSurfaceVariant
+                                          : cs.onSurface,
+                                    ),
                               ),
+                            ),
+                          ],
+                        )
+                      : Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            iconWidget,
+                            // 标签沉底：图标不为其让位，格心即图标心（即波心）。
+                            Positioned(
+                              left: AppSpacing.xs,
+                              right: AppSpacing.xs,
+                              bottom: 0,
+                              child: Text(
+                                widget.label,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                textAlign: TextAlign.center,
+                                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                                      fontWeight: FontWeight.w600,
+                                      color: widget.hidden
+                                          ? cs.onSurfaceVariant
+                                          : cs.onSurface,
+                                    ),
+                              ),
+                            ),
+                            // 波已移到全屏 Overlay（见 _showWave）——
+                            // 锚定整卡几何中心、不受卡片裁剪、盖在所有格子之上。
+                          ],
                         ),
-                      ),
-                      // 波已移到全屏 Overlay（见 _showWave）——
-                      // 锚定图标真实中心、不受卡片裁剪、盖在所有格子之上。
-                    ],
-                  ), // Stack
                 ), // Padding
               ), // GestureDetector
             ), // Listener
@@ -351,10 +409,11 @@ class _DistortionPainter extends flutter.CustomPainter {
   final Color mainColor; // 主通道（primary）
   final Color leftColor; // 左支色散（主色相 -42°）
   final Color rightColor; // 右支色散（主色相 +42°）
-  /// 波锚点：卡片图标盘的真实屏幕中心（全屏 Overlay 坐标系），精确居中。
+  /// 波锚点：整卡几何中心（全屏 Overlay 坐标系），不是图标中心——布局
+  /// 「图标+文字整组居中」时图标偏上，以图标为锚会让整道波偏上。
   final flutter.Offset center;
-  /// 展示缩放：图标盘实际尺寸 / 设计基准 52dp。波的所有半径按此缩放，
-  /// 让波前始终贴着图标边缘起步（图标放大后波也跟着放大）。
+  /// 展示缩放：图标盘实际尺寸 / 设计基准 52dp（Windows 另有放大系数）。
+  /// 波的所有半径按此缩放，让波前贴着图标边缘起步。
   final double scale;
 
   _DistortionPainter({
@@ -370,8 +429,8 @@ class _DistortionPainter extends flutter.CustomPainter {
   void paint(flutter.Canvas canvas, flutter.Size size) {
     final p = progress.clamp(0.0, 1.0);
     if (p <= 0.001 || p >= 0.999) return;
-    // 全屏画布：平移到图标真实中心后，内部仍用「52dp 图标盘」的设计基准绘制，
-    // 整体按 scale 缩放。锚点即真实中心 → 精确居中，不依赖格子坐标系。
+    // 全屏画布：平移到整卡几何中心后，内部仍用「52dp 图标盘」的设计基准绘制，
+    // 整体按 scale 缩放。锚点是格心 → 整道波居中不偏。
     canvas.save();
     canvas.translate(center.dx, center.dy);
     canvas.scale(scale);

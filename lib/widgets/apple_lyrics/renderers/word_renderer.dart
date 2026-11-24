@@ -194,13 +194,20 @@ class WordRenderer {
   /// null 表示不使用（回退到 LyricLayout.textColorValue）。
   int? _activeColorValue;
 
-  /// 「渐变赋色」专用原始封面色（ARGB int，未经混色 / 明度兜底，
-  /// 由 AppleLyricsView 注入）。
+  /// 「渐变赋色 / 背景增透」专用条带取色（ARGB int，未经混色 / 明度兜底，
+  /// 由 AppleLyricsView 注入；背景增透时为取样背景色的提亮加饱和结果）。
   ///
-  /// 非 null 且偏好 fillStyle == wordGradient 且当前行时，字内渐变的
-  /// 未播端用它、已播端过渡到纯白。它与 [_activeColorValue]（混色结果）
-  /// **不同源**：整行赋色走混色比例，渐变赋色直接用封面原色。
+  /// 非 null 且偏好 fillStyle 为 wordGradient / backgroundBloom 且当前行时，
+  /// 字内渐变的未播端用它、已播端过渡到纯白。它与 [_activeColorValue]（混色
+  /// 结果）**不同源**：整行赋色走混色比例，条带取色直接用注入值。
   int? _gradientAccentValue;
+
+  /// 上次绘制时注入的 [_gradientAccentValue]（tint 缓存失效判据）。
+  ///
+  /// 注入值低频刷新（背景增透每 ≤500ms 至多一次取样），变化时必须让 tint
+  /// 缓存重建，否则字内渐变停留在旧取样色。-1 哨兵表示"上一帧为空"，与任何
+  /// 真实 ARGB 值都不相等——模式来回切换时同样强制重建。
+  int? _lastGradientAccentValue;
 
   /// 每字辉光判定缓存（行绑定期计算一次）。
   /// 与 [_wordPainters] / [_wordWidths] 同长度同索引。
@@ -232,6 +239,18 @@ class WordRenderer {
   /// 仅测试：走「图像翻转路径」的绘制次数（验证翻转期不再逐帧画文字）。
   @visibleForTesting
   static int debugFlipImageDraws = 0;
+
+  /// 仅测试：tint 缓存失效（accent 注入值变化重建）的累计次数。
+  ///
+  /// 直接锁定「渐变赋色 / 背景增透」的失效机制：注入值（背景增透的
+  /// 取样刷新）变化时必须触发重建，否则字内渐变停留在旧取样色。
+  /// 逐像素落点依赖扫光/经典几何的中段命中，几何预言脆弱，故锁机制本身。
+  @visibleForTesting
+  int debugTintInvalidationsForTest = 0;
+
+  /// 仅测试：各 word 最近一次 set text 的 tint 键列表（0xRRGGBB）。
+  @visibleForTesting
+  List<int> get debugTintKeysForTest => List<int>.of(_lastSetTints);
 
   /// 渐变路径复用的 Paint 实例（避免每帧新建，减少 GC）。
   /// 渐变路径稳态下每帧只改 shader，0 次 layout。
@@ -936,6 +955,7 @@ class WordRenderer {
       }
 
       // === Y 偏移动画（上浮特效）===
+      // _maxLiftPx 已含负号（上浮=向上=负偏移，见 _maxLiftPx 定义）。
       final double targetY;
       if (i < currentWordIdx) {
         targetY = maxLiftPx;
@@ -1144,28 +1164,44 @@ class WordRenderer {
       // 颜色由绘制期 [_glowTint] 逐帧上色。拖动「动态颜色混色比例」时
       // textColorValue 每帧都变，若在此重建精灵会每帧 toImage（真机必掉帧）。
     }
+    // 「渐变赋色 / 背景增透」注入值低频刷新（背景增透每 ≤500ms 至多一次取样）：
+    // 变化时必须重建 tint 缓存，否则字内渐变停留在旧取样色。
+    if (_gradientAccentValue != _lastGradientAccentValue) {
+      debugTintInvalidationsForTest++;
+      _lastGradientAccentValue = _gradientAccentValue ?? -1;
+      _lastSetTints = List<int>.filled(_lastSetTints.length, -2);
+      for (int i = 0; i < _lastSetCharTints.length; i++) {
+        _lastSetCharTints[i] = List<int>.filled(
+          _lastSetCharTints[i].length,
+          -2,
+        );
+      }
+    }
     final int textRed = (textColorValue >> 16) & 0xFF;
     final int textGreen = (textColorValue >> 8) & 0xFF;
     final int textBlue = textColorValue & 0xFF;
 
-    // === 「渐变赋色」双色通道（歌词动态颜色的二选一，默认整行赋色）===
-    // 语义（2026-11-20 定稿）：
-    // - 已播区 / 扫光带内：未经混色的封面原色（raw*）向白过曝——"封面取色
-    //   过曝成白"的光学过渡只出现在**渐变过程中**；
+    // === 「渐变赋色 / 背景增透」双色通道（歌词动态颜色的赋色方式，默认整行赋色）===
+    // 语义（2026-11-20 定稿，2026-11-22 增背景增透）：
+    // - 已播区 / 扫光带内：未经混色的条带取色（raw*，渐变赋色 = 封面原色、
+    //   背景增透 = 取样背景色的提亮加饱和结果）向白过曝——"取色过曝成白"
+    //   的光学过渡只出现在**渐变过程中**；
     // - 完全未播区：保持当前行原有颜色（base* = textRGB，即混色结果）
     //   不变——本功能不改未播部分的颜色。
     //
     // 门控：视图注入 [_gradientAccentValue] 非空时，「歌词动态颜色」已开、
-    // 无自定义文字色、已提取到封面主色。gradientFill 为 false 时
-    // raw* ≡ base* ≡ textRGB，本行全部绘制路径逐像素退化为历史行为。
+    // 无自定义文字色、条带取色可用（封面提取色或背景取样）。gradientFill 为
+    // false 时 raw* ≡ base* ≡ textRGB，本行全部绘制路径逐像素退化为历史行为。
     final int? accentArg = _gradientAccentValue;
+    final LyricFillStyle fillStylePref = LyricPreferences.instance.fillStyle;
     final bool gradientFill =
         _isActive &&
-        LyricPreferences.instance.fillStyle ==
-            LyricFillStyle.wordGradient &&
+        (fillStylePref == LyricFillStyle.wordGradient ||
+            fillStylePref == LyricFillStyle.backgroundBloom) &&
         accentArg != null;
-    // base*：当前行原有颜色（混色结果）；raw*：未经混色的封面提取色，
-    // 只用于扫光带内的过曝过渡。注入值缺失时两者同值（零回归）。
+    // base*：当前行原有颜色（混色结果）；raw*：条带取色（渐变赋色 = 封面提取
+    // 原色、背景增透 = 取样背景色的提亮加饱和结果），只用于扫光带内的过曝
+    // 过渡。注入值缺失时两者同值（零回归）。
     // 「渐变赋色」过曝轨迹的取色混白比例（默认 50%，范围正中）：纯取色太鲜艳，
     // 未播区不受它影响——那里保持原有混色（[textRGB]）。
     final double gfRatio =

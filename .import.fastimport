@@ -31452,6 +31452,88 @@ from :3003
 merge :3010
 commit refs/heads/rust-local-force
 mark :3012
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795100269 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795100269 +0800
+data 732
+fix(car-power): 修复车机下电暂停被状态闸门误判丢弃的问题
+
+- 移除 handleCarPowerSignal 中基于 isNowPlaying 的派发闸门，下电信号一律派发 pause，避免通知链停摆时状态冻结导致功能失效
+- 新增 isNowPlayingUpdatedAt 记录状态写入时间，将 isNowPlaying 降级为日志字段，不再参与决策
+- 更新下电派发日志格式为 power-down -> dispatch pause (action=…, playing=…, since=Ns)，便于诊断状态新鲜度
+- 将 audio_service_io.dart 中焦点处理日志从 print 改为 debugPrint，并补充暂停原因留痕，确保进入诊断包
+- 新增诊断文档记录 15 次下电信号全部被误判的实证，并更新既有分析文档与排查指南
+from :3011
+commit refs/heads/rust-local-force
+mark :3013
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795142674 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795142674 +0800
+data 604
+fix(player): 间奏点禁用条件移除本地歌曲限制
+
+- 将 _isLocalLrcLyricWithoutWordTiming 方法重构为 _isLineLevelLrcLyric getter，移除对 currentSong 是否为本地歌曲的判断
+- 现在只要歌词为 LRC 行级格式（无字级时间戳）即禁用 AppleLyricsView 的间奏点动画，在线歌曲同样生效
+- 三处调用点改为直接使用该 getter，不再传入 currentSong 参数
+- 更新注释说明 KRC / TTML / 静态歌词不受影响，字级 LRC 仍保留间奏点对齐
+- apple_lyrics_view.dart 中 enableInterludeDots 文档注释同步移除本地歌曲限定
+from :3012
+commit refs/heads/rust-local-force
+mark :3014
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795150604 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795150604 +0800
+data 1632
+feat(lyrics): 新增歌词动态赋色方式（整行赋色/渐变赋色）
+
+- 新增 LyricFillStyle 枚举：lineUniform 为默认（历史行为，整行统一混色），wordGradient 为字内渐变直接用未经混色的封面取色过渡到纯白（过曝光学感）；持久化 key lyric_fill_style 仅存 name，null 或未知串一律回落 lineUniform
+- 设置页仅在「歌词动态颜色」开启且 AM 播放器时展示「动态赋色方式」二选一下拉，切换即时生效并落盘；同步补充设置搜索索引条目与别名
+- AppleLyricsView 计算渐变专用原始封面色 _gradientAccentValue，仅 AM 深色底 + 动态颜色开启 + wordGradient + 无自定义文字色 + 已提取封面主色时非空，任一条件不满足为 null 由渲染层退回整行赋色历史行为
+- WordRenderer 实现双色端点：已播侧过曝成纯白、未播侧保持封面原色，sweep 扫光、classic 均匀 tint、强调字与辉光精灵各路径统一支持，alpha 曲线完全不变，非渐变模式逐像素退化为原行为
+- 新增 _lastSetTints 与 _lastSetCharTints tint 缓存键并入 set text/layout 判定，避免扫光前沿连续变化时 painter 携带旧 tint 造成颜色滞后
+- 补充像素证据测试（sweep 与 classic 模式已播白/未播封面色、关闭开关无过曝白）及偏好单元测试（默认值、落盘 key、未知串回退、同值早退不通知、reset 移除 key、不进动画预设参数表）
+- 更新 docs/lyric-animation-params.md 参数表说明 lyric_fill_style 行为与生效条件，并在测试命令清单加入 lyric_fill_style_test.dart
+from :3013
+commit refs/heads/rust-local-force
+mark :3015
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795151601 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795151601 +0800
+data 793
+fix(apple_lyrics): 渐变赋色端点改按行内位置取色，消除已播字封色残留
+
+- 新增 fillPositionTForTest 与 fillExposedColorForTest：位置归一化 t 与 _alphaAtX 同源，按 t 把封面色向白过曝，t=0 为纯白、t=1 保原色
+- 整词路径与 classic 字符路径的渐变端点均改为按字或字符左右边缘的绝对位置取色，不再固定「左白右封」
+- 辉光层与文字层共用同一份 tLc/tRc，保证两层颜色同源
+- 修复已播完字符内残留封色渐变、相邻字边界两侧颜色跳变的问题（用户反馈的 classic 观感）
+- 未开启渐变赋色时端点原样返回封面色，两端同色保持历史行为
+- 补充位置推导、过曝色的单元测试，以及 classic 已播区零封色的像素回归用例
+from :3014
+commit refs/heads/rust-local-force
+mark :3016
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795159723 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795159723 +0800
+data 999
+fix(layout): 修复 TabBarView 页面纵向滚动无法收起底栏
+
+- 移除 _onScrollNotification 中 depth != 0 的过滤：depth 统计的是冒泡路线经过的 Viewport 个数，TabBarView/PageView 分页器本身是 Viewport，会把页面纵向滚动通知一律抬成 depth=1，导致我的收藏、本地音乐、搜索等以 TabBarView 为主体的主界面永远收不起底栏
+- 分页器自身的翻页通知 metrics.axis 恒为横向，在 axis 判定处已被拦下，卡片内嵌横向轮播同理不受影响，原过滤意图由轴向判定保留
+- 嵌套纵向列表现在同样计入浏览位移，位移方向仍由 _applyScrollDelta 的到顶/clamp 语义兜底，不会反向推动底栏
+- 测试新增 tabbedBody 辅助构造「收藏页」结构（纵向列表装在 TabBarView 内），验证四步上滑共 64dp 得收起进度 1.0，进度到 1 后 NavigationBar 槽位移除
+- 测试新增嵌套横向轮播场景，验证横向轴滚动通知被拦下、底栏不动
+from :3015
+commit refs/heads/rust-local-force
+mark :3017
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795161304 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795161304 +0800
+data 1148
+fix(apple_lyrics): 渐变赋色未播区保持原有混色
+
+- 「渐变赋色」语义二次定稿：仅扫光带内用未经混色的封面原色向白过曝、已播侧纯白，完全未播区保持当前行原有混色不变，此前未播区会被整体替换成封面原色
+- fillExposedColorForTest 重命名为 fillColorAtForTest 并改为双通道签名：t>=1 原样返回原有混色 base，t<1 把封面原色 raw 向白按已播度插值，未开启时一律返回 base 保证零回归
+- _paintSweepWord 与 _paintEmphasizedWord 新增 accentR/accentG/accentB 参数传入封面提取色，textRGB 恢复为混色结果，废弃原先替换生效颜色的 effR/effG/effB 通道
+- classic 2 停端点色抽取为 classicRampColors 供辉光层与文字层共用，退化均匀 tint 与 sweep ramp 均统一为「扫光带内过曝、未播保原混色」口径
+- 像素证据测试改为白 / 封面原色 / 原有混色三类互斥分类，新增断言钉死未播区保浅青混色、零封面原色且不被提前过曝成白
+- 同步更新设置页下拉说明注释与 lyric-animation-params.md 中 lyric_fill_style 的行为描述
+from :3016
+commit refs/heads/rust-local-force
+mark :3018
 author Little-White3110 <53994162+Little-White3110@users.noreply.github.com> 1795094298 +0800
 committer GitHub <noreply@github.com> 1795094298 +0800
 data 72
@@ -31461,7 +31543,7 @@ bug fixes
 from :3009
 merge :3011
 commit refs/heads/rust-local-force
-mark :3013
+mark :3019
 author vcexml <3356141621@qq.com> 1795137385 +0800
 committer vcexml <3356141621@qq.com> 1795138119 +0800
 data 840
@@ -31476,9 +31558,9 @@ style(launchpad): 紧凑卡片栅格与图标底盘，修标题与内容左缘�
 - 长按提示层的硬编码 Colors.black/white 改 cs.scrim / cs.onPrimaryContainer，
   TextStyle(fontSize:12) 改走 textTheme；离格值 10/16 收敛到 AppSpacing。
 - 分区头加计数胶囊，首块 sm / 后续 xl 形成紧松节奏。
-from :3012
+from :3018
 commit refs/heads/rust-local-force
-mark :3014
+mark :3020
 author vcexml <3356141621@qq.com> 1795137400 +0800
 committer vcexml <3356141621@qq.com> 1795138119 +0800
 data 1023
@@ -31494,9 +31576,9 @@ style(favorites): 修分组标题层级倒挂、封面角标硬编码黑白与�
 - 专辑/歌手行的 Column 补 mainAxisSize.min：Column 默认吃掉格子全部高度，
   把文字顶到上沿、与垂直居中的封面错位（改成多列后此错位变得刺眼）。
 - TabBarView 套 ContentWidth，桌面端不再把行拉到 1700px 宽。
-from :3013
+from :3019
 commit refs/heads/rust-local-force
-mark :3015
+mark :3021
 author vcexml <3356141621@qq.com> 1795137412 +0800
 committer vcexml <3356141621@qq.com> 1795138119 +0800
 data 517
@@ -31507,9 +31589,9 @@ style(library): 扫描/错误横幅横向对齐内容基线，错误态补图标
 - 错误态从「一行红字 TextStyle」升级为 errorContainer 容器 + 图标 + bodySmall；
   不新增重试按钮（入口仍由 FAB / 菜单提供），避免视觉改版引入新交互路径。
 - 扫描文案改走 textTheme.bodySmall 并降为 onSurfaceVariant。
-from :3014
+from :3020
 commit refs/heads/rust-local-force
-mark :3016
+mark :3022
 author vcexml <3356141621@qq.com> 1795137475 +0800
 committer vcexml <3356141621@qq.com> 1795138119 +0800
 data 1367
@@ -31530,9 +31612,9 @@ style(discover): 区块间距节奏、行内空态统一，新碟改 4 行单列
 - _kGreetingFloat 10→AppSpacing.sm；_kActionTrailingGap 的 6 是推导值
   （36 宽比 MD3 默认 48 窄 12，右半内缩 6），补注释说明不可换 token。
 - 更新锁定新碟数量的测试（8→4）。
-from :3015
+from :3021
 commit refs/heads/rust-local-force
-mark :3017
+mark :3023
 author vcexml <3356141621@qq.com> 1795137514 +0800
 committer vcexml <3356141621@qq.com> 1795138119 +0800
 data 833
@@ -31547,9 +31629,9 @@ feat(discover): 新碟上架每行支持收藏专辑
 - PlaylistCollectionNotifier 缺席时静默跳过，保证测试 harness 不因未挂 Provider 崩溃。
 - CompactAlbumGrid 新增可选 favoriteBuilder（默认 null），另两处调用行为不变；
   组件本身不认识收藏语义，可收藏条件由宿主决定。
-from :3016
+from :3022
 commit refs/heads/rust-local-force
-mark :3018
+mark :3024
 author vcexml <3356141621@qq.com> 1795139446 +0800
 committer vcexml <3356141621@qq.com> 1795139446 +0800
 data 715
@@ -31564,9 +31646,9 @@ DiscoverAlbumGridSkeleton 仍按每行 2 格硬编码（i += 2），加载态是
   文字的距离变化。
 - 新增临时验证断言：单列 4 格 top 互不相同（4 行）、left 全相同、
   格子宽度占满整行；两列模式仍排成 2 行。
-from :3017
+from :3023
 commit refs/heads/rust-local-force
-mark :3019
+mark :3025
 author vcexml <3356141621@qq.com> 1795142614 +0800
 committer vcexml <3356141621@qq.com> 1795142614 +0800
 data 1016
@@ -31588,9 +31670,9 @@ refactor(ui): 抽出 AppEmptyState 统一全站空态，替换 9 处各异写法
 双层 alpha + 硬编码 SizedBox(12)/(4)）。
 
 净减 182 行。
-from :3018
+from :3024
 commit refs/heads/rust-local-force
-mark :3020
+mark :3026
 author vcexml <3356141621@qq.com> 1795142651 +0800
 committer vcexml <3356141621@qq.com> 1795142651 +0800
 data 1012
@@ -31611,9 +31693,9 @@ padding，于是同一行歌在不同页面左缘不同——本地歌曲 16、�
 
 playlist_page 的歌曲列表未动：它把 padding 全部置零并发注释说明是为了
 避免与 M3E 分段卡的双层留白，改动会影响拖拽几何，留到下一批单独验证。
-from :3019
+from :3025
 commit refs/heads/rust-local-force
-mark :3021
+mark :3027
 author vcexml <3356141621@qq.com> 1795144035 +0800
 committer vcexml <3356141621@qq.com> 1795144035 +0800
 data 1180
@@ -31637,9 +31719,9 @@ feat(layout): 内容限宽按形态分两档，列表型封顶 960
 
 新增的临时验证测试确认：1920/2560/800 三档下 list=960、grid 符合预期，
 嵌套时内层收窄到 960，且 contentWidthFor(3840) 仍是 3840*0.92 不变。
-from :3020
+from :3026
 commit refs/heads/rust-local-force
-mark :3022
+mark :3028
 author vcexml <3356141621@qq.com> 1795144052 +0800
 committer vcexml <3356141621@qq.com> 1795144052 +0800
 data 1359
@@ -31664,9 +31746,9 @@ _buildBlacklistEntry / _buildPreferenceEntry 三个入口只出现在「账号�
 
 会员两行保持**只读展示**、不硬造跳转：项目里没有会员详情页（members_sheet
 是一起听的成员列表，与会员无关），按「不新增功能」原则未加假入口。
-from :3021
+from :3027
 commit refs/heads/rust-local-force
-mark :3023
+mark :3029
 author vcexml <3356141621@qq.com> 1795144696 +0800
 committer vcexml <3356141621@qq.com> 1795144696 +0800
 data 891
@@ -31685,9 +31767,9 @@ style(discover): 个人 FM 空态改紧凑横条，不再留 112dp 封面占位
 顺带清理：加了 currentTrack==null 的早退分支后，正常态分支里的
 currentTrack?. / ! 变成冗余，analyze 会报 3 条新警告，一并收敛。
 personal_fm 41 个测试全过。
-from :3022
+from :3028
 commit refs/heads/rust-local-force
-mark :3024
+mark :3030
 author vcexml <3356141621@qq.com> 1795145233 +0800
 committer vcexml <3356141621@qq.com> 1795145233 +0800
 data 999
@@ -31707,9 +31789,9 @@ revert(layout): 撤销内容限宽封顶——会造成「挤在中间」与跨�
 本次回滚保留 ContentWidth.absoluteMax 这个中性参数（默认 null 行为不变），
 并在文档里写清这次失败的原因与正确做法：若日后要限宽，必须用同一个
 resolveWidth 把 AppBar / TabBar 一起收窄，且全站同时切换。
-from :3023
+from :3029
 commit refs/heads/rust-local-force
-mark :3025
+mark :3031
 author vcexml <3356141621@qq.com> 1795146116 +0800
 committer vcexml <3356141621@qq.com> 1795146116 +0800
 data 1006
@@ -31731,9 +31813,9 @@ bodyLarge(16/w600) 字号字重完全相同、只差颜色。降到 labelLarge(1
 
 验证：settings_subpage_structure_test 基线就是 +8 -2（文案漂移
 「顶栏与页签」vs「顶栏与横屏布局」，与本次无关）。
-from :3024
+from :3030
 commit refs/heads/rust-local-force
-mark :3026
+mark :3032
 author vcexml <3356141621@qq.com> 1795146595 +0800
 committer vcexml <3356141621@qq.com> 1795146595 +0800
 data 601
@@ -31749,9 +31831,9 @@ refactor(ui): 详情页空态并入 AppEmptyState（专辑 2 处、歌手 5 处�
 
 全站 AppEmptyState 覆盖：10 个文件 19 处。
 album 2 个、artist 19 个测试全过。
-from :3025
+from :3031
 commit refs/heads/rust-local-force
-mark :3027
+mark :3033
 author vcexml <3356141621@qq.com> 1795153510 +0800
 committer vcexml <3356141621@qq.com> 1795153510 +0800
 data 1491
@@ -31777,9 +31859,9 @@ LaunchPad 进入，PlaylistBrowsePage 仍从「推荐歌单 → 查看全部」�
   排行榜区块在空数据时不渲染（既有行为），无法从探索段点入
 - 顺带修好了基线里那条失败的「迁移后的新碟完整列表仍保留封面 Hero」
   7/7 通过（基线是 +6 -1）。
-from :3026
+from :3032
 commit refs/heads/rust-local-force
-mark :3028
+mark :3034
 author vcexml <3356141621@qq.com> 1795155810 +0800
 committer vcexml <3356141621@qq.com> 1795155810 +0800
 data 820
@@ -31797,9 +31879,9 @@ fix(library): 专辑网格在 Pad 分支也按卡宽自适应，修宽屏卡被�
 1936px 下得到约 8 列，每格约 192×260，与其它列表页密度一致。
 
 实测对比：改前单卡占约 1/4 屏宽、半屏高；改后约 1/10 屏宽。
-from :3027
+from :3033
 commit refs/heads/rust-local-force
-mark :3029
+mark :3035
 author vcexml <3356141621@qq.com> 1795157985 +0800
 committer vcexml <3356141621@qq.com> 1795157985 +0800
 data 599
@@ -31814,9 +31896,68 @@ style(user): 「我的」页去掉「更多」分组标题与行尾箭头，列�
 - 删除「更多」分组标题，三个入口直接跟在会员卡下方
 - contentPadding 由 horizontal xs(4) 改为 lg(16)，与上方会员卡左缘对齐
 - 三个 ListTile 的 trailing chevron 全部移除
-from :3028
+from :3034
 commit refs/heads/rust-local-force
-mark :3030
+mark :3036
+author Little-White3110 <53994162+Little-White3110@users.noreply.github.com> 1795161637 +0800
+committer GitHub <noreply@github.com> 1795161637 +0800
+data 58
+Merge branch 'zzyoxml:rust-local-two' into rust-local-two
+from :3013
+merge :3035
+commit refs/heads/rust-local-force
+mark :3037
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795161733 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795161733 +0800
+data 73
+Merge remote-tracking branch 'origin/rust-local-two' into rust-local-two
+from :3017
+merge :3036
+commit refs/heads/rust-local-force
+mark :3038
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795163915 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795163915 +0800
+data 852
+fix(lyrics): 渐变赋色改为过曝曲线跨字连贯流动
+
+- 新增 fillHueBehindForTest / fillHueAheadForTest / fillBloomColorForTest 替换旧的 fillPositionTForTest / fillColorAtForTest，颜色曲线以光前沿为零点：后方白化余韵约 1.6em、前方回落约 1.2em，带宽独立且宽于亮度锐带
+- 光前沿处保持封面原色作为过曝光斑芯，远后方纯白，远前方回原有混色，未播区颜色不变
+- sweep 与 classic 路径的端点色均按各 stop 的行内绝对位置过曝取样，相邻字共享边界同值，跨字连贯流动不再逐词跳变
+- 曲线不可用时（未开启渐变赋色或无光前沿）bloomAt 返回 null，调用方回落原有混色，保持零回归
+- 更新设置页文案与 lyric-animation-params.md 文档说明新颜色口径
+- 补充过曝曲线的单元测试覆盖
+from :3037
+commit refs/heads/rust-local-force
+mark :3039
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795168492 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795168492 +0800
+data 1249
+feat(apple_lyrics): 新增渐变赋色取色浓度参数，默认压淡至75%
+
+- 新增 lyric_gradient_fill_ratio 参数（范围 0.5~1.0，默认 0.75），控制渐变赋色过曝轨迹里封色的混白浓度：100% = 完全原取色，50% = 取色与白各半；纯取色太鲜艳（用户反馈）故默认压淡一档，未播区不受影响
+- word_renderer 过曝曲线的取色改为经 mixWithWhiteForTest 线性混白后使用，渐变模式关闭时与原值同值，保持零回归
+- lyric_preferences 增加常量、getter 与 setter：越界钳制到 [0.5, 1.0]、同值早退不通知、落盘到 lyric_gradient_fill_ratio，load() 从持久值恢复，reset 后回默认并移除 key
+- 设置页仅在「歌词动态颜色」开启且赋色方式为 wordGradient 时显示滑块，恢复默认值流程同步重置该参数，确认弹窗文案同步更新
+- 该参数不进动画预设参数表，sanitizeAnimationValues 对它返回空，预设契约不变
+- 补充 mixWithWhiteForTest 端点单测，新增 lyric_gradient_fill_ratio_test.dart 覆盖默认值、钳制、持久化与恢复、同值不通知、reset 及预设排除
+- 文档 lyric-animation-params.md 同步新增参数行、更新赋色方式说明与测试清单
+from :3038
+commit refs/heads/rust-local-force
+mark :3040
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795172876 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795172876 +0800
+data 822
+feat(lyrics): 渐变赋色取色浓度放开至 0~100 并默认落回中轴 50%
+
+- minGradientFillRatio 从 0.5 放开到 0.0，maxGradientFillRatio 保持 1.0，setter 越界钳制范围随之改为 [0, 1]
+- defaultGradientFillRatio 从 0.75 改为 0.5（范围正中），reset 后回到默认 0.5 且持久化 key 被移除
+- 明确 0% 档语义：不取色，过曝光斑呈纯白光核；ratio=0 时 mixWithWhiteForTest 恒返回 255
+- 设置页滑块副标题补充 0% = 不取色说明，重置动画参数处的注释同步为默认 50%
+- 更新 docs/lyric-animation-params.md：参数表默认值与范围改为 0.50（50%）、0.00~1.00，并记录同日五次定稿过程
+- 测试同步：默认值断言改为 0.5，越界用例覆盖负数钳到 0 与 0.2 不再被钳制，新增 0%=纯白的渲染侧用例
+from :3039
+commit refs/heads/rust-local-force
+mark :3041
 author vcexml <3356141621@qq.com> 1795163213 +0800
 committer vcexml <3356141621@qq.com> 1795163213 +0800
 data 1365
@@ -31841,9 +31982,9 @@ refactor(launchpad): 重写长按启用交互——去遮罩、改为环形进�
 - _ArcPainter(CustomPainter) 在图标底盘外画背景完整圆环 + 前景进度弧
 - 删除全部 AnimatedOpacity / scrim / power_settings_new /「继续长按」文字
 - _enableDuration 从 2000-500=1500 直接对应 AnimationController duration
-from :3029
+from :3035
 commit refs/heads/rust-local-force
-mark :3031
+mark :3042
 author vcexml <3356141621@qq.com> 1795163978 +0800
 committer vcexml <3356141621@qq.com> 1795163978 +0800
 data 301
@@ -31852,9 +31993,9 @@ style(launchpad): 去掉进度弧底层圆环，图标放大到 52
 - _ArcPainter 不再画背景完整圆环（那个圆环压在图标底盘上，看起来像一层遮罩）
 - 图标 size 26 → 52，填满整个底盘，视觉重量翻倍
 - _ArcPainter.background 字段与构造参数一并移除
-from :3030
+from :3041
 commit refs/heads/rust-local-force
-mark :3032
+mark :3043
 author vcexml <3356141621@qq.com> 1795164781 +0800
 committer vcexml <3356141621@qq.com> 1795164781 +0800
 data 582
@@ -31869,9 +32010,9 @@ style(launchpad): 去掉卡片底色矩形框，只留图标底盘
 
 测试同步：launchpad_background_test 的断言从「普通=实色 / 壁纸=40%透明」
 改为「两种背景模式下 Material 一律透明」。
-from :3031
+from :3042
 commit refs/heads/rust-local-force
-mark :3033
+mark :3044
 author vcexml <3356141621@qq.com> 1795165721 +0800
 committer vcexml <3356141621@qq.com> 1795165721 +0800
 data 1155
@@ -31889,9 +32030,9 @@ feat(launchpad): 重写长按交互——无遮罩进度环+胶囊文案，已�
 - 动作文案随 hidden 状态区分：「继续长按启用「xxx」」vs「继续长按取消固定「xxx」」。
 
 analyze: launchpad No issues found；测试 2/2 通过。
-from :3032
+from :3043
 commit refs/heads/rust-local-force
-mark :3034
+mark :3045
 author vcexml <3356141621@qq.com> 1795165853 +0800
 committer vcexml <3356141621@qq.com> 1795165853 +0800
 data 464
@@ -31904,9 +32045,9 @@ _pressCtrl.addListener 从未调 setState，导致：
 
 修复：initState 里 addListener(() { if (mounted) setState((){}); })。
 现在每帧 setState → Stack 重建 → 进度环从 0→1 正常填满。
-from :3033
+from :3044
 commit refs/heads/rust-local-force
-mark :3035
+mark :3046
 author vcexml <3356141621@qq.com> 1795166543 +0800
 committer vcexml <3356141621@qq.com> 1795166543 +0800
 data 715
@@ -31923,9 +32064,9 @@ fix(launchpad): 移除卡片内层 InkWell，修复长按不触发与特效不�
    addListener(setState)，帧推进不重建 Widget，特效看不到。
 
 分析通过（No issues found），Debug 已启动运行（pid 9528）。
-from :3034
+from :3045
 commit refs/heads/rust-local-force
-mark :3036
+mark :3047
 author vcexml <3356141621@qq.com> 1795168114 +0800
 committer vcexml <3356141621@qq.com> 1795168114 +0800
 data 752
@@ -31942,9 +32083,9 @@ fix(launchpad): 脉冲反馈替代 DistortionWave，修复点击无响应和卡�
 - 按压时长缩短到 1500ms，GestureDetector 独占手势竞技场
 
 analyze: No issues found；测试 2/2 通过。
-from :3035
+from :3046
 commit refs/heads/rust-local-force
-mark :3037
+mark :3048
 author vcexml <3356141621@qq.com> 1795168594 +0800
 committer vcexml <3356141621@qq.com> 1795168594 +0800
 data 742
@@ -31960,9 +32101,9 @@ feat(launchpad): 长按播放扭曲波特效（同封面流），content/reveale
 - precache() 在页面 initState 预加载着色器，确保第一道波不是降级版
 - _LaunchPadCard 独立成文件，避免单文件过长
 - analyze: No issues found
-from :3036
+from :3047
 commit refs/heads/rust-local-force
-mark :3038
+mark :3049
 author vcexml <3356141621@qq.com> 1795169044 +0800
 committer vcexml <3356141621@qq.com> 1795169044 +0800
 data 936
@@ -31983,9 +32124,9 @@ fix(launchpad): 纯 Canvas 扭曲波替代 DistortionWave，修复卡死无响�
 onTabEnabled / onTabUnpinned，之前的 void 空函数没有触发实际逻辑。
 
 analyze: No issues found；便携版已更新。
-from :3037
+from :3048
 commit refs/heads/rust-local-force
-mark :3039
+mark :3050
 author vcexml <3356141621@qq.com> 1795169162 +0800
 committer vcexml <3356141621@qq.com> 1795169162 +0800
 data 387
@@ -31997,182 +32138,167 @@ painter 每帧的 alpha 全被 0 覆盖，paint() 从未被调用。
 
 去掉 Opacity，painter 内部直接用 .withValues(alpha:) 控制透明度，
 CustomPaint 每帧都被绘制。
-from :3038
-commit refs/heads/rust-local-force
-mark :3040
-author github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1795175255 +0000
-committer github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1795175255 +0000
-data 32
-chore: update GitHub star trend
-from :3039
-commit refs/heads/rust-local-force
-mark :3041
-author Little-White3110 <Little-White3110@users.noreply.github.com> 1795100269 +0800
-committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795100269 +0800
-data 732
-fix(car-power): 修复车机下电暂停被状态闸门误判丢弃的问题
-
-- 移除 handleCarPowerSignal 中基于 isNowPlaying 的派发闸门，下电信号一律派发 pause，避免通知链停摆时状态冻结导致功能失效
-- 新增 isNowPlayingUpdatedAt 记录状态写入时间，将 isNowPlaying 降级为日志字段，不再参与决策
-- 更新下电派发日志格式为 power-down -> dispatch pause (action=…, playing=…, since=Ns)，便于诊断状态新鲜度
-- 将 audio_service_io.dart 中焦点处理日志从 print 改为 debugPrint，并补充暂停原因留痕，确保进入诊断包
-- 新增诊断文档记录 15 次下电信号全部被误判的实证，并更新既有分析文档与排查指南
-from :3011
-commit refs/heads/rust-local-force
-mark :3042
-author Little-White3110 <Little-White3110@users.noreply.github.com> 1795142674 +0800
-committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795142674 +0800
-data 604
-fix(player): 间奏点禁用条件移除本地歌曲限制
-
-- 将 _isLocalLrcLyricWithoutWordTiming 方法重构为 _isLineLevelLrcLyric getter，移除对 currentSong 是否为本地歌曲的判断
-- 现在只要歌词为 LRC 行级格式（无字级时间戳）即禁用 AppleLyricsView 的间奏点动画，在线歌曲同样生效
-- 三处调用点改为直接使用该 getter，不再传入 currentSong 参数
-- 更新注释说明 KRC / TTML / 静态歌词不受影响，字级 LRC 仍保留间奏点对齐
-- apple_lyrics_view.dart 中 enableInterludeDots 文档注释同步移除本地歌曲限定
-from :3041
-commit refs/heads/rust-local-force
-mark :3043
-author Little-White3110 <Little-White3110@users.noreply.github.com> 1795150604 +0800
-committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795150604 +0800
-data 1632
-feat(lyrics): 新增歌词动态赋色方式（整行赋色/渐变赋色）
-
-- 新增 LyricFillStyle 枚举：lineUniform 为默认（历史行为，整行统一混色），wordGradient 为字内渐变直接用未经混色的封面取色过渡到纯白（过曝光学感）；持久化 key lyric_fill_style 仅存 name，null 或未知串一律回落 lineUniform
-- 设置页仅在「歌词动态颜色」开启且 AM 播放器时展示「动态赋色方式」二选一下拉，切换即时生效并落盘；同步补充设置搜索索引条目与别名
-- AppleLyricsView 计算渐变专用原始封面色 _gradientAccentValue，仅 AM 深色底 + 动态颜色开启 + wordGradient + 无自定义文字色 + 已提取封面主色时非空，任一条件不满足为 null 由渲染层退回整行赋色历史行为
-- WordRenderer 实现双色端点：已播侧过曝成纯白、未播侧保持封面原色，sweep 扫光、classic 均匀 tint、强调字与辉光精灵各路径统一支持，alpha 曲线完全不变，非渐变模式逐像素退化为原行为
-- 新增 _lastSetTints 与 _lastSetCharTints tint 缓存键并入 set text/layout 判定，避免扫光前沿连续变化时 painter 携带旧 tint 造成颜色滞后
-- 补充像素证据测试（sweep 与 classic 模式已播白/未播封面色、关闭开关无过曝白）及偏好单元测试（默认值、落盘 key、未知串回退、同值早退不通知、reset 移除 key、不进动画预设参数表）
-- 更新 docs/lyric-animation-params.md 参数表说明 lyric_fill_style 行为与生效条件，并在测试命令清单加入 lyric_fill_style_test.dart
-from :3042
-commit refs/heads/rust-local-force
-mark :3044
-author Little-White3110 <Little-White3110@users.noreply.github.com> 1795151601 +0800
-committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795151601 +0800
-data 793
-fix(apple_lyrics): 渐变赋色端点改按行内位置取色，消除已播字封色残留
-
-- 新增 fillPositionTForTest 与 fillExposedColorForTest：位置归一化 t 与 _alphaAtX 同源，按 t 把封面色向白过曝，t=0 为纯白、t=1 保原色
-- 整词路径与 classic 字符路径的渐变端点均改为按字或字符左右边缘的绝对位置取色，不再固定「左白右封」
-- 辉光层与文字层共用同一份 tLc/tRc，保证两层颜色同源
-- 修复已播完字符内残留封色渐变、相邻字边界两侧颜色跳变的问题（用户反馈的 classic 观感）
-- 未开启渐变赋色时端点原样返回封面色，两端同色保持历史行为
-- 补充位置推导、过曝色的单元测试，以及 classic 已播区零封色的像素回归用例
-from :3043
-commit refs/heads/rust-local-force
-mark :3045
-author Little-White3110 <Little-White3110@users.noreply.github.com> 1795159723 +0800
-committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795159723 +0800
-data 999
-fix(layout): 修复 TabBarView 页面纵向滚动无法收起底栏
-
-- 移除 _onScrollNotification 中 depth != 0 的过滤：depth 统计的是冒泡路线经过的 Viewport 个数，TabBarView/PageView 分页器本身是 Viewport，会把页面纵向滚动通知一律抬成 depth=1，导致我的收藏、本地音乐、搜索等以 TabBarView 为主体的主界面永远收不起底栏
-- 分页器自身的翻页通知 metrics.axis 恒为横向，在 axis 判定处已被拦下，卡片内嵌横向轮播同理不受影响，原过滤意图由轴向判定保留
-- 嵌套纵向列表现在同样计入浏览位移，位移方向仍由 _applyScrollDelta 的到顶/clamp 语义兜底，不会反向推动底栏
-- 测试新增 tabbedBody 辅助构造「收藏页」结构（纵向列表装在 TabBarView 内），验证四步上滑共 64dp 得收起进度 1.0，进度到 1 后 NavigationBar 槽位移除
-- 测试新增嵌套横向轮播场景，验证横向轴滚动通知被拦下、底栏不动
-from :3044
-commit refs/heads/rust-local-force
-mark :3046
-author Little-White3110 <Little-White3110@users.noreply.github.com> 1795161304 +0800
-committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795161304 +0800
-data 1148
-fix(apple_lyrics): 渐变赋色未播区保持原有混色
-
-- 「渐变赋色」语义二次定稿：仅扫光带内用未经混色的封面原色向白过曝、已播侧纯白，完全未播区保持当前行原有混色不变，此前未播区会被整体替换成封面原色
-- fillExposedColorForTest 重命名为 fillColorAtForTest 并改为双通道签名：t>=1 原样返回原有混色 base，t<1 把封面原色 raw 向白按已播度插值，未开启时一律返回 base 保证零回归
-- _paintSweepWord 与 _paintEmphasizedWord 新增 accentR/accentG/accentB 参数传入封面提取色，textRGB 恢复为混色结果，废弃原先替换生效颜色的 effR/effG/effB 通道
-- classic 2 停端点色抽取为 classicRampColors 供辉光层与文字层共用，退化均匀 tint 与 sweep ramp 均统一为「扫光带内过曝、未播保原混色」口径
-- 像素证据测试改为白 / 封面原色 / 原有混色三类互斥分类，新增断言钉死未播区保浅青混色、零封面原色且不被提前过曝成白
-- 同步更新设置页下拉说明注释与 lyric-animation-params.md 中 lyric_fill_style 的行为描述
-from :3045
-commit refs/heads/rust-local-force
-mark :3047
-author Little-White3110 <53994162+Little-White3110@users.noreply.github.com> 1795161637 +0800
-committer GitHub <noreply@github.com> 1795161637 +0800
-data 58
-Merge branch 'zzyoxml:rust-local-two' into rust-local-two
-from :3042
-merge :3029
-commit refs/heads/rust-local-force
-mark :3048
-author Little-White3110 <Little-White3110@users.noreply.github.com> 1795161733 +0800
-committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795161733 +0800
-data 73
-Merge remote-tracking branch 'origin/rust-local-two' into rust-local-two
-from :3046
-merge :3047
-commit refs/heads/rust-local-force
-mark :3049
-author Little-White3110 <Little-White3110@users.noreply.github.com> 1795163915 +0800
-committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795163915 +0800
-data 852
-fix(lyrics): 渐变赋色改为过曝曲线跨字连贯流动
-
-- 新增 fillHueBehindForTest / fillHueAheadForTest / fillBloomColorForTest 替换旧的 fillPositionTForTest / fillColorAtForTest，颜色曲线以光前沿为零点：后方白化余韵约 1.6em、前方回落约 1.2em，带宽独立且宽于亮度锐带
-- 光前沿处保持封面原色作为过曝光斑芯，远后方纯白，远前方回原有混色，未播区颜色不变
-- sweep 与 classic 路径的端点色均按各 stop 的行内绝对位置过曝取样，相邻字共享边界同值，跨字连贯流动不再逐词跳变
-- 曲线不可用时（未开启渐变赋色或无光前沿）bloomAt 返回 null，调用方回落原有混色，保持零回归
-- 更新设置页文案与 lyric-animation-params.md 文档说明新颜色口径
-- 补充过曝曲线的单元测试覆盖
-from :3048
-commit refs/heads/rust-local-force
-mark :3050
-author Little-White3110 <Little-White3110@users.noreply.github.com> 1795168492 +0800
-committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795168492 +0800
-data 1249
-feat(apple_lyrics): 新增渐变赋色取色浓度参数，默认压淡至75%
-
-- 新增 lyric_gradient_fill_ratio 参数（范围 0.5~1.0，默认 0.75），控制渐变赋色过曝轨迹里封色的混白浓度：100% = 完全原取色，50% = 取色与白各半；纯取色太鲜艳（用户反馈）故默认压淡一档，未播区不受影响
-- word_renderer 过曝曲线的取色改为经 mixWithWhiteForTest 线性混白后使用，渐变模式关闭时与原值同值，保持零回归
-- lyric_preferences 增加常量、getter 与 setter：越界钳制到 [0.5, 1.0]、同值早退不通知、落盘到 lyric_gradient_fill_ratio，load() 从持久值恢复，reset 后回默认并移除 key
-- 设置页仅在「歌词动态颜色」开启且赋色方式为 wordGradient 时显示滑块，恢复默认值流程同步重置该参数，确认弹窗文案同步更新
-- 该参数不进动画预设参数表，sanitizeAnimationValues 对它返回空，预设契约不变
-- 补充 mixWithWhiteForTest 端点单测，新增 lyric_gradient_fill_ratio_test.dart 覆盖默认值、钳制、持久化与恢复、同值不通知、reset 及预设排除
-- 文档 lyric-animation-params.md 同步新增参数行、更新赋色方式说明与测试清单
 from :3049
 commit refs/heads/rust-local-force
 mark :3051
-author Little-White3110 <Little-White3110@users.noreply.github.com> 1795172876 +0800
-committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795172876 +0800
-data 822
-feat(lyrics): 渐变赋色取色浓度放开至 0~100 并默认落回中轴 50%
-
-- minGradientFillRatio 从 0.5 放开到 0.0，maxGradientFillRatio 保持 1.0，setter 越界钳制范围随之改为 [0, 1]
-- defaultGradientFillRatio 从 0.75 改为 0.5（范围正中），reset 后回到默认 0.5 且持久化 key 被移除
-- 明确 0% 档语义：不取色，过曝光斑呈纯白光核；ratio=0 时 mixWithWhiteForTest 恒返回 255
-- 设置页滑块副标题补充 0% = 不取色说明，重置动画参数处的注释同步为默认 50%
-- 更新 docs/lyric-animation-params.md：参数表默认值与范围改为 0.50（50%）、0.00~1.00，并记录同日五次定稿过程
-- 测试同步：默认值断言改为 0.5，越界用例覆盖负数钳到 0 与 0.2 不再被钳制，新增 0%=纯白的渲染侧用例
-from :3050
-commit refs/heads/rust-local-force
-mark :3052
 author Little-White3110 <53994162+Little-White3110@users.noreply.github.com> 1795173751 +0800
 committer GitHub <noreply@github.com> 1795173751 +0800
 data 58
 Merge branch 'zzyoxml:rust-local-two' into rust-local-two
+from :3040
+merge :3050
+commit refs/heads/rust-local-force
+mark :3052
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795253164 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795253164 +0800
+data 65
+feat(lyrics): 新增歌词选择状态模型 LyricSelectionState
 from :3051
-merge :3039
 commit refs/heads/rust-local-force
 mark :3053
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795253537 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795253537 +0800
+data 88
+feat(lyrics): LyricScrollController 增加选择模式跟随抑制开关 suppressFollow
+from :3052
+commit refs/heads/rust-local-force
+mark :3054
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795254350 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795254350 +0800
+data 92
+feat(lyrics): AM 歌词长按进入选择模式（手势接线/点按切换/切歌退出）
+from :3053
+commit refs/heads/rust-local-force
+mark :3055
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795254949 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795255025 +0800
+data 86
+feat(lyrics): 选择模式行块化渲染与放大镜（复用卡拉OK布局口径）
+from :3054
+commit refs/heads/rust-local-force
+mark :3056
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795255433 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795255433 +0800
+data 81
+feat(lyrics): 选择模式操作栏与复制歌词（剪贴板 + Toast 反馈）
+from :3055
+commit refs/heads/rust-local-force
+mark :3057
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795257894 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795257894 +0800
+data 94
+fix(lyrics): 选择模式验收修复（选中对比/双击跳转下点按/操作栏透底）
+from :3056
+commit refs/heads/rust-local-force
+mark :3058
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795262745 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795262745 +0800
+data 86
+fix(lyrics): 选择模式行块改为行盒内缩，修复紧行距下相邻块交叉
+from :3057
+commit refs/heads/rust-local-force
+mark :3059
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795263079 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795263079 +0800
+data 101
+fix(lyrics): 选择模式行缩放连贯过渡（进入按卡拉OK快照插值/退出弹簧回弹）
+from :3058
+commit refs/heads/rust-local-force
+mark :3060
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795263407 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795263407 +0800
+data 82
+fix(lyrics): 进入选择模式时卡拉OK层含模糊层淡出而非瞬间消失
+from :3059
+commit refs/heads/rust-local-force
+mark :3061
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795264611 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795264611 +0800
+data 115
+fix(lyrics): 选择模式退出三处修复（过渡动画重启闪烁/缩放弹簧唤醒/立即回滚当前行）
+from :3060
+commit refs/heads/rust-local-force
+mark :3062
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795267448 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795267448 +0800
+data 95
+fix(lyrics): 去掉拖动选择的放大镜气泡，行块改以字形视觉中心垂直居中
+from :3061
+commit refs/heads/rust-local-force
+mark :3063
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795269183 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795269183 +0800
+data 114
+fix(lyrics): 行块按字形视觉区间定位（换行行整卡包裹/居中系数修正），翻译并入复制
+from :3062
+commit refs/heads/rust-local-force
+mark :3064
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795270222 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795270222 +0800
+data 96
+fix(lyrics): 复制副行跟随显示模式（翻译/罗马音）并加复制数据诊断日志
+from :3063
+commit refs/heads/rust-local-force
+mark :3065
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795271808 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795271808 +0800
+data 132
+fix(lyrics): 选择模式行块内显示翻译副行并隐藏角标按钮；修复副行缓存签名互清导致的 disposed 崩溃
+from :3064
+commit refs/heads/rust-local-force
+mark :3066
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795272964 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795272964 +0800
+data 112
+test(lyrics): 锁定复制不跟随副行显示范围设置（仅当前行/开关关下仍全量复制翻译）
+from :3065
+commit refs/heads/rust-local-force
+mark :3067
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795274646 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795274646 +0800
+data 124
+feat(lyrics): 副行显示总开关联动选择模式（关闭=不显示不复制翻译），显示范围仍不影响复制
+from :3066
+commit refs/heads/rust-local-force
+mark :3068
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795276249 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795276249 +0800
+data 1329
+docs(lyrics): 新增 AM 歌词长按选择与复制实施计划
+
+- 新增 AM 风格播放器歌词页长按选择与复制功能的完整实施计划，含目标、架构、技术栈与参考视频交互拆解
+- 汇总实现口径：长按进入选择模式并选中该行、点按单行 toggle 加入移出、拖动以锚点为端点连续区间扩展、选中行用封面提取色渐变填充并带 220ms 过渡、复制写入剪贴板加 Toast 后退出
+- 明确设计决策：宿主 full_player_am.dart 零改动、保持暗色歌词面不做整页切浅色、不做系统分享面板、TV 构建不注册长按入口、翻译与罗马音不参与选择与复制
+- 拆分 6 个任务：LyricSelectionState 纯逻辑模型与单测、LyricScrollController.suppressFollow 跟随抑制开关、AppleLyricsView 长按手势接线、选择模式行块化 painter 与放大镜、操作栏与复制动作、回归验证与手动真机验收清单
+- 记录文件结构：新建 selection/lyric_selection_state.dart 与三处测试文件，修改 apple_lyrics_view.dart 与 lyric_scroll_controller.dart，并说明选择逻辑放同文件以避免跨文件公开私有布局字段
+- 附执行期偏离说明与事后复盘表，记录计划代码错误、测试基线数字漂移、注释损坏等 9 项问题的核实与处置结论
+from :3067
+commit refs/heads/rust-local-force
+mark :3069
+author github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1795175255 +0000
+committer github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1795175255 +0000
+data 32
+chore: update GitHub star trend
+from :3050
+commit refs/heads/rust-local-force
+mark :3070
 author github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1795175641 +0000
 committer github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1795175641 +0000
 data 32
 chore: update GitHub star trend
-from :3052
+from :3051
 commit refs/heads/rust-local-force
-mark :3054
+mark :3071
 author Little-White3110 <53994162+Little-White3110@users.noreply.github.com> 1795182429 +0800
 committer GitHub <noreply@github.com> 1795182429 +0800
 data 125
 Merge pull request #195 from Little-White3110/rust-local-two
 
 Fix car power signal handling and enhance lyric color features
-from :3040
-merge :3053
+from :3069
+merge :3070
 commit refs/heads/rust-local-force
-mark :3055
+mark :3072
 author vcexml <3356141621@qq.com> 1795222801 +0800
 committer vcexml <3356141621@qq.com> 1795222801 +0800
 data 884
@@ -32187,9 +32313,9 @@ feat(launchpad): 长按扭曲波按下即起演，重写为封面流感
   图标收拢段压扁、扩散段鼓胀浮起（squash/swell，同波系统口径）
 - 新增时序回归测试：按下 75ms 即出波且只在一格、提前松手回缩不触发、
   长按约 2s 走完全程并触发动作（小步长泵规避活跃手势下假时钟陷阱）
-from :3054
+from :3071
 commit refs/heads/rust-local-force
-mark :3056
+mark :3073
 author vcexml <3356141621@qq.com> 1795223752 +0800
 committer vcexml <3356141621@qq.com> 1795223752 +0800
 data 422
@@ -32199,9 +32325,9 @@ refactor(user): 「我的」主页移除设备管理/黑名单/听歌偏好重�
 主页这组无平台门控、Android/Windows/TV 均显示。现只保留账号
 管理面板内的一份（点用户卡片其余区域打开），删掉主页调用与
 专用的 _buildMoreGroup 方法，三个 entry builder 原样复用不删。
-from :3055
+from :3072
 commit refs/heads/rust-local-force
-mark :3057
+mark :3074
 author vcexml <3356141621@qq.com> 1795232935 +0800
 committer vcexml <3356141621@qq.com> 1795232935 +0800
 data 448
@@ -32214,9 +32340,9 @@ Android/TV APK 不包含此字体（C++ 经 CMakeLists 独立安装到 data/font
 - CMakeLists 安装名单 + windows.ps1 暂存保留名单
 - WindowsDefaultFont family 名 WindowsFangZhengHeiTi + 加载路径
 - 两个字体测试的源文件引用
-from :3056
+from :3073
 commit refs/heads/rust-local-force
-mark :3058
+mark :3075
 author vcexml <3356141621@qq.com> 1795241172 +0800
 committer vcexml <3356141621@qq.com> 1795241172 +0800
 data 527
@@ -32229,9 +32355,9 @@ feat(launchpad): 卡片尺寸自适应缩放 + 壁纸模式移除底盘框
   移除每张卡下面的实心底色框；关闭壁纸时保持原样
 
 analyze: No issues found。
-from :3057
+from :3074
 commit refs/heads/rust-local-force
-mark :3059
+mark :3076
 author vcexml <3356141621@qq.com> 1795241559 +0800
 committer vcexml <3356141621@qq.com> 1795241559 +0800
 data 148
@@ -32239,9 +32365,9 @@ feat(launchpad): 行/列间距再缩小 50%
 
 列 19.2→9.6（md×1.6→md×0.8）、行 13.2→6.6（md×1.1→md×0.55），
 格高 170 不变。
-from :3058
+from :3075
 commit refs/heads/rust-local-force
-mark :3060
+mark :3077
 author vcexml <3356141621@qq.com> 1795244057 +0800
 committer vcexml <3356141621@qq.com> 1795244057 +0800
 data 1056
@@ -32263,25 +32389,530 @@ fix(launchpad): 长按扭曲波移到全屏 Overlay，修复居中/裁剪/层级
 - 测试改为「全局 CustomPaint 计数 +1 / -1」+「卡片子树内无波」断言
 
 flutter test test/modules/launchpad: 4/4 通过（并行假阳性清缓存后复跑）。
-from :3059
+from :3076
 commit refs/heads/rust-local-force
-mark :3061
+mark :3078
+author github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1795260205 +0000
+committer github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1795260205 +0000
+data 32
+chore: update GitHub star trend
+from :3077
+commit refs/heads/rust-local-force
+mark :3079
 author vcexml <3356141621@qq.com> 1795251068 +0800
 committer vcexml <3356141621@qq.com> 1795251068 +0800
 data 69
 feat(launchpad): 关壁纸回退大色块样式，格子改正方形
-from :3060
+from :3077
 commit refs/heads/rust-local-force
-mark :3062
+mark :3080
 author vcexml <3356141621@qq.com> 1795251143 +0800
 committer vcexml <3356141621@qq.com> 1795251143 +0800
 data 65
 fix(launchpad): 图标归中整格中心，长按波随之居中
-from :3061
+from :3079
 commit refs/heads/rust-local-force
-mark :3063
+mark :3081
 author vcexml <3356141621@qq.com> 1795252183 +0800
 committer vcexml <3356141621@qq.com> 1795252183 +0800
 data 75
 fix(scripts): 恢复 windows.ps1 UTF-8 BOM，修复 PS 5.1 下解析报错
-from :3062
+from :3080
+commit refs/heads/rust-local-force
+mark :3082
+author github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1795259602 +0000
+committer github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1795259602 +0000
+data 32
+chore: update GitHub star trend
+from :3081
+commit refs/heads/rust-local-force
+mark :3083
+author Little-White3110 <53994162+Little-White3110@users.noreply.github.com> 1795273746 +0800
+committer GitHub <noreply@github.com> 1795273746 +0800
+data 58
+Merge branch 'zzyoxml:rust-local-two' into rust-local-two
+from :3078
+merge :3082
+commit refs/heads/rust-local-force
+mark :3084
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795276324 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795276324 +0800
+data 73
+Merge remote-tracking branch 'origin/rust-local-two' into rust-local-two
+from :3068
+merge :3083
+commit refs/heads/rust-local-force
+mark :3085
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795277510 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795277510 +0800
+data 123
+feat(lyrics): 选择模式副行展开强制所有行（布局拉开不挤压），复制按钮上移顶栏并移除底栏
+from :3084
+commit refs/heads/rust-local-force
+mark :3086
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795277828 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795277828 +0800
+data 833
+docs(lyrics): 补充验收修复12记录至歌词选择复制方案文档
+
+- 新增「验收修复 12」段落，记录 commit a487eae3 的真机反馈 2 项及对应修复
+- 记录「仅当前行/已播行除外」设置下行块过紧的根因：卡拉OK布局中非当前行无副行空间，选择模式全量画副行导致块超出行盒被 clamp 挤压；修复为选择模式激活期间副行展开目标强制 allLines，退出后签名变化自动收回原范围
+- 记录复制按钮上移顶栏、完全移除底栏的 UI 调整：顶栏 Row 变为「X + 标题列 + 复制歌词(compact FilledButton，未选中禁用) + 全选/清除」，退出走左上角 X
+- 记录测试变更：「完成按钮退出」用例改为「顶栏关闭按钮退出」，新增「顶栏复制按钮」用例，组合跑 1466/-7 零回归
+from :3085
+commit refs/heads/rust-local-force
+mark :3087
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795333854 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795333854 +0800
+data 1439
+fix(lyrics): 首句翻译副行定位与瞬移缺陷修复链 + DIA 度量保活模块
+
+【确定性缺陷修复】（多轮真机排查实证，全部有单测锁定）：
+1. Object.hash(-1,x)==hash(0,x) 哈希碰撞：头部间奏→首行开唱的焦点
+   翻转不被识别，首句副行目标永不重算 → 原始值相等比较 + 行切换帧
+   无条件重算；
+2. 行表替换帧焦点/当前行同时为 −1：resolveAuxTarget 恒返回 0 造成
+   0→1 目标翻转 → 保留现有目标不重算；
+3. 行数变化进度吸附瞬移：_resetAuxProgressBuffers 重置全零再吸附 →
+   保留现有进度，过渡动画平滑追赶；
+4. 翻译晚到目标不更新：签名不含副行文本变化 → 行内容变化后置零
+   _auxTargetsSignature 强制重算；
+5. AM/MD3 双页副行预留下方 0.3em 呼吸余量（原代数恒重合）+ max(系数,
+   实测) 行高兜底（真机字体自然行距不吃换行压缩，折行实测 +26px）。
+
+【DIA 度量保活模块】：整晚 ~15 种小改动变体（浮点占位/死代码/最小print/
+一次性预热/节流派/350ms 延迟等）100% 发作，仅本形态用户复验通过；且剥离
+实验证明 print 的 logcat I/O 时序也是必要成分。模块 = 真实歌词文本持续
+layout + 周期性诊断日志共同维持时序微稳态，注释写明来龙去脉与移除前置。
+完整证据：tmp/lyrics_firstline_teleport_investigation.md
+from :3086
+commit refs/heads/rust-local-force
+mark :3088
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795333855 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795333855 +0800
+data 356
+test(lyrics): 副行定位与瞬移确定性回归套件
+
+- intro 首行副行展开回归（焦点翻转签名碰撞护栏）
+- seek_async 几何不变量（早首行+异步翻译+连续 seek+allLines 压力，
+  400+ 收敛帧逐帧断言差值恒 ≈ −余量）
+- 折行首行几何不变量 / auxSubHeight 公式钉值 / MD3 行高同源三组更新
+from :3087
+commit refs/heads/rust-local-force
+mark :3089
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795335933 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795335933 +0800
+data 2015
+feat(apple_lyrics): 新增背景增透赋色模式，实拍背景低频取样上色
+
+- 新增 LyricFillStyle.backgroundBloom（背景增透）：动态赋色方式由二选一扩为三选一，条带取色源改为当前行背后实拍背景，提亮加饱和后供同一条过曝曲线，观感为背景色过曝偏向白色；默认仍为 lineUniform，未知持久化串回落默认
+- 新增 utils/lyric_bg_bloom.dart 纯函数：processBgBloomColor 在 HSL 空间提亮（L+0.16、明度上限 0.94）并加饱和（S+0.18，近灰 S<0.10 不加饱和避免假色相）；averageRgbaRegion 对 RGBA 位图做矩形区域均值，越界钳位裁剪、空区域或短缓冲返回 null
+- AppleLyricsView 新增 backgroundSamplerKey 低频取样：Timer.periodic 500ms 从宿主背景层 RepaintBoundary 抓取当前行背后条带（位图宽 ≤120px），仅播放中执行、暂停时背景静止跳过；连续 5 次失败停表，等偏好变化 / 播放恢复沿 / App 回前台再重武装；位图用完必须 dispose；取样值只改写 painter 字段加 fireRepaint，禁止 setState
+- 取样未就绪或未注入采样 key 时回落封面提取色（同口径处理），仍不满足则退回整行赋色历史行为；TV 构建不启用取样路径
+- full_player_am 将模糊封面 / 流光 / 蒙版 / 写真 / 频谱背景收进单个 RepaintBoundary（_bgLayerKey）兼作采样源，并注入三处 AppleLyricsView
+- word_renderer 让渐变赋色与背景增透共用条带取色的字内渐变通道，注入值变化即失效 tint 缓存重建（_lastGradientAccentValue 判据），同值不重复失效；设置页下拉说明、搜索别名与取色浓度滑块展示条件同步
+- 测试与文档：新增 lyric_bg_bloom_test.dart 锁定颜色处理与区域均值口径，扩展 lyric_fill_style_test.dart 与 word_renderer_test.dart（过曝曲线像素证据、tint 失效机制）；rendering-performance.md §10.4 增补第 17 条开销口径，lyric-animation-params.md 同步参数表
+from :3088
+commit refs/heads/rust-local-force
+mark :3090
+author Little-White3110 <53994162+Little-White3110@users.noreply.github.com> 1795278384 +0800
+committer GitHub <noreply@github.com> 1795278384 +0800
+data 127
+Merge pull request #197 from Little-White3110/rust-local-two
+
+Implement lyric selection mode with copy functionality and fixes
+from :3082
+merge :3086
+commit refs/heads/rust-local-force
+mark :3091
+author vcexml <3356141621@qq.com> 1795312497 +0800
+committer vcexml <3356141621@qq.com> 1795312497 +0800
+data 81
+fix(launchpad): 大色块模式图标+文字视作整体居中，矮格防溢出
+from :3090
+commit refs/heads/rust-local-force
+mark :3092
+author vcexml <3356141621@qq.com> 1795314435 +0800
+committer vcexml <3356141621@qq.com> 1795314435 +0800
+data 90
+fix(notification): 统一占位通知渠道，消除残留的准备播放通知（#245）
+from :3091
+commit refs/heads/rust-local-force
+mark :3093
+author vcexml <3356141621@qq.com> 1795318020 +0800
+committer vcexml <3356141621@qq.com> 1795318037 +0800
+data 87
+feat(theme): 无封面占位色跟随莫奈/封面取色（列表与播放器统一）
+from :3092
+commit refs/heads/rust-local-force
+mark :3094
+author vcexml <3356141621@qq.com> 1795318051 +0800
+committer vcexml <3356141621@qq.com> 1795318051 +0800
+data 77
+feat(settings): 系统主题色与封面动态取色互斥，附回归测试
+from :3093
+commit refs/heads/rust-local-force
+mark :3095
+author vcexml <3356141621@qq.com> 1795319040 +0800
+committer vcexml <3356141621@qq.com> 1795319040 +0800
+data 65
+fix(launchpad): 长按波锚定整卡中心并放大 Windows 波
+from :3094
+commit refs/heads/rust-local-force
+mark :3096
+author vcexml <3356141621@qq.com> 1795324496 +0800
+committer vcexml <3356141621@qq.com> 1795324496 +0800
+data 94
+feat(player): 网络类播放失败自愈——自动重试，预算耗尽只 Toast 不弹窗
+from :3095
+commit refs/heads/rust-local-force
+mark :3097
+author vcexml <3356141621@qq.com> 1795324496 +0800
+committer vcexml <3356141621@qq.com> 1795324496 +0800
+data 87
+test(player): 补充网络自愈会话与双档退避回归，更新暂停抑制断言
+from :3096
+commit refs/heads/rust-local-force
+mark :3098
+author vcexml <3356141621@qq.com> 1795324497 +0800
+committer vcexml <3356141621@qq.com> 1795324497 +0800
+data 72
+docs(agents): 排障文档补记网络类失败处置口径（§4.20）
+from :3097
+commit refs/heads/rust-local-force
+mark :3099
+author vcexml <3356141621@qq.com> 1795329484 +0800
+committer vcexml <3356141621@qq.com> 1795329484 +0800
+data 92
+fix(render): 渲染引擎显示改读构建期 define，修复 Windows 便携版误报 Skia
+from :3098
+commit refs/heads/rust-local-force
+mark :3100
+author vcexml <3356141621@qq.com> 1795329485 +0800
+committer vcexml <3356141621@qq.com> 1795329485 +0800
+data 77
+build(windows): 所有 Windows 构建命令注入 MD3_RENDER_ENGINE=impeller
+from :3099
+commit refs/heads/rust-local-force
+mark :3101
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795336242 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795336242 +0800
+data 73
+Merge remote-tracking branch 'origin/rust-local-two' into rust-local-two
+from :3089
+merge :3100
+commit refs/heads/rust-local-force
+mark :3102
+author Little-White3110 <53994162+Little-White3110@users.noreply.github.com> 1795336361 +0800
+committer GitHub <noreply@github.com> 1795336361 +0800
+data 133
+Merge pull request #198 from Little-White3110/rust-local-two
+
+Fix lyric line positioning and teleportation defects with enhancements
+from :3100
+merge :3101
+commit refs/heads/rust-local-force
+mark :3103
+author vcexml <3356141621@qq.com> 1795331287 +0800
+committer vcexml <3356141621@qq.com> 1795342230 +0800
+data 82
+fix(diag): Windows 便携版导出日志改存下载目录，Android 保持分享
+from :3102
+commit refs/heads/rust-local-force
+mark :3104
+author vcexml <3356141621@qq.com> 1795342173 +0800
+committer vcexml <3356141621@qq.com> 1795342230 +0800
+data 867
+feat(font): 便携版内嵌字体统一为思源黑体子集 MD3MusicSans（Medium 500，OFL 可商用）
+
+- 替换方正黑体简体.TTF（商业授权风险、小字号发虚）为 Noto Sans SC 子集
+  （GB2312+日文假名+韩文 Hangul，2.39MB<3MB，SIL OFL 1.1；按 OFL 条件 3 改名，
+  不使用保留字体名 Source），随包分发 OFL.txt 授权文本
+- WindowsDefaultFont 提供 family/fileName/bundledFontPath 单一真相源 +
+  bundledAwareFontWeight 字重钳制（内置单档 Medium 500，请求 >500 一律回落，
+  杜绝 Skia/GDI 假粗体合成导致的笔画发糊）
+- 四消费方统一：全局 UI ThemeData、AM/MD3 歌词 TextPainter、C++ 悬浮窗与
+  系统通知（新增 windows/runner/bundled_font.h，C++ 侧 FW_MEDIUM 与字重匹配）
+- 设置页/歌词面板 22 处「思源黑体」文案统一为「MD3MusicSans」
+from :3103
+commit refs/heads/rust-local-force
+mark :3105
+author vcexml <3356141621@qq.com> 1795342180 +0800
+committer vcexml <3356141621@qq.com> 1795342230 +0800
+data 397
+fix(windows): 标题栏三键图标按物理像素对齐，修复高 DPI 下发虚
+
+图标 CustomPainter 的 1dp 描边以整数逻辑坐标为中心，高 DPI（125%/150%）
+下横跨两个物理像素行被抗锯齿摊薄而发虚。改为按设备像素比 snap 到
+物理像素中心（(x*dpr).round()/dpr + 0.5/dpr），描边正好盖住一个物理
+像素列；dpr 变化时正确重绘。
+from :3104
+commit refs/heads/rust-local-force
+mark :3106
+author github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1795347155 +0000
+committer github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1795347155 +0000
+data 32
+chore: update GitHub star trend
+from :3105
+commit refs/heads/rust-local-force
+mark :3107
+author vcexml <3356141621@qq.com> 1795411307 +0800
+committer vcexml <3356141621@qq.com> 1795411307 +0800
+data 660
+feat(account): 后台每10分钟检查当前账号登录态，过期复用原弹窗
+
+- 新增 LoginExpiryMonitor 单例（首帧后挂 10 分钟 Timer.periodic 常驻，前台即时/后台记账回前台补弹）
+- 三态判定 checkTokenExpired：明确过期码 20017/20018/status=2 才为 true，无网络/未知为 null 不误弹，只弹一次
+- 抽出 showExpiredAccountDialog 共享弹窗，切换账号与后台检查共用同一 UI
+- 当天登录过的账号全天跳过检查与弹窗（自然日判断）
+- KugouProvider 新增 currentAccount / checkCurrentTokenExpired，过期才标记并通知
+- 补分类纯函数单测与 monitor widget 测试
+from :3106
+commit refs/heads/rust-local-force
+mark :3108
+author github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1795438619 +0000
+committer github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1795438619 +0000
+data 32
+chore: update GitHub star trend
+from :3107
+commit refs/heads/rust-local-force
+mark :3109
+author vcexml <3356141621@qq.com> 1795485915 +0800
+committer vcexml <3356141621@qq.com> 1795485915 +0800
+data 14
+完善 README
+from :3108
+commit refs/heads/rust-local-force
+mark :3110
+author vcexml <3356141621@qq.com> 1795487167 +0800
+committer vcexml <3356141621@qq.com> 1795487167 +0800
+data 39
+docs: 更新应用图标格式为 webp
+from :3109
+commit refs/heads/rust-local-force
+mark :3111
+author vcexml <3356141621@qq.com> 1795500010 +0800
+committer vcexml <3356141621@qq.com> 1795500010 +0800
+data 119
+docs: 更新 README 中的截图顺序和内容
+
+替换了更多界面的截图顺序，并添加了一张新的截图
+from :3110
+commit refs/heads/rust-local-force
+mark :3112
+author vcexml <3356141621@qq.com> 1795500476 +0800
+committer vcexml <3356141621@qq.com> 1795500476 +0800
+data 345
+docs(website): README 顶部导航与设置页添加官网入口
+
+- README 顶部链接行新增官网 https://musicplayer.ccwu.cc/
+- 设置页「关于」分组新增「官网」ListTile（全平台可见，打开系统浏览器）
+- 新增常量 updateOfficialWebsiteUrl
+- 重新生成设置搜索索引（官网/官方网站/主页/网站）
+from :3111
+commit refs/heads/rust-local-force
+mark :3113
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795340345 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795340345 +0800
+data 201
+fix(windows): 为 windows.ps1 补充 UTF-8 BOM 头
+
+- 在文件首行 #Requires 前加入 UTF-8 BOM，确保 PowerShell 5.1 按 UTF-8 正确解析脚本，避免中文注释被按系统代码页误读
+from :3101
+commit refs/heads/rust-local-force
+mark :3114
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795362452 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795362452 +0800
+data 813
+feat(playlist): 新增歌单详情页 A-Z 字母索引条
+
+- 新增 AlphabetIndexBar 组件：手指在右侧拖动按 Y 占总高比例实时 jumpTo 列表，同时显示跟随手指的圆形字母放大镜气泡，抬手后停止并隐藏
+- 索引条仅在标题排序、开关开启且非搜索、非多选、非拖拽排序、非 TV 构建时显示，以 Positioned 叠加在 CustomScrollView 右侧
+- 按 pinyinSortKey 计算当前列表实际出现的首字母集合，非字母字符归入 #，并跟随升降序方向排列
+- SettingsRepository 新增 playlistAlphabetIndexBarEnabled 偏好键及读写方法，默认关闭
+- 设置页新增"字母索引条"开关项，标题排序时显示右侧拖动条、实时跟手滚动
+- 歌单页 initState 中异步加载该偏好并在 mounted 后回写状态
+from :3113
+commit refs/heads/rust-local-force
+mark :3115
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795445271 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795445271 +0800
+data 1279
+fix(player): 按平台分流 completed 误报防护窗避免播完不续播
+
+- Windows 的 completed 事件路径保留 3s 长窗（_urlLoadGuardWindow），Android 事件路径取消时间窗拦截，改由 request 代次与 completionReady 闸门精确拒收过期事件
+- 位置兜底路径按平台取窗：Windows 维持 3s，Android 用新增的 _androidCompletedGuardWindow 1s 短窗，两路不再共用同一时间戳同时失效
+- 抽出 _inSpuriousCompletedGuardForEvent 与 _positionFallbackLoadGuardActive 两个判定方法，替换原先对 _lastUrlLoadStarted 的裸时间比较
+- 构造函数新增 @visibleForTesting 参数 isWindowsForTest，新增 _isWindowsPlatform 字段，与既有 isAndroidForTest 口径一致
+- 测试替身 ControlledAudioService 的 durationStream 由空流改为真实 StreamController，并新增 emitDuration 供位置兜底判定使用
+- 新增 player_provider_spurious_completion_guard_test.dart 三例：Android 曲尾重载后 3s 内真实播完必须切歌、Android 短窗外兜底仍可切歌、Windows 3s 内 spurious completed 仍被忽略
+- docs/agents/troubleshooting.md 新增 4.21 节，记录根因、日志排查签名（ignored within / not_completion_ready / resolve.end failed）与 R2、R3 未做的遗留风险
+from :3114
+commit refs/heads/rust-local-force
+mark :3116
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795449727 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795449727 +0800
+data 1229
+fix(lockscreen): 修复解锁后系统清理 hidden 任务被误判为划掉后台导致闪退
+
+- shouldSwipeExit 新增 systemTaskRemovalFromLockLayer 判定：锁屏歌词层 onStop 后 1000ms 窗口内的任务移除一律视为系统 remove-hidden-task 清理，不再执行停播加退进程，修复指纹解锁后 App 闪退
+- 窗口内不做命中即清：解锁会连续触发 TaskRemovalService 销毁与 AudioPlaybackService.onTaskRemoved 两条入口，任一条漏网都会退出进程，故整段拦截
+- LockScreenLyricActivity.onStop 调用 markLockLayerEnded 登记窗口起点，多次 onStop 每次刷新窗口
+- start() 单飞闸门改为用 isFinishing 排除销毁流程中的旧实例，杜绝叠建，广播与 UI 多线程请求以该判据为唯一依据
+- LockScreenLyricReceiver.onReceive 增加 try-catch 兜底：系统受保护广播分发入口未捕获异常会打死整个进程，崩溃日志记录 action、isNowPlaying 与 keyguard 状态
+- 新增 isKeyguardLockedPublic 对外口径供兜底日志记录 keyguard 状态
+- 新增 SwipeExitPolicyLockGuardTest 覆盖未登记不命中、窗口内多条入口全部命中且不互相消费、超过窗口不命中、重新登记可再次生效
+from :3115
+commit refs/heads/rust-local-force
+mark :3117
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795455447 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795455447 +0800
+data 1591
+feat(playback): 新增切歌卡顿取证探针并埋点起播分段
+
+- 新增 PlaybackJankProbe 单例：tick 尺用 16ms Timer 实际投递间隔捕捉事件循环被同步段占住的突发，帧尺经 SchedulerBinding.addTimingsCallback 聚合 build/raster/span 最差值与 slow 计数（整帧超 20μs×10000 即 20ms 判 slow）；仅 debug/profile 生效，release 下 enabled 为编译期 false 全入口短路
+- PlayerProvider 在 _setUrlAndPlay 新源装载边界 openWindow(reason: 'load')，覆盖下一首/上一首/点歌/自动续播/交叉淡化/CDN 续播/冷启动恢复全部入口；dispose 时 closeWindow 取消探针 Timer；连续快速切歌时新窗静默顶掉旧窗，各段独立出数
+- playingStream 翻 true 时对 wakelock+上报 tracker、全量通知/小组件下发、notifyListeners、Lyricon 状态推送四组同步段分别计秒，连同 loadMs（装载到平台报真的在播的墙钟差）打一行 [JankProbe] 日志
+- app.dart 封面取色仅在 ThemeProvider.useCoverSeedColor 开启时才执行（关闭时 palette 量化白跑在主 isolate 上），并用 Stopwatch 全程计时后 noteMarkMs('colorExtract') 入账
+- full_player_am.dart 歌词解析+过滤+歌词树重建包进 measureMark('lyricParse')；low_res_blur.dart 两次 toImageSync 与双线性缩放包进 measureReturn('blurProxy')，release 或窗口关时直接透传
+- 补充 playback_jank_probe_test.dart：单例门控、tick max 聚合（非正值与 NaN 不入账）、帧尺 worst/slow 聚合、mark 计秒与关窗后不记、开窗收窗生命周期共六项钉测
+from :3116
+commit refs/heads/rust-local-force
+mark :3118
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795457799 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795457799 +0800
+data 566
+fix(player): 封面翻转链式续翻+兜底封面去除交叉淡出
+
+- 翻转途中再切歌：不重置回正面，加速收敛当前段后向最新目标完整续翻
+- 单段时长随连切深度压缩（下限90ms），就绪预算同步砍半，静默窗后复位
+- 探测失败/超时不再走交叉淡出，直接启动标准翻转（旧层模糊+翻倒，新层即刻翻入）
+- 删除 kCoverFlipFallbackGrace/kCoverFlipFallbackFade 及全部兜底淡出基础设施
+- 测试同步更新：23例全绿，含不重置回归用例与ready=false仍翻转用例
+from :3117
+commit refs/heads/rust-local-force
+mark :3119
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795458352 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795458352 +0800
+data 553
+chore(player): 取证完成后移除切歌卡顿探针与全部埋点
+
+- 删除 PlaybackJankProbe 单例及其单测；player_provider 开窗/分段计时、
+  full_player_am lyricParse、low_res_blur blurProxy、app.dart colorExtract
+  计时全部回退
+- 保留 app.dart 取色门控修复：useCoverSeedColor 关闭时不再白跑主 isolate 上的
+  palette 量化（原修仍在，这是卡顿根因结论的一部分）
+- 取证结论（profile 实测）：起播四段同步链全为 0ms，突发在异步任务侧，
+  已由取色门控收敛
+from :3118
+commit refs/heads/rust-local-force
+mark :3120
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795494924 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795494924 +0800
+data 1115
+refactor(spectrum): 将频谱 FFT 分析从 Kotlin 迁移至 Rust FFI
+
+- 删除 Kotlin 侧 spectrum 包（FftPump、SpectrumAnalyzer、SpectrumFeatures、SpectrumFft）及对应 JVM 单测，FFT 计算整体迁入 Rust
+- 新增 kugou_api_server/rust/src/spectrum.rs：PCM 环形缓冲 + Hann 加窗 realfft + 40 视觉带 + 20 维节拍特征，单槽 SPSC 邮箱发布最新帧供轮询
+- lib.rs 新增 FFI 导出 spectrum_init、spectrum_drop_state、spectrum_reset、spectrum_feed_pcm、spectrum_poll_frame，并实现 JNI Java_com_md3music_md3music_SpectrumPlugin_nativeSpectrumFeedPCM 供渲染线程投递 PCM
+- SpectrumPlugin 改为把原始 PCM 字节经 JNI 投递给 Rust，帧结果不再逐帧走 MethodChannel；start 参数新增 statePtr，register 时延迟加载 libkugou_server.so
+- spectrum_service.dart 通过 dart:ffi 创建、轮询与释放 Rust 频谱状态，以 23ms 定时器（约 43fps）读取 40 段 bands 与 20 维 features
+- 更新 arm64-v8a、armeabi-v7a、x86、x86_64 四架构的 libkugou_server.so
+- Cargo.toml 新增 realfft = "3"（内含 rustfft，自动 NEON/AVX2 SIMD）
+from :3119
+commit refs/heads/rust-local-force
+mark :3121
+author github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1795347581 +0000
+committer github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1795347581 +0000
+data 32
+chore: update GitHub star trend
+from :3113
+commit refs/heads/rust-local-force
+mark :3122
+author github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1795439424 +0000
+committer github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> 1795439424 +0000
+data 32
+chore: update GitHub star trend
+from :3121
+commit refs/heads/rust-local-force
+mark :3123
+author Little-White3110 <53994162+Little-White3110@users.noreply.github.com> 1795495126 +0800
+committer GitHub <noreply@github.com> 1795495126 +0800
+data 58
+Merge branch 'zzyoxml:rust-local-two' into rust-local-two
+from :3122
+merge :3110
+commit refs/heads/rust-local-force
+mark :3124
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795495188 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795495188 +0800
+data 73
+Merge remote-tracking branch 'origin/rust-local-two' into rust-local-two
+from :3120
+merge :3123
+commit refs/heads/rust-local-force
+mark :3125
+author Little-White3110 <53994162+Little-White3110@users.noreply.github.com> 1795495285 +0800
+committer GitHub <noreply@github.com> 1795495285 +0800
+data 132
+Merge pull request #199 from Little-White3110/rust-local-two
+
+Refactor spectrum FFT analysis to Rust and various fixes and features
+from :3110
+merge :3124
+commit refs/heads/rust-local-force
+mark :3126
+author Little-White3110 <Little-White3110@users.noreply.github.com> 1795495628 +0800
+committer Little-White3110 <Little-White3110@users.noreply.github.com> 1795495628 +0800
+data 447
+chore(android): 更新酷狗原生库并新增字母索引条搜索条目
+
+- 更新 libkugou_server.so 原生库，覆盖 arm64-v8a、armeabi-v7a、x86_64 三个 ABI 架构
+- 重新生成 settings_search_index.g.dart，在外观/导航与布局分类下新增字母索引条条目
+- 该条目别名包含字母索引、A-Z、滚动条、歌单排序、歌曲名称、字母条、拖动索引、az index bar 等关键词，便于设置搜索命中
+from :3124
+commit refs/heads/rust-local-force
+mark :3127
+author Little-White3110 <53994162+Little-White3110@users.noreply.github.com> 1795495772 +0800
+committer GitHub <noreply@github.com> 1795495772 +0800
+data 136
+Merge pull request #200 from Little-White3110/rust-local-two
+
+chore(android): 更新酷狗原生库并新增字母索引条搜索条目
+from :3125
+merge :3126
+commit refs/heads/rust-local-force
+mark :3128
+author vcexml <3356141621@qq.com> 1795500587 +0800
+committer vcexml <3356141621@qq.com> 1795500587 +0800
+data 97
+Merge branch 'rust-local-two' of https://github.com/zzyoxml/private_md3music into rust-local-two
+from :3112
+merge :3127
+commit refs/heads/rust-local-force
+mark :3129
+author vcexml <3356141621@qq.com> 1795503165 +0800
+committer vcexml <3356141621@qq.com> 1795503165 +0800
+data 62
+build: update native library files for multiple architectures
+from :3128
+commit refs/heads/rust-local-force
+mark :3130
+author vcexml <3356141621@qq.com> 1795503198 +0800
+committer vcexml <3356141621@qq.com> 1795503198 +0800
+data 50
+docs: 修复 README.md 中 badges 的换行问题
+from :3129
+commit refs/heads/rust-local-force
+mark :3131
+author vcexml <3356141621@qq.com> 1795507125 +0800
+committer vcexml <3356141621@qq.com> 1795507125 +0800
+data 485
+fix(just_audio): 代理未注册路径返回 404 而非空值断言崩溃
+
+just_audio 0.10.6 vendored 的 _ProxyHttpServer.start 对未注册路径
+（扫描器 GET / 或切歌竞态下已注销的 /id/N）用 _handlerMap[uriPath]!
+取 handler，命中空值时抛未捕获异步错误且请求永不返回（issue #858，
+今日日志出现 2 次 just_audio.dart:2864 空值错误）。改为判空后返回
+404 并关闭响应，对应上游未合并 PR #1600 的 commit 8ec894e7。
+from :3130
